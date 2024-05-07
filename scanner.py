@@ -32,6 +32,7 @@ def my_callback(eventstring, *data):
     logger.info("MY CALLBACK: event={} data={}".format(eventstring.ljust(30),
                                                        ", ".join(args)))
 
+
 class GrblStreamerFactory:
     def create(self, config_file):
         config_parser = configparser.ConfigParser(inline_comment_prefixes="#")
@@ -51,21 +52,24 @@ class GrblStreamerFactory:
 
     def _set_axis_according_to_config(self, grbl_streamer, config_parser, axis):
         section = f'grbl_{axis}_axis'
-        steps_per_millimeter = config_parser.get(section, 'steps_per_millimeter')
-        maximum_rate = config_parser.get(section, 'maximum_rate')
-        acceleration = config_parser.get(section, 'acceleration')
+        steps_per_millimeter = config_parser.getfloat(section, 'steps_per_millimeter')
+        maximum_rate = config_parser.getfloat(section, 'maximum_rate')
+        acceleration = config_parser.getfloat(section, 'acceleration')
 
-        extra = 0  # silence the code analyzer
+        fiets = 0  # silence the code analyzer
         if axis == 'x':
-            extra = 0
+            fiets = 0
         elif axis == 'y':
-            extra = 1
+            fiets = 1
         else:
             logger.critical('Unsupported axis in configuration file. Axis found is ' + axis)
 
-        grbl_streamer.incremental_streaming(f'${100 + extra}={steps_per_millimeter}')
-        grbl_streamer.incremental_streaming(f'${110 + extra}={maximum_rate}')
-        grbl_streamer.incremental_streaming(f'${120 + extra}={acceleration}')
+        # TODO not actuating config file settings
+        # grbl_streamer.incremental_streaming(True)
+        # grbl_streamer.send_immediately(f'${100 + fiets}={steps_per_millimeter}')
+        # grbl_streamer.send_immediately(f'${110 + fiets}={maximum_rate}')
+        # grbl_streamer.send_immediately(f'${120 + fiets}={acceleration}')
+        # grbl_streamer.incremental_streaming(False)
 
 
 class GrblFactory:
@@ -157,5 +161,5 @@ class Scanner:
     def vertical_move_to(self, position):
         self._vertical_mover.move_to(position)
 
-    def get_position(self):
-        return self._cylindrical_position
+    # def get_position(self):
+    #     return self._cylindrical_position
