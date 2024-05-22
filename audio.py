@@ -1,26 +1,13 @@
 import pyfar as pf
 import numpy as np
-import sounddevice as sd
+import sounddevice as sd  # type: ignore
 import os
 from loguru import logger
 import configparser
 import math
+from scanner import CylindricalPosition
 
 logger.add('scanner.log', mode='w', level="TRACE")
-
-class AudioFactory:
-    def create(self, config_file):
-        config_parser = configparser.ConfigParser(inline_comment_prefixes="#")
-        config_parser.read(config_file)
-
-        section = 'audio'
-        device_id = config_parser.getint(section, 'device_id')
-        sample_rate = config_parser.getfloat(section, 'sample_rate')
-        minimum_frequency = config_parser.getfloat(section, 'minimum_frequency')
-        maximum_frequency = config_parser.getfloat(section, 'maximum_frequency')
-        duration = config_parser.getfloat(section, 'duration')
-        padding_time = config_parser.getfloat(section, 'padding_time')
-        return Audio(device_id, sample_rate, minimum_frequency, maximum_frequency, duration, padding_time)
 
 
 class Audio:
@@ -32,7 +19,7 @@ class Audio:
         self._padding_time = padding_time
         sd.default.device = device_id
 
-    def measure_ir(self, position):
+    def measure_ir(self, position: CylindricalPosition) -> None:
         logger.debug(f'IR measurement for position {position}')
         x = pf.signals.exponential_sweep_time(
             n_samples=self._duration * self._sample_rate,
@@ -58,6 +45,22 @@ class Audio:
         h_processed = pf.dsp.time_window(h_processed, [0, 0.1], window='boxcar', unit='s', crop='window')
 
         pf.io.write_audio(
-            h,
+            h_processed,
             os.path.join('Recordings', f'{position}.wav'),
             'DOUBLE')
+
+
+class AudioFactory:
+    @staticmethod
+    def create(config_file: str) -> Audio:
+        config_parser = configparser.ConfigParser(inline_comment_prefixes="#")
+        config_parser.read(config_file)
+
+        section = 'audio'
+        device_id = config_parser.getint(section, 'device_id')
+        sample_rate = config_parser.getfloat(section, 'sample_rate')
+        minimum_frequency = config_parser.getfloat(section, 'minimum_frequency')
+        maximum_frequency = config_parser.getfloat(section, 'maximum_frequency')
+        duration = config_parser.getfloat(section, 'duration')
+        padding_time = config_parser.getfloat(section, 'padding_time')
+        return Audio(device_id, sample_rate, minimum_frequency, maximum_frequency, duration, padding_time)
