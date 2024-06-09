@@ -44,64 +44,6 @@ def my_callback(event_string, *data):
                                                        ", ".join(args)))
 
 
-class GrblStreamerFactory:
-    def create(self, config_file: str) -> GrblStreamer:
-        config_parser = configparser.ConfigParser(inline_comment_prefixes="#")
-        config_parser.read(config_file)
-
-        section = 'grbl_streamer'
-        port = config_parser.get(section, 'port')
-        baudrate = config_parser.getint(section, 'baudrate')
-
-        grbl_streamer = GrblStreamer(my_callback)  # TODO add useful callback
-        grbl_streamer.cnect(port, baudrate)
-        grbl_streamer.poll_start()
-        # grbl_streamer.job_new()
-        # grbl_streamer.incremental_streaming = True
-
-        # switch direction of X axis
-        grbl_streamer.send_immediately('$3=1')  # TODO from config one day
-        # grbl_streamer.job_run()
-        # value = X*2^0 + Y*2^1 + Z*2^2, as can be seen below
-        # Setting Value	Mask	    Invert X	Invert Y	Invert Z
-        # 0	            00000000	N	        N	        N
-        # 1	            00000001	Y	        N	        N
-        # 2	            00000010	N	        Y	        N
-        # 3	            00000011	Y	        Y	        N
-        # 4	            00000100	N	        N	        Y
-        # 5	            00000101	Y	        N	        Y
-        # 6	            00000110	N	        Y	        Y
-        # 7	            00000111	Y	        Y	        Y
-
-        # 255 : steppers stay on
-        # 25 : stepper turn off
-        grbl_streamer.send_immediately('$1=25')
-
-        self._set_axis_according_to_config(grbl_streamer, config_parser, 'x')
-        self._set_axis_according_to_config(grbl_streamer, config_parser, 'y')
-
-        return grbl_streamer
-
-    @staticmethod
-    def _set_axis_according_to_config(grbl_streamer: GrblStreamer, config_parser: configparser, axis: str):
-        section = f'grbl_{axis}_axis'
-        steps_per_millimeter = config_parser.getfloat(section, 'steps_per_millimeter')
-        maximum_rate = config_parser.getfloat(section, 'maximum_rate')
-        acceleration = config_parser.getfloat(section, 'acceleration')
-
-        nr = 0  # silence the code analyzer
-        if axis == 'x':
-            nr = 0
-        elif axis == 'y':
-            nr = 1
-        else:
-            logger.critical('Unsupported axis in configuration file. Axis found is ' + axis)
-
-        grbl_streamer.send_immediately(f'${100 + nr}={steps_per_millimeter}')
-        grbl_streamer.send_immediately(f'${110 + nr}={maximum_rate}')
-        grbl_streamer.send_immediately(f'${120 + nr}={acceleration}')
-
-
 class Grbl:
     def on_grbl_event(self, event, *data):
         logger.trace(event)
@@ -113,12 +55,25 @@ class Grbl:
             args.append(str(d))
         print("MY CALLBACK: event={} data={}".format(event.ljust(30), ", ".join(args)))
 
-    def __init__(self):  # , grbl_streamer: GrblStreamer):
+    def __init__(self):
+        config_parser = configparser.ConfigParser(inline_comment_prefixes="#")
+        config_parser.read('config.ini')
+        section = 'grbl_streamer'
+        port = config_parser.get(section, 'port')
+        baudrate = config_parser.getint(section, 'baudrate')
+
         grbl_streamer = GrblStreamer(self.on_grbl_event)  # TODO add useful callback
-        grbl_streamer.cnect('COM8', 115200)
+        grbl_streamer.cnect(port, baudrate)
         grbl_streamer.poll_start()
         grbl_streamer.incremental_streaming = True
         self._grbl_streamer = grbl_streamer
+
+        self.send('$3=1')
+
+        self._set_axis_according_to_config(config_parser, 'x')
+        self._set_axis_according_to_config(config_parser, 'y')
+
+        self.send('$1=255')
         self._ready = True
 
     def move_x_to(self, position: float) -> None:
@@ -147,6 +102,24 @@ class Grbl:
         self.send('G04 P0')
         while not self._ready:
             time.sleep(0.1)
+
+    def _set_axis_according_to_config(self, config_parser, axis: str) -> None:
+        section = f'grbl_{axis}_axis'
+        steps_per_millimeter = config_parser.getfloat(section, 'steps_per_millimeter')
+        maximum_rate = config_parser.getfloat(section, 'maximum_rate')
+        acceleration = config_parser.getfloat(section, 'acceleration')
+
+        nr = 0  # silence the code analyzer
+        if axis == 'x':
+            nr = 0
+        elif axis == 'y':
+            nr = 1
+        else:
+            logger.critical('Unsupported axis in configuration file. Axis found is ' + axis)
+
+        self.send(f'${100 + nr}={steps_per_millimeter}')
+        self.send(f'${110 + nr}={maximum_rate}')
+        self.send(f'${120 + nr}={acceleration}')
 
 
 class GrblAxis:
@@ -240,8 +213,16 @@ class Scanner:
     def move_to(self, position: CylindricalPosition) -> None:
         logger.trace(f'Moving to {position}')
 
-        self.radial_move_to(position.r())
-        self.vertical_move_to(position.z())
+        middle_z = 305.0
+
+        # This assumes scan direction is upwards, downwards taken care of by evasive move
+        if self._cylindrical_position.z() > middle_z:
+            self.vertical_move_to(position.z())
+            self.radial_move_to(position.r())
+        else:
+            self.radial_move_to(position.r())
+            self.vertical_move_to(position.z())
+
         self.angular_move_to(position.t())
 
     def evasive_move_to(self, position: CylindricalPosition) -> None:
@@ -271,8 +252,10 @@ class Scanner:
 
     def vertical_move_to(self, position: float) -> None:
         logger.trace(f'Vertical move to {position}')
+
         if self.get_position().z() != position:
             self._vertical_mover.move_to(position)
+
         self._cylindrical_position.set_z(position)
 
     def rotate_counterclockwise(self, amount: float) -> None:
@@ -293,7 +276,8 @@ class Scanner:
     def move_down(self, amount: float) -> None:
         self.move_up(-amount)
 
-    def get_position(self) -> CylindricalPosition:  # TODO I would like to get the position from the lower level controllers...
+    def get_position(
+            self) -> CylindricalPosition:  # TODO I would like to get the position from the lower level controllers...
         return self._cylindrical_position
 
     def set_as_zero(self) -> None:

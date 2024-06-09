@@ -3,6 +3,10 @@ import configparser
 from loguru import logger
 from scanner import Scanner, CylindricalPosition
 from nfs import NearFieldScanner
+import factory
+import loader
+import matplotlib.pyplot as plt  # type: ignore
+import numpy as np
 
 logger.remove(0)
 logger.add('scanner.log', mode='w', level="TRACE", backtrace=True, diagnose=True)
@@ -79,13 +83,41 @@ def test_take_measurement_set():
     nfs.take_measurement_set()
 
 
-# def test_measurement_points():
-#     measurement_points = MeasurementPointsFactory().create('../config.ini')
-#     index = 0
-#     while not measurement_points.ready():
-#         index += 1
-#         point = measurement_points.next()
-#         logger.trace(f'{index} : {point}')
+def test_measurement_points():
+    config_parser = configparser.ConfigParser(inline_comment_prefixes="#")
+    config_parser.read('../config.ini')
+
+    items = config_parser.items('plugins')
+    _, plugins = zip(*items)
+
+    # load the plugins
+    loader.load_plugins(plugins)
+
+    item = dict(config_parser.items('measurement_points'))
+    measurement_points = factory.create(item)
+
+    fig = plt.figure()
+    ax = fig.add_subplot(projection='3d')
+
+    xs = np.empty((0, 0))
+    ys = np.empty((0, 0))
+    zs = np.empty((0, 0))
+
+    index = 0
+    while not measurement_points.ready():
+        index += 1
+        point = measurement_points.next()
+        logger.trace(f'{index} : {point}')
+        r = point.r()
+        t = point.t() / 180 * np.pi
+        xs = np.append(xs, r * np.cos(t))
+        ys = np.append(ys, r * np.sin(t))
+        zs = np.append(zs, point.z())
+
+    ax.scatter(xs, ys, zs)
+    ax.set_aspect('equal', 'box')
+
+    plt.show()
 
 
 def test_take_measurements_set():
@@ -98,10 +130,11 @@ def test_take_measurements_set():
 
     scanner = Scanner(radial_mover, angular_mover, vertical_mover, evasive_move_radius)
 
-    plugins = config_parser.get('plugins', 'nr1')
+    items = config_parser.items('plugins')
+    _, plugins = zip(*items)
 
     # load the plugins
-    loader.load_plugins([plugins])
+    loader.load_plugins(plugins)
 
     item = dict(config_parser.items('measurement_points'))
     measurement_points = factory.create(item)
@@ -109,18 +142,15 @@ def test_take_measurements_set():
     nfs.take_measurement_set()
 
 
-import factory
-import loader
-
-
 def test_plugin():
     config_parser = configparser.ConfigParser(inline_comment_prefixes="#")
     config_parser.read('../config.ini')
 
-    plugins = config_parser.get('plugins', 'nr1')
+    items = config_parser.items('plugins')
+    _, plugins = zip(*items)
 
     # load the plugins
-    loader.load_plugins([plugins])
+    loader.load_plugins(plugins)
 
     item = dict(config_parser.items('measurement_points'))
     measurement_points = factory.create(item)

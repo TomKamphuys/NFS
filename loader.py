@@ -1,6 +1,7 @@
 """A simple plugin loader."""
 import importlib
 import factory
+from loguru import logger
 
 
 class ModuleInterface:
@@ -19,5 +20,6 @@ def import_module(name: str) -> ModuleInterface:
 def load_plugins(plugins: list[str]) -> None:
     """Loads the plugins defined in the plugins list."""
     for plugin_file in plugins:
+        logger.info(f'Loading plugin: {plugin_file}')
         plugin = import_module(plugin_file)
         plugin.register(factory)

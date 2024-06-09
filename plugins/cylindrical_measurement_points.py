@@ -40,6 +40,7 @@ class CylindricalMeasurementPoints:
 
             # if last points of cap, set stuff for wall
             if new_position.r() >= self._radius:
+                logger.info('Bottom cap ready; switching to wall')
                 self._bottom_cap = False
                 self._wall = True
                 self._top_cap = False
@@ -48,8 +49,9 @@ class CylindricalMeasurementPoints:
             self._evasive_move_needed = False
             new_position = self.wall()
 
-            # if last position of wall, set stuff for cap
+            # if last position of wall, set stuff for top cap
             if new_position.z() >= self._height:
+                logger.info('Wall ready, switching to top cap')
                 self._bottom_cap = False
                 self._wall = False
                 self._top_cap = True
@@ -61,6 +63,7 @@ class CylindricalMeasurementPoints:
 
             # if last position of cap, get ready for new angle
             if new_position.r() >= self._radius:
+                logger.info('Top cap ready, switching to new angle')
                 self._bottom_cap = True
                 self._wall = False
                 self._top_cap = False
@@ -68,6 +71,7 @@ class CylindricalMeasurementPoints:
                 self._current_radius = self._minimum_radius - self._delta_radius  # so we start at minimum radius
                 self._current_height = 0
                 self._current_angle += self._delta_angle
+                self._inner = False
 
                 # if this is the last angle, let them know
                 if self._current_angle > 180 - self._delta_angle:
