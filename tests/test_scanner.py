@@ -58,6 +58,15 @@ class MeasurementPointsMock:
         self._index += 1
         return CylindricalPosition(self._index, self._index, self._index)
 
+    def need_to_do_evasive_move(self):
+        return False
+
+    def ready(self):
+        if self._index > 10:
+            return True
+        else:
+            return False
+
 
 def test_scanner_can_move_in():
     radial_mover = GrblAxisMock()

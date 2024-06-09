@@ -7,12 +7,18 @@ class SphericalMeasurementPointsSorted:
     def __init__(self,
                  nr_of_points,
                  wall_spacing,
-                 radius):
+                 radius,
+                 speaker_height,
+                 speaker_width,
+                 speaker_depth):
         self._ready = False
         self._evasive_move_needed = False
         self._radius = float(radius)
         self._wall_spacing = float(wall_spacing)
         self._nr_of_points = int(nr_of_points)
+        self._speaker_height = float(speaker_height)
+        self._speaker_width = float(speaker_width)
+        self._speaker_depth = float(speaker_depth)
 
         n = self._nr_of_points/2
         a = 4 * np.pi / n  # r ^ 2 = 1, 'a' is the surface area around a single point
@@ -47,8 +53,26 @@ class SphericalMeasurementPointsSorted:
         y = np.append(y, y_inner)
         z = np.append(z, z_inner)
 
+        bound_x = np.logical_and(x > (-self._speaker_depth/2), x < (self._speaker_depth/2))
+        bound_y = np.logical_and(y > (-self._speaker_width/2), y < (self._speaker_width/2))
+        bound_z = np.logical_and(z > (-self._speaker_height/2), z < (self._speaker_height/2))
+
+        bb_filter = np.logical_and(bound_x, bound_y, bound_z)
+
+        print(np.sum(bb_filter))
+
+        if np.sum(bb_filter) != 0:
+            print(x[bb_filter])
+            print(y[bb_filter])
+            print(z[bb_filter])
+            raise Exception(f'{np.sum(bb_filter)} point(s) inside speaker volume!')
+
         r_temp = np.sqrt(x ** 2 + y ** 2)
-        theta_cyl_temp = np.arctan2(x, y)
+        theta_cyl_temp = np.arctan2(x, y)/np.pi*180
+
+        r_temp = np.around(r_temp, 2)
+        theta_cyl_temp = np.around(theta_cyl_temp, 2)
+        z = np.around(z, 2)
 
         sorted_indices = np.argsort(theta_cyl_temp*100000 + z)
 
@@ -62,7 +86,7 @@ class SphericalMeasurementPointsSorted:
     def next(self) -> CylindricalPosition:
         i = self._current_index
         r = self._r_cyl[i]
-        theta = self._theta_cyl[i]/np.pi*180
+        theta = self._theta_cyl[i]
         z = self._z_cyl[i] + self._radius  # zero is at bottom of sphere
 
         if i > 0 and self._z_cyl[i] < self._z_cyl[i-1]:
