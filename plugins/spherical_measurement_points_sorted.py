@@ -1,5 +1,4 @@
 from scanner import CylindricalPosition
-from loguru import logger
 import numpy as np
 
 
@@ -7,14 +6,20 @@ class SphericalMeasurementPointsSorted:
     def __init__(self,
                  nr_of_points,
                  wall_spacing,
-                 radius):
+                 radius,
+                 speaker_height,
+                 speaker_width,
+                 speaker_depth):
         self._ready = False
         self._evasive_move_needed = False
         self._radius = float(radius)
         self._wall_spacing = float(wall_spacing)
         self._nr_of_points = int(nr_of_points)
+        self._speaker_height = float(speaker_height)
+        self._speaker_width = float(speaker_width)
+        self._speaker_depth = float(speaker_depth)
 
-        n = self._nr_of_points/2
+        n = self._nr_of_points / 2
         a = 4 * np.pi / n  # r ^ 2 = 1, 'a' is the surface area around a single point
         d = np.sqrt(a)  # this is the length of the (assumed) square area
         m_theta = round(np.pi / d)  # this is the amount of circles
@@ -47,10 +52,23 @@ class SphericalMeasurementPointsSorted:
         y = np.append(y, y_inner)
         z = np.append(z, z_inner)
 
-        r_temp = np.sqrt(x ** 2 + y ** 2)
-        theta_cyl_temp = np.arctan2(x, y)
+        # Check whether any points are inside the speaker volume
+        bound_x = np.abs(x) < self._speaker_depth / 2
+        bound_y = np.abs(y) < self._speaker_width / 2
+        bound_z = np.abs(z) < self._speaker_height / 2
 
-        sorted_indices = np.argsort(theta_cyl_temp*100000 + z)
+        bb_filter = np.logical_and(np.logical_and(bound_x, bound_y), bound_z)
+        if np.sum(bb_filter) != 0:
+            raise Exception(f'{np.sum(bb_filter)} points inside speaker volume.')
+
+        r_temp = np.sqrt(x ** 2 + y ** 2)
+        theta_cyl_temp = np.arctan2(x, y) / np.pi * 180
+
+        r_temp = np.around(r_temp, 2)
+        theta_cyl_temp = np.around(theta_cyl_temp, 2)
+        z = np.around(z, 2)
+
+        sorted_indices = np.argsort(theta_cyl_temp * 100000 + z)
 
         self._r_cyl = r_temp[sorted_indices]
         self._theta_cyl = theta_cyl_temp[sorted_indices]
@@ -62,13 +80,13 @@ class SphericalMeasurementPointsSorted:
     def next(self) -> CylindricalPosition:
         i = self._current_index
         r = self._r_cyl[i]
-        theta = self._theta_cyl[i]/np.pi*180
-        z = self._z_cyl[i] + self._radius  # zero is at bottom of sphere
+        theta = self._theta_cyl[i]
+        z = self._z_cyl[i]  #  TODO + self._radius  # zero is at bottom of sphere
 
-        if i > 0 and self._z_cyl[i] < self._z_cyl[i-1]:
-            self._evasive_move_needed = True
-        else:
-            self._evasive_move_needed = False
+        # if i > 0 and self._z_cyl[i] < self._z_cyl[i - 1]:
+        #     self._evasive_move_needed = True
+        # else:
+        #     self._evasive_move_needed = False
 
         self._current_index += 1
 

@@ -1,7 +1,8 @@
 import configparser
 
+import pytest
 from loguru import logger
-from scanner import Scanner, CylindricalPosition
+from scanner import Scanner, CylindricalPosition, is_between, is_vertical_move_safe, is_radial_move_safe
 from nfs import NearFieldScanner
 import factory
 import loader
@@ -159,3 +160,22 @@ def test_plugin():
         index += 1
         point = measurement_points.next()
         logger.trace(f'{index} : {point}')
+
+
+def test_is_between():
+    assert is_between(1, 2, 3)
+    assert is_between(3, 2, 1)
+    assert is_between(1, 1, 1)
+    assert is_between(1, 1, 2)
+    assert is_between(1, 2, 2)
+    assert not is_between(1, 4, 3)
+    assert not is_between(3, 4, 1)
+
+
+def test_check_vertical_move():
+    assert not is_vertical_move_safe(CylindricalPosition(0, 0, 375), 0, 375 / 2)
+
+    assert not is_vertical_move_safe(CylindricalPosition(0, 0, -375), 0, -375 / 2)
+
+    assert is_vertical_move_safe(CylindricalPosition(0, 0, 375), 200, 375 / 2)
+    assert is_vertical_move_safe(CylindricalPosition(0, 0, -375), -200, -375 / 2)
