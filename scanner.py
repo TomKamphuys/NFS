@@ -293,18 +293,14 @@ class Scanner:
         if check1 and check2:
             self.vertical_move_to(position.z())
         else:
-            new_position = CylindricalPosition(self._cylindrical_position.r(),
-                                               self._cylindrical_position.t(),
-                                               position.z())
-            self.evasive_move_to(new_position)
+            self.evasive_move_to(position)
+            return
 
         if is_radial_move_safe(self._cylindrical_position, position.r()):
             self.radial_move_to(position.r())
         else:
-            new_position = CylindricalPosition(position.r(),
-                                               self._cylindrical_position.t(),
-                                               self._cylindrical_position.z())
-            self.evasive_move_to(new_position)
+            self.evasive_move_to(position)
+            return
 
         self.angular_move_to(position.t())
 
