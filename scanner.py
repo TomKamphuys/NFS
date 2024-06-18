@@ -3,6 +3,34 @@ import configparser
 from grbl_streamer import GrblStreamer  # type: ignore
 from ticlib import TicUSB  # type: ignore
 import time
+import numpy as np
+
+# # Define plane
+# planeNormal = np.array([0, 0, 1])
+# planePoint = np.array([0, 0, 5])  # Any point on the plane
+#
+# # Define ray
+# rayDirection = np.array([0, -1, -1])
+# rayPoint = np.array([0, 0, 10])  # Any point along the ray
+#
+# Psi = LinePlaneCollision(planeNormal, planePoint, rayDirection, rayPoint)
+
+
+def has_intersect(plane_normal, ray_direction, epsilon=1e-6) -> bool:
+    n_dot_u = plane_normal.dot(ray_direction)
+    if abs(n_dot_u) < epsilon:
+        return False
+
+    return True
+
+
+def line_plane_intersection(plane_normal, plane_point, ray_direction, ray_point) -> np.array:
+    n_dot_u = plane_normal.dot(ray_direction)
+
+    w = ray_point - plane_point
+    si = -plane_normal.dot(w) / n_dot_u
+    psi = w + si * ray_direction + plane_point
+    return psi
 
 
 class CylindricalPosition:
@@ -34,6 +62,52 @@ class CylindricalPosition:
 
     def set_z(self, z: float) -> None:
         self._z = z
+
+
+def cyl_to_cart(cylindrical_position):
+    r = cylindrical_position.r()
+    t = cylindrical_position.t()/180*np.pi
+    z = cylindrical_position.z()
+
+    x = r * np.cos(t)
+    y = r * np.sin(t)
+    z = z
+
+    return x, y, z
+
+
+def is_between(a, b, c):
+    if a >= c:
+        return a >= b >= c
+    else:
+        return a <= b <= c
+
+
+def is_vertical_move_safe(current_position, next_position, plane_point_z):
+    plane_normal = np.array([0, 0, 1])
+    move_direction = np.array([0, 0, 1])
+    plane_point = np.array([0, 0, plane_point_z])
+
+    x, y, z = cyl_to_cart(current_position)
+    move_point = np.array([x, y, z])
+
+    intersection_point = line_plane_intersection(plane_normal, plane_point, move_direction, move_point)
+
+    intersect_is_during_move = is_between(current_position.z(), intersection_point[2], next_position)
+    if abs(intersection_point[0]) < 270/2 and abs(intersection_point[1]) < 195/2 and intersect_is_during_move:  # TODO from config
+        logger.info(f'Unsafe move requested from {x, y, z} [mm] to {x, y, next_position} [mm] (xyz). Reverting to evasive move')
+        return False
+    else:
+        return True
+
+
+def is_radial_move_safe(current_position, next_position):
+    radius = np.sqrt((195/2)**2 + (270/2)**2)
+    if np.abs(current_position.z()) <= 375/2 and next_position < radius:
+        logger.info(f'Unsafe radial move requested. Reverting to evasive move')
+        return False
+    else:
+        return True
 
 
 def my_callback(event_string, *data):
@@ -213,15 +287,24 @@ class Scanner:
     def move_to(self, position: CylindricalPosition) -> None:
         logger.trace(f'Moving to {position}')
 
-        middle_z = 305.0
+        check1 = is_vertical_move_safe(self._cylindrical_position, position.z(), 375 / 2)
+        check2 = is_vertical_move_safe(self._cylindrical_position, position.z(), -375 / 2)
 
-        # This assumes scan direction is upwards, downwards taken care of by evasive move
-        if self._cylindrical_position.z() > middle_z:
+        if check1 and check2:
             self.vertical_move_to(position.z())
+        else:
+            new_position = CylindricalPosition(self._cylindrical_position.r(),
+                                               self._cylindrical_position.t(),
+                                               position.z())
+            self.evasive_move_to(new_position)
+
+        if is_radial_move_safe(self._cylindrical_position, position.r()):
             self.radial_move_to(position.r())
         else:
-            self.radial_move_to(position.r())
-            self.vertical_move_to(position.z())
+            new_position = CylindricalPosition(position.r(),
+                                               self._cylindrical_position.t(),
+                                               self._cylindrical_position.z())
+            self.evasive_move_to(new_position)
 
         self.angular_move_to(position.t())
 
