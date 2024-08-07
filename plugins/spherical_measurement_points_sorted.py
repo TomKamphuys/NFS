@@ -81,12 +81,7 @@ class SphericalMeasurementPointsSorted:
         i = self._current_index
         r = self._r_cyl[i]
         theta = self._theta_cyl[i]
-        z = self._z_cyl[i]  #  TODO + self._radius  # zero is at bottom of sphere
-
-        # if i > 0 and self._z_cyl[i] < self._z_cyl[i - 1]:
-        #     self._evasive_move_needed = True
-        # else:
-        #     self._evasive_move_needed = False
+        z = self._z_cyl[i]  # TODO + self._radius  # zero is at bottom of sphere
 
         self._current_index += 1
 
@@ -96,7 +91,7 @@ class SphericalMeasurementPointsSorted:
         return CylindricalPosition(r, theta, z)
 
     def reset(self) -> None:
-        pass
+        self._current_index = 0;
 
     def ready(self) -> bool:
         return self._ready
