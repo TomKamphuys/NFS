@@ -5,16 +5,6 @@ from ticlib import TicUSB  # type: ignore
 import time
 import numpy as np
 
-# # Define plane
-# planeNormal = np.array([0, 0, 1])
-# planePoint = np.array([0, 0, 5])  # Any point on the plane
-#
-# # Define ray
-# rayDirection = np.array([0, -1, -1])
-# rayPoint = np.array([0, 0, 10])  # Any point along the ray
-#
-# Psi = LinePlaneCollision(planeNormal, planePoint, rayDirection, rayPoint)
-
 
 def has_intersect(plane_normal, ray_direction, epsilon=1e-6) -> bool:
     n_dot_u = plane_normal.dot(ray_direction)
@@ -110,24 +100,16 @@ def is_radial_move_safe(current_position, next_position):
         return True
 
 
-def my_callback(event_string, *data):
-    args = []
-    for d in data:
-        args.append(str(d))
-    logger.info("MY CALLBACK: event={} data={}".format(event_string.ljust(30),
-                                                       ", ".join(args)))
-
-
 class Grbl:
     def on_grbl_event(self, event, *data):
         logger.trace(event)
         if event == "on_rx_buffer_percent":
-            logger.info('Motion complete')
+            logger.debug('Motion complete')
             self._ready = True
         args = []
         for d in data:
             args.append(str(d))
-        print("MY CALLBACK: event={} data={}".format(event.ljust(30), ", ".join(args)))
+        logger.trace("MY CALLBACK: event={} data={}".format(event.ljust(30), ", ".join(args)))
 
     def __init__(self):
         config_parser = configparser.ConfigParser(inline_comment_prefixes="#")
@@ -285,7 +267,9 @@ class Scanner:
         self._cylindrical_position = CylindricalPosition(0, 0, 0)
 
     def move_to(self, position: CylindricalPosition) -> None:
-        logger.trace(f'Moving to {position}')
+        logger.info(f'Moving to {position}')
+
+        self.angular_move_to(position.t())
 
         check1 = is_vertical_move_safe(self._cylindrical_position, position.z(), 375 / 2)
         check2 = is_vertical_move_safe(self._cylindrical_position, position.z(), -375 / 2)
@@ -301,8 +285,6 @@ class Scanner:
         else:
             self.evasive_move_to(position)
             return
-
-        self.angular_move_to(position.t())
 
     def evasive_move_to(self, position: CylindricalPosition) -> None:
         logger.trace('Performing evasive move')

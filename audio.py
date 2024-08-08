@@ -20,7 +20,7 @@ class Audio:
         sd.default.device = device_id
 
     def measure_ir(self, position: CylindricalPosition) -> None:
-        logger.debug(f'IR measurement for position {position}')
+        logger.info(f'IR measurement for position {position}')
         x = pf.signals.exponential_sweep_time(
             n_samples=self._duration * self._sample_rate,
             frequency_range=[self._minimum_frequency, self._maximum_frequency],
