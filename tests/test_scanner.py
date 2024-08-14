@@ -2,7 +2,7 @@ import configparser
 
 import pytest
 from loguru import logger
-from scanner import Scanner, CylindricalPosition, is_between, is_vertical_move_safe, is_radial_move_safe
+from scanner import Scanner, CylindricalPosition, is_between, is_vertical_move_safe, SphericalMeasurementMotionManager
 from nfs import NearFieldScanner
 import factory
 import loader
@@ -41,7 +41,13 @@ class TicAxisMock:
 
 
 class GrblAxisMock:
-    def move_to(self, position):
+    # def move_to(self, position):
+    #     pass
+
+    def arc_move_to(self, x, y, r):
+        pass
+
+    def move_to(self, x: float, y: float) -> None:
         pass
 
 
@@ -127,9 +133,7 @@ def test_take_measurements_set():
     vertical_mover = GrblAxisMock()
     config_parser = configparser.ConfigParser(inline_comment_prefixes="#")
     config_parser.read('../config.ini')
-    evasive_move_radius = config_parser.getfloat('scanner', 'evasive_move_radius')
 
-    scanner = Scanner(radial_mover, angular_mover, vertical_mover, evasive_move_radius)
 
     items = config_parser.items('plugins')
     _, plugins = zip(*items)
@@ -139,7 +143,11 @@ def test_take_measurements_set():
 
     item = dict(config_parser.items('measurement_points'))
     measurement_points = factory.create(item)
-    nfs = NearFieldScanner(scanner, AudioMock(), measurement_points)
+
+    measurement_manager = SphericalMeasurementMotionManager(angular_mover, radial_mover, measurement_points)
+    scanner = Scanner(radial_mover, angular_mover, vertical_mover, measurement_manager)
+
+    nfs = NearFieldScanner(scanner, AudioMock(), measurement_manager)
     nfs.take_measurement_set()
 
 
