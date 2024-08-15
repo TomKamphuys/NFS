@@ -5,7 +5,7 @@ import os
 from loguru import logger
 import configparser
 import math
-from scanner import CylindricalPosition
+from datatypes import CylindricalPosition
 
 logger.add('scanner.log', mode='w', level="TRACE")
 

@@ -1,4 +1,4 @@
-from scanner import CylindricalPosition
+from datatypes import CylindricalPosition
 from loguru import logger
 
 

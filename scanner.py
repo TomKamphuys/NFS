@@ -5,6 +5,8 @@ from ticlib import TicUSB  # type: ignore
 import time
 import numpy as np
 import math
+import factory
+from datatypes import CylindricalPosition
 
 
 def has_intersect(plane_normal, ray_direction, epsilon=1e-6) -> bool:
@@ -22,40 +24,6 @@ def line_plane_intersection(plane_normal, plane_point, ray_direction, ray_point)
     si = -plane_normal.dot(w) / n_dot_u
     psi = w + si * ray_direction + plane_point
     return psi
-
-
-class CylindricalPosition:
-    def __init__(self, r, t, z):
-        self._r = r
-        self._t = t
-        self._z = z
-
-    def __eq__(self, other) -> bool:
-        return (self.r(), self.t(), self.z()) == (other.r(), other.t(), other.z())
-
-    def __str__(self) -> str:
-        return f'({self.r()}, {self.t()}, {self.z()})'
-
-    def r(self) -> float:
-        return self._r
-
-    def set_r(self, r: float) -> None:
-        self._r = r
-
-    def t(self) -> float:
-        return self._t
-
-    def set_t(self, t: float) -> None:
-        self._t = t
-
-    def z(self) -> float:
-        return self._z
-
-    def set_z(self, z: float) -> None:
-        self._z = z
-
-    def length(self) -> float:
-        return math.sqrt(self.r() ** 2 + self.z() ** 2)
 
 
 def cyl_to_cart(cylindrical_position):
@@ -369,14 +337,17 @@ class Scanner:
 class ScannerFactory:
     @staticmethod
     def create(config_file: str) -> Scanner:
-        # grbl_streamer = GrblStreamerFactory().create(config_file)
         grbl = Grbl()  # (grbl_streamer)
-        plane_mover = GrblAxis(grbl)
+        radial_mover = GrblAxis(grbl)
         angular_mover = TicFactory().create(config_file)
+        vertical_mover = radial_mover
 
         config_parser = configparser.ConfigParser(inline_comment_prefixes="#")
-        config_parser.read(config_file)
-        evasive_move_radius = config_parser.getfloat('scanner', 'evasive_move_radius')
-        scanner = Scanner(plane_mover, angular_mover, evasive_move_radius)
+        item = dict(config_parser.items('measurement_points'))
+        measurement_points = factory.create(item)
+
+        measurement_motion_manager = SphericalMeasurementMotionManager(angular_mover, radial_mover, measurement_points)
+
+        scanner = Scanner(radial_mover, angular_mover, vertical_mover, measurement_motion_manager)
 
         return scanner

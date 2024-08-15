@@ -1,5 +1,5 @@
 from typing import Protocol
-from scanner import CylindricalPosition
+from datatypes import CylindricalPosition
 
 
 class MeasurementPoints(Protocol):

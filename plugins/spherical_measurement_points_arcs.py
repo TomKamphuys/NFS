@@ -1,4 +1,4 @@
-from scanner import CylindricalPosition
+from datatypes import CylindricalPosition
 import numpy as np
 
 

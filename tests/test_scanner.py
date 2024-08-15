@@ -2,7 +2,8 @@ import configparser
 
 import pytest
 from loguru import logger
-from scanner import Scanner, CylindricalPosition, is_between, is_vertical_move_safe, SphericalMeasurementMotionManager
+from datatypes import CylindricalPosition
+from scanner import Scanner, is_between, is_vertical_move_safe, SphericalMeasurementMotionManager
 from nfs import NearFieldScanner
 import factory
 import loader
