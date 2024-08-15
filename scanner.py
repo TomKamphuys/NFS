@@ -259,7 +259,13 @@ class SphericalMeasurementMotionManager:
         self._angular_mover = angular_mover
         self._plane_mover = plane_mover
         self._measurement_points = measurement_points
-        self._previous_point = CylindricalPosition(320, 0, 0)
+        self._previous_point = CylindricalPosition(320, 0.0, 0.0)
+
+    def move_to_safe_starting_position(self) -> None:
+        radius = self._measurement_points.get_radius()
+        logger.info(f'Performing a first move to a safe radius: {radius} mm')
+        self._plane_mover.move_to(radius, 0.0)
+        self._previous_point = CylindricalPosition(radius, 0.0, 0.0)
 
     def next(self) -> CylindricalPosition:
         position = self._measurement_points.next()
@@ -278,7 +284,7 @@ class SphericalMeasurementMotionManager:
             logger.debug(f'Performing an angular move from {self._previous_point.t()} degrees to {position.t()} degrees')
             self._angular_mover.move_to(position.t())
 
-        if self._previous_point.length() != position.length():
+        if (self._previous_point.length() - position.length()) > 0.1:
             ratio = position.length() / self._previous_point.length()
             x, y, z = cyl_to_cart(self._previous_point)
             x *= ratio

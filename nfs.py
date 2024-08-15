@@ -16,6 +16,7 @@ class NearFieldScanner:
         self._audio.measure_ir(self._scanner.get_position())
 
     def take_measurement_set(self) -> None:
+        self._measurement_motion_manager.move_to_safe_starting_position()
         while not self._measurement_motion_manager.ready():
             position = self._measurement_motion_manager.next()
             if self._measurement_motion_manager.ready():

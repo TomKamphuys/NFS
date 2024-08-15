@@ -61,6 +61,9 @@ class SphericalMeasurementPointsArcs:
         self._actual_nr_of_points = self._r_cyl.size
         self._current_index = 0
 
+    def get_radius(self) -> float:
+        return self._radius
+
     def next(self) -> CylindricalPosition:
         i = self._current_index
         r = self._r_cyl[i]
