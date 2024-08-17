@@ -151,15 +151,15 @@ class NFSApp(App):
         self.lbl.set_text('Moving in down mm')
         self.scanner.move_down(10)
 
-    def zero(self):
+    def zero(self, widget):
         self.lbl.set_text('Zero scanner')
         self.scanner.set_as_zero()
 
-    def take_single_measurement(self):
+    def take_single_measurement(self, widget):
         self.lbl.set_text('Take single measurement')
         self.nfs.take_single_measurement()
 
-    def take_measurement_set(self):
+    def take_measurement_set(self, widget):
         self.lbl.set_text('Take measurement set')
         self.nfs.take_measurement_set()
 
