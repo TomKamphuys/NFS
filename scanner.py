@@ -367,7 +367,9 @@ class ScannerFactory:
         item = dict(config_parser.items('measurement_points'))
         measurement_points = factory.create(item)
 
-        measurement_motion_manager = SphericalMeasurementMotionManager(angular_mover, radial_mover, measurement_points)
+        plane_mover = GrblAxis(grbl)
+
+        measurement_motion_manager = SphericalMeasurementMotionManager(angular_mover, plane_mover, measurement_points)
 
         scanner = Scanner(radial_mover, angular_mover, vertical_mover, measurement_motion_manager)
 
