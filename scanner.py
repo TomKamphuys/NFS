@@ -339,14 +339,16 @@ class Scanner:
     def move_down(self, amount: float) -> None:
         self.move_up(-amount)
 
-    def get_position(
-            self) -> CylindricalPosition:  # TODO I would like to get the position from the lower level controllers...
+    def get_position(self) -> CylindricalPosition:  # TODO get the position from the lower level controllers
         return self._cylindrical_position
 
     def set_as_zero(self) -> None:
         self._radial_mover.set_as_zero()
         self._angular_mover.set_as_zero()
         self._vertical_mover.set_as_zero()
+        self._cylindrical_position.set_r(0)
+        self._cylindrical_position.set_t(0)
+        self._cylindrical_position.set_z(0)
 
     def shutdown(self) -> None:
         pass
