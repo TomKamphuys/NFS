@@ -76,7 +76,7 @@ class NFSApp(App):
         self.move_down_10_btn = gui.Button('Down 10 mm', width=100, height=30, margkin='10px')
         self.move_down_10_btn.onclick.do(self.move_down_10)
 
-        self.zero_btn = gui.Button('take single measurement', width=100, height=30, margkin='10px')
+        self.zero_btn = gui.Button('Zero scanner', width=100, height=30, margkin='10px')
         self.zero_btn.onclick.do(self.zero)
 
         self.take_measurement_btn = gui.Button('take single measurement', width=100, height=30, margkin='10px')
