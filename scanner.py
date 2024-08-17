@@ -361,6 +361,7 @@ class ScannerFactory:
         vertical_mover = GrblYAxis(grbl)
 
         config_parser = configparser.ConfigParser(inline_comment_prefixes="#")
+        config_parser.read(config_file)
         item = dict(config_parser.items('measurement_points'))
         measurement_points = factory.create(item)
 
