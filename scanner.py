@@ -181,6 +181,24 @@ class GrblAxis:
         self._wait_until_move_ready()
 
 
+class GrblXAxis(GrblAxis):
+    def __init__(self, grbl):
+        super().__init__(grbl)
+
+    def move_to(self, position: float) -> None:
+        self._grbl.move_x_to(position)
+        super()._wait_until_move_ready()
+
+
+class GrblYAxis(GrblAxis):
+    def __init__(self, grbl):
+        super().__init__(grbl)
+
+    def move_to(self, position: float) -> None:
+        self._grbl.move_y_to(position)
+        super()._wait_until_move_ready()
+
+
 class TicAxis:
     def __init__(self, tic, steps_per_degree):
         self._steps_per_degree = steps_per_degree
@@ -338,9 +356,9 @@ class ScannerFactory:
     @staticmethod
     def create(config_file: str) -> Scanner:
         grbl = Grbl()  # (grbl_streamer)
-        radial_mover = GrblAxis(grbl)
+        radial_mover = GrblXAxis(grbl)
         angular_mover = TicFactory().create(config_file)
-        vertical_mover = radial_mover
+        vertical_mover = GrblYAxis(grbl)
 
         config_parser = configparser.ConfigParser(inline_comment_prefixes="#")
         item = dict(config_parser.items('measurement_points'))

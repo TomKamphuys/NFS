@@ -31,18 +31,14 @@ class NearFieldScanner:
 class NearFieldScannerFactory:
     @staticmethod
     def create(config_file: str) -> NearFieldScanner:
+
+        loader.load_plugins(config_file)
+
         scanner = ScannerFactory().create(config_file)
         audio = AudioFactory().create(config_file)
 
         config_parser = configparser.ConfigParser(inline_comment_prefixes="#")
         config_parser.read(config_file)
-
-        items = config_parser.items('plugins')
-        _, plugins = zip(*items)
-
-        # load the plugins
-        loader.load_plugins(plugins)
-
         item = dict(config_parser.items('measurement_points'))
         measurement_points = factory.create(item)
 
@@ -51,4 +47,4 @@ class NearFieldScannerFactory:
 
         measurement_manager = SphericalMeasurementMotionManager(angular_mover, plane_mover, measurement_points)
 
-        return NearFieldScanner(scanner, audio, measurement_points)
+        return NearFieldScanner(scanner, audio, measurement_manager)

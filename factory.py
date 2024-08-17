@@ -6,14 +6,14 @@ from measurement_points import MeasurementPoints
 measurement_points_creation_funcs: dict[str, Callable[..., MeasurementPoints]] = {}
 
 
-def register(character_type: str, creator_fn: Callable[..., MeasurementPoints]) -> None:
+def register(measurement_points_type: str, creator_fn: Callable[..., MeasurementPoints]) -> None:
     """Register a new MeasurementPoints type."""
-    measurement_points_creation_funcs[character_type] = creator_fn
+    measurement_points_creation_funcs[measurement_points_type] = creator_fn
 
 
-def unregister(character_type: str) -> None:
+def unregister(measurement_points_type: str) -> None:
     """Unregister a MeasurementPoints type."""
-    measurement_points_creation_funcs.pop(character_type, None)
+    measurement_points_creation_funcs.pop(measurement_points_type, None)
 
 
 def create(arguments: dict[str, Any]) -> MeasurementPoints:
@@ -23,5 +23,5 @@ def create(arguments: dict[str, Any]) -> MeasurementPoints:
     try:
         creator_func = measurement_points_creation_funcs[measurement_points_type]
     except KeyError:
-        raise ValueError(f"unknown character type {measurement_points_type!r}") from None
+        raise ValueError(f"unknown MeasurementPoints type {measurement_points_type!r}") from None
     return creator_func(**args_copy)

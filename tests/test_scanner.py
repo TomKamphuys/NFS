@@ -1,6 +1,6 @@
 import configparser
 
-import pytest
+# import pytest
 from loguru import logger
 from datatypes import CylindricalPosition
 from scanner import Scanner, is_between, is_vertical_move_safe, SphericalMeasurementMotionManager
@@ -51,6 +51,9 @@ class GrblAxisMock:
     def move_to(self, x: float, y: float) -> None:
         pass
 
+    def move_to(self, bla: float) -> None:
+        pass
+
 
 class AudioMock:
     @staticmethod
@@ -65,6 +68,12 @@ class MeasurementPointsMock:
     def next(self):
         self._index += 1
         return CylindricalPosition(self._index, self._index, self._index)
+
+    def move_to_safe_starting_position(self):
+        pass
+
+    def ready(self) -> bool:
+        return self._index > 10
 
 
 def test_scanner_can_move_in():
@@ -92,15 +101,13 @@ def test_take_measurement_set():
 
 
 def test_measurement_points():
-    config_parser = configparser.ConfigParser(inline_comment_prefixes="#")
-    config_parser.read('../config.ini')
-
-    items = config_parser.items('plugins')
-    _, plugins = zip(*items)
+    config_file = '../config.ini'
 
     # load the plugins
-    loader.load_plugins(plugins)
+    loader.load_plugins(config_file)
 
+    config_parser = configparser.ConfigParser(inline_comment_prefixes="#")
+    config_parser.read(config_file)
     item = dict(config_parser.items('measurement_points'))
     measurement_points = factory.create(item)
 
