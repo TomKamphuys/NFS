@@ -176,8 +176,8 @@ class GrblAxis:
         self._grbl.arc_move_to(x, y, radius)
         self._wait_until_move_ready()
 
-    def move_to_xy(self, x: float, y: float) -> None:
-        self._grbl.move_to(x, y)
+    def move_to_rz(self, r: float, z: float) -> None:
+        self._grbl.move_to(z, r)
         self._wait_until_move_ready()
 
 
@@ -250,7 +250,7 @@ class SphericalMeasurementMotionManager:
     def move_to_safe_starting_position(self) -> None:
         radius = self._measurement_points.get_radius()
         logger.info(f'Performing a first move to a safe radius: {radius} mm')
-        self._plane_mover.move_to_xy(radius, 0.0)
+        self._plane_mover.move_to_rz(radius, 0.0)
         self._previous_point = CylindricalPosition(radius, 0.0, 0.0)
 
     def next(self) -> CylindricalPosition:
@@ -278,7 +278,7 @@ class SphericalMeasurementMotionManager:
             z *= ratio
             x_plane = math.sqrt(x ** 2 + y ** 2)
             logger.debug(f'Performing a (spherical) radius move {self._previous_point.length()} mm to {position.length()} mm')
-            self._plane_mover.move_to_xy(x_plane, z)
+            self._plane_mover.move_to_rz(x_plane, z)
 
         # TODO we zouden dit nog eerst kunnen checken of we er al niet toevallig zijn...
         radius = position.length()
