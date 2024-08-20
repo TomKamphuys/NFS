@@ -45,10 +45,13 @@ class GrblAxisMock:
     # def move_to(self, position):
     #     pass
 
-    def arc_move_to(self, x, y, r):
+    def cw_arc_move_to(self, x, y, r):
         pass
 
-    def move_to(self, x: float, y: float) -> None:
+    def ccw_arc_move_to(self, x, y, r):
+        pass
+
+    def move_to_rz(self, x: float, y: float) -> None:
         pass
 
     def move_to(self, bla: float) -> None:
@@ -139,16 +142,14 @@ def test_take_measurements_set():
     radial_mover = GrblAxisMock()
     angular_mover = TicAxisMock()
     vertical_mover = GrblAxisMock()
-    config_parser = configparser.ConfigParser(inline_comment_prefixes="#")
-    config_parser.read('../config.ini')
 
-
-    items = config_parser.items('plugins')
-    _, plugins = zip(*items)
+    config_file = '../config.ini'
 
     # load the plugins
-    loader.load_plugins(plugins)
+    loader.load_plugins(config_file)
 
+    config_parser = configparser.ConfigParser(inline_comment_prefixes="#")
+    config_parser.read(config_file)
     item = dict(config_parser.items('measurement_points'))
     measurement_points = factory.create(item)
 
@@ -160,14 +161,13 @@ def test_take_measurements_set():
 
 
 def test_plugin():
-    config_parser = configparser.ConfigParser(inline_comment_prefixes="#")
-    config_parser.read('../config.ini')
-
-    items = config_parser.items('plugins')
-    _, plugins = zip(*items)
+    config_file = '../config.ini'
 
     # load the plugins
-    loader.load_plugins(plugins)
+    loader.load_plugins(config_file)
+
+    config_parser = configparser.ConfigParser(inline_comment_prefixes="#")
+    config_parser.read(config_file)
 
     item = dict(config_parser.items('measurement_points'))
     measurement_points = factory.create(item)

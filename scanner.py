@@ -85,9 +85,9 @@ class Grbl:
             args.append(str(d))
         logger.trace("MY CALLBACK: event={} data={}".format(event.ljust(30), ", ".join(args)))
 
-    def __init__(self):
+    def __init__(self, config_file):
         config_parser = configparser.ConfigParser(inline_comment_prefixes="#")
-        config_parser.read('config.ini')
+        config_parser.read(config_file)
         section = 'grbl_streamer'
         port = config_parser.get(section, 'port')
         baudrate = config_parser.getint(section, 'baudrate')
@@ -115,8 +115,11 @@ class Grbl:
     def move_z_to(self, position: float) -> None:
         self.send_and_wait(f'G0 Z{position}')
 
-    def arc_move_to(self, x: float, y: float, radius: float) -> None:
-        self.send_and_wait(f'G02 X{x}U{y} R{radius}')
+    def cw_arc_move_to(self, x: float, y: float, radius: float) -> None:
+        self.send_and_wait(f'G02 X{x} Y{y} R{radius} F10000')  # TODO feedrate from x/y feedrate
+
+    def ccw_arc_move_to(self, x: float, y: float, radius: float) -> None:
+        self.send_and_wait(f'G03 X{x} Y{y} R{radius} F10000')  # TODO feedrate from x/y feedrate
 
     def move_to(self, x: float, y: float) -> None:
         self.send_and_wait(f'G0 X{x}Y{y}')
@@ -162,9 +165,6 @@ class GrblAxis:
     def __init__(self, grbl: Grbl):
         self._grbl = grbl
 
-    def _wait_until_move_ready(self) -> None:
-        self.send('G4 P0')
-
     def send(self, message) -> None:
         self._grbl.send(message)
 
@@ -172,13 +172,14 @@ class GrblAxis:
         self._grbl.send('G92 X0 Y0')
         self._grbl.send('$10=0')
 
-    def arc_move_to(self, x: float, y: float, radius: float) -> None:
-        self._grbl.arc_move_to(x, y, radius)
-        self._wait_until_move_ready()
+    def cw_arc_move_to(self, x: float, y: float, radius: float) -> None:
+        self._grbl.cw_arc_move_to(x, y, radius)
+
+    def ccw_arc_move_to(self, x: float, y: float, radius: float) -> None:
+        self._grbl.ccw_arc_move_to(x, y, radius)
 
     def move_to_rz(self, r: float, z: float) -> None:
         self._grbl.move_to(z, r)
-        self._wait_until_move_ready()
 
 
 class GrblXAxis(GrblAxis):
@@ -187,7 +188,6 @@ class GrblXAxis(GrblAxis):
 
     def move_to(self, position: float) -> None:
         self._grbl.move_x_to(position)
-        super()._wait_until_move_ready()
 
 
 class GrblYAxis(GrblAxis):
@@ -196,7 +196,6 @@ class GrblYAxis(GrblAxis):
 
     def move_to(self, position: float) -> None:
         self._grbl.move_y_to(position)
-        super()._wait_until_move_ready()
 
 
 class TicAxis:
@@ -245,13 +244,13 @@ class SphericalMeasurementMotionManager:
         self._angular_mover = angular_mover
         self._plane_mover = plane_mover
         self._measurement_points = measurement_points
-        self._previous_point = CylindricalPosition(320, 0.0, 0.0)
+        self._current_position = CylindricalPosition(320, 0.0, 0.0)
 
     def move_to_safe_starting_position(self) -> None:
         radius = self._measurement_points.get_radius()
         logger.info(f'Performing a first move to a safe radius: {radius} mm')
         self._plane_mover.move_to_rz(radius, 0.0)
-        self._previous_point = CylindricalPosition(radius, 0.0, 0.0)
+        self._current_position = CylindricalPosition(radius, 0.0, 0.0)
 
     def next(self) -> CylindricalPosition:
         position = self._measurement_points.next()
@@ -266,25 +265,34 @@ class SphericalMeasurementMotionManager:
 
         # TODO first time move to safe radius first
 
-        if self._previous_point.t() != position.t():
-            logger.debug(f'Performing an angular move from {self._previous_point.t()} degrees to {position.t()} degrees')
+        if self._current_position.t() != position.t():
+            logger.debug(f'Performing an angular move from {self._current_position.t()} degrees to {position.t()} degrees')
             self._angular_mover.move_to(position.t())
+            self._current_position.set_t(position.t())
 
-        if (self._previous_point.length() - position.length()) > 0.1:
-            ratio = position.length() / self._previous_point.length()
-            x, y, z = cyl_to_cart(self._previous_point)
+        if (self._current_position.length() - position.length()) > 0.1:
+            ratio = position.length() / self._current_position.length()
+            x, y, z = cyl_to_cart(self._current_position)
             x *= ratio
             y *= ratio
             z *= ratio
             x_plane = math.sqrt(x ** 2 + y ** 2)
-            logger.debug(f'Performing a (spherical) radius move {self._previous_point.length()} mm to {position.length()} mm')
+            logger.debug(f'Performing a (spherical) radius move {self._current_position.length()} mm to {position.length()} mm')
             self._plane_mover.move_to_rz(x_plane, z)
+            self._current_position.set_r(x_plane)
+            self._current_position.set_z(z)
 
-        # TODO we zouden dit nog eerst kunnen checken of we er al niet toevallig zijn...
         radius = position.length()
-        logger.debug(f'Move using an arc move')
-        self._plane_mover.arc_move_to(position.r(), position.z(), radius)
-        self._previous_point = position
+        if position.z() > self._current_position.z():
+            logger.debug(f'Move using an CW arc move')
+            self._plane_mover.cw_arc_move_to(position.r(), position.z(), radius)
+        elif position.z() < self._current_position.z():
+            logger.debug(f'Move using an CCW arc move')
+            self._plane_mover.ccw_arc_move_to(position.r(), position.z(), radius)
+        else:
+            logger.debug(f'No arc move needed')
+
+        self._current_position = position
 
 
 class Scanner:
@@ -357,7 +365,7 @@ class Scanner:
 class ScannerFactory:
     @staticmethod
     def create(config_file: str) -> Scanner:
-        grbl = Grbl()  # (grbl_streamer)
+        grbl = Grbl('config.ini')  # (grbl_streamer)
         radial_mover = GrblYAxis(grbl)
         angular_mover = TicFactory().create(config_file)
         vertical_mover = GrblXAxis(grbl)

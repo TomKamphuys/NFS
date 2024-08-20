@@ -27,6 +27,10 @@ class NearFieldScanner:
     def shutdown(self) -> None:
         pass  # turn off stuff and tidy
 
+    @property
+    def scanner(self):
+        return self._scanner
+
 
 class NearFieldScannerFactory:
     @staticmethod
