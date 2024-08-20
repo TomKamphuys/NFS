@@ -172,11 +172,11 @@ class GrblAxis:
         self._grbl.send('G92 X0 Y0')
         self._grbl.send('$10=0')
 
-    def cw_arc_move_to(self, x: float, y: float, radius: float) -> None:
-        self._grbl.cw_arc_move_to(x, y, radius)
+    def cw_arc_move_to(self, r: float, z: float, radius: float) -> None:
+        self._grbl.cw_arc_move_to(z, r, radius)
 
-    def ccw_arc_move_to(self, x: float, y: float, radius: float) -> None:
-        self._grbl.ccw_arc_move_to(x, y, radius)
+    def ccw_arc_move_to(self, r: float, z: float, radius: float) -> None:
+        self._grbl.ccw_arc_move_to(z, r, radius)
 
     def move_to_rz(self, r: float, z: float) -> None:
         self._grbl.move_to(z, r)
