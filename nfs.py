@@ -39,7 +39,7 @@ class NearFieldScannerFactory:
         loader.load_plugins(config_file)
 
         scanner = ScannerFactory().create(config_file)
-        audio = AudioMock()  # AudioFactory().create(config_file)
+        audio = AudioFactory().create(config_file)
 
         config_parser = configparser.ConfigParser(inline_comment_prefixes="#")
         config_parser.read(config_file)

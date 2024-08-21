@@ -392,7 +392,7 @@ class ScannerFactory:
     def create(config_file: str) -> Scanner:
         grbl = Grbl('config.ini')  # (grbl_streamer)
         radial_mover = GrblYAxis(grbl)
-        angular_mover = TicAxisMock()  # TicFactory().create(config_file)
+        angular_mover = TicFactory().create(config_file)
         vertical_mover = GrblXAxis(grbl)
 
         config_parser = configparser.ConfigParser(inline_comment_prefixes="#")
