@@ -1,3 +1,5 @@
+from math import atan2
+
 from loguru import logger
 import configparser
 from grbl_streamer import GrblStreamer  # type: ignore
@@ -116,10 +118,10 @@ class Grbl:
         self.send_and_wait(f'G0 Z{position}')
 
     def cw_arc_move_to(self, x: float, y: float, radius: float) -> None:
-        self.send_and_wait(f'G02 X{x} Y{y} R{radius} F10000')  # TODO feedrate from x/y feedrate
+        self.send_and_wait(f'G02 X{x:.4f} Y{y:.4f} R{radius:.4f} F10000')  # TODO feedrate from x/y feedrate
 
     def ccw_arc_move_to(self, x: float, y: float, radius: float) -> None:
-        self.send_and_wait(f'G03 X{x} Y{y} R{radius} F10000')  # TODO feedrate from x/y feedrate
+        self.send_and_wait(f'G03 X{x:.4f} Y{y:.4f} R{radius:.4f} F10000')  # TODO feedrate from x/y feedrate
 
     def move_to(self, x: float, y: float) -> None:
         self.send_and_wait(f'G0 X{x}Y{y}')
@@ -283,11 +285,13 @@ class SphericalMeasurementMotionManager:
             self._current_position.set_z(z)
 
         radius = position.length()
-        if position.z() > self._current_position.z():
-            logger.debug(f'Move using an CW arc move')
+        old_angle = np.around(math.atan2(self._current_position.z(), self._current_position.r()) / math.pi * 180.0, 2)
+        new_angle = np.around(math.atan2(position.z(), position.r()) / math.pi * 180.0, 2)
+        if new_angle > old_angle:
+            logger.debug(f'Move using an CW arc move from {old_angle:.2f} to {new_angle:.2f} degrees')
             self._plane_mover.cw_arc_move_to(position.r(), position.z(), radius)
-        elif position.z() < self._current_position.z():
-            logger.debug(f'Move using an CCW arc move')
+        elif new_angle < old_angle:
+            logger.debug(f'Move using an CCW arc move from {old_angle:.2f} to {new_angle:.2f} degrees')
             self._plane_mover.ccw_arc_move_to(position.r(), position.z(), radius)
         else:
             logger.debug(f'No arc move needed')
@@ -360,6 +364,22 @@ class Scanner:
 
     def shutdown(self) -> None:
         pass
+
+class TicAxisMock:
+    def __init__(self):
+        pass
+
+    def move_to(self, position: float) -> None:
+        logger.trace(f'{position}')
+
+    def _wait_until_move_ready(self, nr_of_steps: int) -> None:
+        logger.trace(f'{int}')
+
+    def set_as_zero(self) -> None:
+        pass
+
+    def get_position(self) -> float:
+        return 0
 
 
 class ScannerFactory:

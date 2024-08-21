@@ -1,7 +1,7 @@
 from scanner import ScannerFactory
 from scanner import SphericalMeasurementMotionManager
 import configparser
-from audio import AudioFactory
+from audio import AudioFactory, AudioMock
 import factory
 import loader
 

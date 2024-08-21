@@ -50,6 +50,13 @@ class Audio:
             'DOUBLE')
 
 
+class AudioMock:
+    def __init__(self):
+        pass
+
+    def measure_ir(self, position: CylindricalPosition) -> None:
+        logger.trace(f'{position}')
+
 class AudioFactory:
     @staticmethod
     def create(config_file: str) -> Audio:
