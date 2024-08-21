@@ -96,6 +96,8 @@ class Grbl:
 
         grbl_streamer = GrblStreamer(self.on_grbl_event)  # TODO add useful callback
         grbl_streamer.cnect(port, baudrate)
+        logger.info('Waiting for gbrl to initialize..')
+        time.sleep(3)
         grbl_streamer.poll_start()
         grbl_streamer.incremental_streaming = True
         self._grbl_streamer = grbl_streamer
@@ -106,6 +108,7 @@ class Grbl:
         self._set_axis_according_to_config(config_parser, 'y')
 
         self.send('$1=255')
+        self.send('$$')
         self._ready = True
 
     def move_x_to(self, position: float) -> None:
@@ -263,16 +266,16 @@ class SphericalMeasurementMotionManager:
         return self._measurement_points.ready()
 
     def _move_to_next_measurement_point(self, position: CylindricalPosition) -> None:
-        logger.info(f'Moving to {position}')
-
-        # TODO first time move to safe radius first
+        logger.info(f'Moving to {position} from {self._current_position}')
 
         if self._current_position.t() != position.t():
             logger.debug(f'Performing an angular move from {self._current_position.t()} degrees to {position.t()} degrees')
             self._angular_mover.move_to(position.t())
             self._current_position.set_t(position.t())
+        else:
+            logger.debug('No Angular move needed.')
 
-        if (self._current_position.length() - position.length()) > 0.1:
+        if math.fabs(self._current_position.length() - position.length()) > 0.1:
             ratio = position.length() / self._current_position.length()
             x, y, z = cyl_to_cart(self._current_position)
             x *= ratio
@@ -283,6 +286,8 @@ class SphericalMeasurementMotionManager:
             self._plane_mover.move_to_rz(x_plane, z)
             self._current_position.set_r(x_plane)
             self._current_position.set_z(z)
+        else:
+            logger.debug(f'No (spherical) radial move needed.')
 
         radius = position.length()
         old_angle = np.around(math.atan2(self._current_position.z(), self._current_position.r()) / math.pi * 180.0, 2)
@@ -387,7 +392,7 @@ class ScannerFactory:
     def create(config_file: str) -> Scanner:
         grbl = Grbl('config.ini')  # (grbl_streamer)
         radial_mover = GrblYAxis(grbl)
-        angular_mover = TicFactory().create(config_file)
+        angular_mover = TicAxisMock()  # TicFactory().create(config_file)
         vertical_mover = GrblXAxis(grbl)
 
         config_parser = configparser.ConfigParser(inline_comment_prefixes="#")
