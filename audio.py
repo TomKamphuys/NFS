@@ -31,6 +31,11 @@ class Audio:
             np.concatenate((x_padded.time.T, x_padded.time.T), axis=1), x_padded.sampling_rate, channels=2,
             blocking=True)
 
+        pf.io.write_audio(
+            recording,
+            os.path.join('Recordings', 'raw', f'{position}.wav'),
+            'DOUBLE')
+
         y = pf.Signal(recording[:, 0].T, x_padded.sampling_rate)
         x_reference = pf.Signal(recording[:, 1].T, x_padded.sampling_rate)
 
