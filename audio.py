@@ -32,7 +32,7 @@ class Audio:
             blocking=True)
 
         pf.io.write_audio(
-            recording,
+            pf.Signal(recording.T, x_padded.sampling_rate),
             os.path.join('Recordings', 'raw', f'{position}.wav'),
             'DOUBLE')
 
