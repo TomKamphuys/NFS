@@ -31,13 +31,18 @@ class Audio:
             np.concatenate((x_padded.time.T, x_padded.time.T), axis=1), x_padded.sampling_rate, channels=2,
             blocking=True)
 
-        pf.io.write_audio(
-            pf.Signal(recording.T, x_padded.sampling_rate),
-            os.path.join('Recordings', 'raw', f'{position}.wav'),
-            'DOUBLE')
-
         y = pf.Signal(recording[:, 0].T, x_padded.sampling_rate)
         x_reference = pf.Signal(recording[:, 1].T, x_padded.sampling_rate)
+
+        pf.io.write_audio(
+            y,
+            os.path.join('Recordings', 'raw', f'response_{position}.wav'),
+            'DOUBLE')
+
+        pf.io.write_audio(
+            x_reference,
+            os.path.join('Recordings', 'raw', f'stimulus_{position}.wav'),
+            'DOUBLE')
 
         x_inverted = pf.dsp.regularized_spectrum_inversion(x_reference,
                                                            (self._minimum_frequency, self._maximum_frequency))
