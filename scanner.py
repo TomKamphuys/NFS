@@ -1,5 +1,3 @@
-from math import atan2
-
 from loguru import logger
 import configparser
 from grbl_streamer import GrblStreamer  # type: ignore
@@ -8,7 +6,7 @@ import time
 import numpy as np
 import math
 import factory
-from datatypes import CylindricalPosition
+from datatypes import CylindricalPosition, cyl_to_cart
 
 
 def has_intersect(plane_normal, ray_direction, epsilon=1e-6) -> bool:
