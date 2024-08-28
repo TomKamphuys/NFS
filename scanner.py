@@ -28,18 +28,6 @@ def line_plane_intersection(plane_normal, plane_point, ray_direction, ray_point)
     return psi
 
 
-def cyl_to_cart(cylindrical_position):
-    r = cylindrical_position.r()
-    t = cylindrical_position.t() / 180 * np.pi
-    z = cylindrical_position.z()
-
-    x = r * np.cos(t)
-    y = r * np.sin(t)
-    z = z
-
-    return x, y, z
-
-
 def is_between(a, b, c):
     if a >= c:
         return a >= b >= c

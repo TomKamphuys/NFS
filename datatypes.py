@@ -1,4 +1,5 @@
 import math
+import numpy as np
 
 class CylindricalPosition:
     def __init__(self, r, t, z):
@@ -32,3 +33,15 @@ class CylindricalPosition:
 
     def length(self) -> float:
         return math.sqrt(self.r() ** 2 + self.z() ** 2)
+
+
+def cyl_to_cart(cylindrical_position):
+    r = cylindrical_position.r()
+    t = cylindrical_position.t() / 180 * np.pi
+    z = cylindrical_position.z()
+
+    x = r * np.cos(t)
+    y = r * np.sin(t)
+    z = z
+
+    return x, y, z
