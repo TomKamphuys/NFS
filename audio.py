@@ -1,16 +1,19 @@
+import os
+import math
+import configparser
 import pyfar as pf
 import numpy as np
 import sounddevice as sd  # type: ignore
-import os
 from loguru import logger
-import configparser
-import math
 from datatypes import CylindricalPosition
 
 logger.add('scanner.log', mode='w', level="TRACE")
 
 
 class Audio:
+    """
+    Simple audio class that handles the audio measurement.
+    """
     def __init__(self, device_id, sample_rate, minimum_frequency, maximum_frequency, duration, padding_time):
         self._sample_rate = sample_rate
         self._minimum_frequency = minimum_frequency
@@ -20,6 +23,10 @@ class Audio:
         sd.default.device = device_id
 
     def measure_ir(self, position: CylindricalPosition) -> None:
+        """
+        Takes an impulse response using an exponential sweep.
+        It stores the result in a file with the position encoded in its name.
+        """
         logger.info(f'IR measurement for position {position}')
         x = pf.signals.exponential_sweep_time(
             n_samples=self._duration * self._sample_rate,
@@ -55,15 +62,25 @@ class AudioMock:
         pass
 
     def measure_ir(self, position: CylindricalPosition) -> None:
-        logger.trace(f'{position}')
+        logger.info(f'[MOCK] IR measurement for position {position}')
 
 class AudioFactory:
     @staticmethod
-    def create(config_file: str) -> Audio:
+    def create(config_file: str) -> AudioMock | Audio:
+        """
+        Factory method that builds an Audio object based on a config file
+        :param config_file: config file name containing the config
+        :return: an Audio object (or a mock)
+        """
         config_parser = configparser.ConfigParser(inline_comment_prefixes="#")
         config_parser.read(config_file)
 
         section = 'audio'
+
+        mock = config_parser.getboolean(section, 'mock')
+        if mock:
+            return AudioMock()
+
         device_id = config_parser.getint(section, 'device_id')
         sample_rate = config_parser.getfloat(section, 'sample_rate')
         minimum_frequency = config_parser.getfloat(section, 'minimum_frequency')

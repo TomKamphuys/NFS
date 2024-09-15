@@ -1,10 +1,10 @@
-from loguru import logger
 import configparser
+import time
+import math
+from loguru import logger
 from grbl_streamer import GrblStreamer  # type: ignore
 from ticlib import TicUSB  # type: ignore
-import time
 import numpy as np
-import math
 import factory
 from datatypes import CylindricalPosition, cyl_to_cart
 
@@ -25,13 +25,11 @@ def line_plane_intersection(plane_normal, plane_point, ray_direction, ray_point)
     psi = w + si * ray_direction + plane_point
     return psi
 
-
 def is_between(a, b, c):
     if a >= c:
         return a >= b >= c
-    else:
-        return a <= b <= c
 
+    return a <= b <= c
 
 def is_vertical_move_safe(current_position, next_position, plane_point_z):
     plane_normal = np.array([0, 0, 1])
@@ -49,24 +47,23 @@ def is_vertical_move_safe(current_position, next_position, plane_point_z):
         logger.info(
             f'Unsafe move requested from {x, y, z} [mm] to {x, y, next_position} [mm] (xyz). Reverting to evasive move')
         return False
-    else:
-        return True
+
+    return True
 
 
 def is_radial_move_safe(current_position, next_position):
     radius = np.sqrt((195 / 2) ** 2 + (270 / 2) ** 2)
     if np.abs(current_position.z()) <= 375 / 2 and next_position < radius:
-        logger.info(f'Unsafe radial move requested. Reverting to evasive move')
+        logger.info('Unsafe radial move requested. Reverting to evasive move')
         return False
-    else:
-        return True
+
+    return True
 
 
 class Grbl:
     def on_grbl_event(self, event, *data):
         logger.trace(event)
         if event == "on_rx_buffer_percent":
-            logger.debug('Motion complete')
             self._ready = True
         args = []
         for d in data:
@@ -80,7 +77,8 @@ class Grbl:
         port = config_parser.get(section, 'port')
         baudrate = config_parser.getint(section, 'baudrate')
 
-        grbl_streamer = GrblStreamer(self.on_grbl_event)  # TODO add useful callback
+        grbl_streamer = GrblStreamer(self.on_grbl_event)
+        grbl_streamer.setup_logging()
         grbl_streamer.cnect(port, baudrate)
         logger.info('Waiting for gbrl to initialize..')
         time.sleep(3)
@@ -93,9 +91,15 @@ class Grbl:
         self._set_axis_according_to_config(config_parser, 'x')
         self._set_axis_according_to_config(config_parser, 'y')
 
-        self.send('$1=255')
+        self._feed_rate = config_parser.getfloat('grbl_x_axis', 'maximum_rate')
+
+        self.send('$1=255')  # servo's always on
         self.send('$$')
         self._ready = True
+
+    def shutdown(self):
+        logger.info('Disconnecting from GRBL')
+        self._grbl_streamer.disconnect()
 
     def move_x_to(self, position: float) -> None:
         self.send_and_wait(f'G0 X{position}')
@@ -107,10 +111,10 @@ class Grbl:
         self.send_and_wait(f'G0 Z{position}')
 
     def cw_arc_move_to(self, x: float, y: float, radius: float) -> None:
-        self.send_and_wait(f'G02 X{x:.4f} Y{y:.4f} R{radius:.4f} F10000')  # TODO feedrate from x/y feedrate
+        self.send_and_wait(f'G02 X{x:.4f} Y{y:.4f} R{radius:.4f} F{self._feed_rate}')
 
     def ccw_arc_move_to(self, x: float, y: float, radius: float) -> None:
-        self.send_and_wait(f'G03 X{x:.4f} Y{y:.4f} R{radius:.4f} F10000')  # TODO feedrate from x/y feedrate
+        self.send_and_wait(f'G03 X{x:.4f} Y{y:.4f} R{radius:.4f} F{self._feed_rate}')
 
     def move_to(self, x: float, y: float) -> None:
         self.send_and_wait(f'G0 X{x}Y{y}')
@@ -126,12 +130,12 @@ class Grbl:
         self._ready = False
         self.send(message)
         while not self._ready:
-            time.sleep(0.1)
+            time.sleep(0.01)
 
         self._ready = False
         self.send('G04 P0')
         while not self._ready:
-            time.sleep(0.1)
+            time.sleep(0.01)
 
     def _set_axis_according_to_config(self, config_parser, axis: str) -> None:
         section = f'grbl_{axis}_axis'
@@ -171,6 +175,9 @@ class GrblAxis:
 
     def move_to_rz(self, r: float, z: float) -> None:
         self._grbl.move_to(z, r)
+
+    def shutdown(self):
+        self._grbl.shutdown()
 
 
 class GrblXAxis(GrblAxis):
@@ -213,16 +220,39 @@ class TicAxis:
         return self._tic.get_current_position() / self._steps_per_degree
 
 
+class TicAxisMock:
+    def __init__(self):
+        pass
+
+    def move_to(self, position: float) -> None:
+        logger.trace(f'{position}')
+
+    def _wait_until_move_ready(self, nr_of_steps: int) -> None:
+        logger.trace(f'{int}')
+
+    def set_as_zero(self) -> None:
+        pass
+
+    def get_position(self) -> float:
+        return 0.0
+
+
 class TicFactory:
     @staticmethod
-    def create(config_file: str) -> TicAxis:
+    def create(config_file: str) -> TicAxisMock | TicAxis:
         config_parser = configparser.ConfigParser(inline_comment_prefixes="#")
         config_parser.read(config_file)
 
-        degree_per_step = config_parser.getfloat('tic', 'degree_per_step')
-        large_gear_nr_of_teeth = config_parser.getint('tic', 'large_gear_nr_of_teeth')
-        small_gear_nr_of_teeth = config_parser.getint('tic', 'small_gear_nr_of_teeth')
-        stepper_step_size = config_parser.getint('tic', 'stepper_step_size')
+        section = 'tic'
+
+        mock = config_parser.getboolean(section, 'mock')
+        if mock:
+            return TicAxisMock()
+
+        degree_per_step = config_parser.getfloat(section, 'degree_per_step')
+        large_gear_nr_of_teeth = config_parser.getint(section, 'large_gear_nr_of_teeth')
+        small_gear_nr_of_teeth = config_parser.getint(section, 'small_gear_nr_of_teeth')
+        stepper_step_size = config_parser.getint(section, 'stepper_step_size')
         steps_per_degree = large_gear_nr_of_teeth / small_gear_nr_of_teeth * stepper_step_size / degree_per_step
 
         tic = TicUSB()
@@ -251,6 +281,9 @@ class SphericalMeasurementMotionManager:
     def ready(self) -> bool:
         return self._measurement_points.ready()
 
+    def shutdown(self):
+        self._plane_mover.shutdown()
+
     def _move_to_next_measurement_point(self, position: CylindricalPosition) -> None:
         logger.info(f'Moving to {position} from {self._current_position}')
 
@@ -273,7 +306,7 @@ class SphericalMeasurementMotionManager:
             self._current_position.set_r(x_plane)
             self._current_position.set_z(z)
         else:
-            logger.debug(f'No (spherical) radial move needed.')
+            logger.debug('No (spherical) radial move needed.')
 
         radius = position.length()
         old_angle = np.around(math.atan2(self._current_position.z(), self._current_position.r()) / math.pi * 180.0, 2)
@@ -285,7 +318,7 @@ class SphericalMeasurementMotionManager:
             logger.debug(f'Move using an CCW arc move from {old_angle:.2f} to {new_angle:.2f} degrees')
             self._plane_mover.ccw_arc_move_to(position.r(), position.z(), radius)
         else:
-            logger.debug(f'No arc move needed')
+            logger.debug('No arc move needed')
 
         self._current_position = position
 
@@ -296,7 +329,6 @@ class Scanner:
     It delegates the movement per axis to lower level controllers.
 
     """
-
     def __init__(self, radial_mover, angular_mover, vertical_mover, measurement_motion_manager):
         self._radial_mover = radial_mover
         self._angular_mover = angular_mover
@@ -354,23 +386,15 @@ class Scanner:
         self._cylindrical_position.set_z(0)
 
     def shutdown(self) -> None:
-        pass
+        self._measurement_motion_manager.shutdown()
 
-class TicAxisMock:
-    def __init__(self):
-        pass
+    @property
+    def angular_mover(self):
+        return self._angular_mover
 
-    def move_to(self, position: float) -> None:
-        logger.trace(f'{position}')
-
-    def _wait_until_move_ready(self, nr_of_steps: int) -> None:
-        logger.trace(f'{int}')
-
-    def set_as_zero(self) -> None:
-        pass
-
-    def get_position(self) -> float:
-        return 0
+    @property
+    def radial_mover(self):
+        return self._radial_mover
 
 
 class ScannerFactory:

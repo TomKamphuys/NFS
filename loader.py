@@ -1,16 +1,20 @@
 """A simple plugin loader."""
 import importlib
-import factory
-from loguru import logger
 import configparser
+from loguru import logger
+import factory
 
 
 class ModuleInterface:
-    """Represents a plugin interface. A plugin has a single register function."""
+    """
+    Represents a plugin interface. A plugin has a single register function.
+    """
 
     @staticmethod
     def register(my_factory) -> None:
-        """Register the necessary items in the measurement points factory."""
+        """
+        Register the necessary items in the measurement points factory.
+        """
 
 
 def import_module(name: str) -> ModuleInterface:

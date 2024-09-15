@@ -18,7 +18,7 @@ def my_callback(event_string, *data):
                                                        ", ".join(args)))
 
 def test_iets():
-    grbl = Grbl('../config.ini')  # (grbl_streamer)
+    grbl = Grbl('config.ini')  # (grbl_streamer)
     mover = GrblAxis(grbl)
 
     mover.set_as_zero()
@@ -27,7 +27,7 @@ def test_iets():
 
 
 def test_grbl():
-    config_file = '../config.ini'
+    config_file = 'config.ini'
     grbl = Grbl(config_file)
 
     config_parser = configparser.ConfigParser(inline_comment_prefixes="#")

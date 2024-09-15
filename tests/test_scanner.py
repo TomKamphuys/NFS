@@ -1,10 +1,12 @@
 import configparser
+import time
 
 # import pytest
 from loguru import logger
 from datatypes import CylindricalPosition
-from scanner import Scanner, is_between, is_vertical_move_safe, SphericalMeasurementMotionManager
-from nfs import NearFieldScanner
+from scanner import Scanner, is_between, is_vertical_move_safe, TicAxisMock, Grbl
+from nfs import NearFieldScanner, NearFieldScannerFactory
+from audio import AudioMock
 import factory
 import loader
 import matplotlib.pyplot as plt  # type: ignore
@@ -32,19 +34,7 @@ class ScannerMock:
         logger.debug(f'Moving to: {position}')
 
 
-class TicAxisMock:
-    def move_to(self, position):
-        pass
-
-    @staticmethod
-    def get_position():
-        return CylindricalPosition(0, 0, 0)
-
-
 class GrblAxisMock:
-    # def move_to(self, position):
-    #     pass
-
     def cw_arc_move_to(self, x, y, r):
         pass
 
@@ -56,12 +46,6 @@ class GrblAxisMock:
 
     def move_to(self, bla: float) -> None:
         pass
-
-
-class AudioMock:
-    @staticmethod
-    def measure_ir(position):
-        logger.debug(f'IR measurement for position {position}')
 
 
 class MeasurementPointsMock:
@@ -78,6 +62,22 @@ class MeasurementPointsMock:
     def ready(self) -> bool:
         return self._index > 10
 
+
+def test_grbl():
+    grbl = Grbl('config.ini')
+
+    grbl.move_x_to(100)
+    grbl.move_y_to(100)
+    grbl.move_z_to(100)
+    grbl.move_to(10, 10)
+    grbl.move_to(0, 100)
+    grbl.cw_arc_move_to(100, 0, 100)
+    grbl.ccw_arc_move_to(0, 100, 100)
+    grbl.get_current_position()
+    grbl.send('?')
+    time.sleep(2)
+    grbl.send_and_wait('G0X0Y0')
+    assert True
 
 def test_scanner_can_move_in():
     radial_mover = GrblAxisMock()
@@ -104,7 +104,7 @@ def test_take_measurement_set():
 
 
 def test_measurement_points():
-    config_file = '../config.ini'
+    config_file = 'config.ini'
 
     # load the plugins
     loader.load_plugins(config_file)
@@ -139,29 +139,18 @@ def test_measurement_points():
 
 
 def test_take_measurements_set():
-    radial_mover = GrblAxisMock()
-    angular_mover = TicAxisMock()
-    vertical_mover = GrblAxisMock()
-
-    config_file = '../config.ini'
+    config_file = 'config.ini'
 
     # load the plugins
     loader.load_plugins(config_file)
 
-    config_parser = configparser.ConfigParser(inline_comment_prefixes="#")
-    config_parser.read(config_file)
-    item = dict(config_parser.items('measurement_points'))
-    measurement_points = factory.create(item)
+    nfs = NearFieldScannerFactory.create(config_file)
 
-    measurement_manager = SphericalMeasurementMotionManager(angular_mover, radial_mover, measurement_points)
-    scanner = Scanner(radial_mover, angular_mover, vertical_mover, measurement_manager)
-
-    nfs = NearFieldScanner(scanner, AudioMock(), measurement_manager)
     nfs.take_measurement_set()
 
 
 def test_plugin():
-    config_file = '../config.ini'
+    config_file = 'config.ini'
 
     # load the plugins
     loader.load_plugins(config_file)

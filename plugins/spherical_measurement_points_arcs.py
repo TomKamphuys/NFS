@@ -1,5 +1,8 @@
 from datatypes import CylindricalPosition
 import numpy as np
+from loguru import logger
+
+logger.add('scanner.log', mode='w', level="TRACE")
 
 
 class SphericalMeasurementPointsArcs:
@@ -54,9 +57,15 @@ class SphericalMeasurementPointsArcs:
 
         sorted_indices = np.argsort(theta_cyl_temp * 100000 + z)
 
-        self._r_cyl = r_temp[sorted_indices]
-        self._theta_cyl = theta_cyl_temp[sorted_indices]
-        self._z_cyl = z[sorted_indices]
+        r_cyl = r_temp[sorted_indices]
+        theta_cyl = theta_cyl_temp[sorted_indices]
+        z_cyl = z[sorted_indices]
+
+        # everything in mm and degrees
+        keep_indices = (r_cyl > 30.0)  # diameter central pole is 50mm
+        self._r_cyl = r_cyl[keep_indices]
+        self._theta_cyl = theta_cyl[keep_indices]
+        self._z_cyl = z_cyl[keep_indices]
 
         self._actual_nr_of_points = self._r_cyl.size
         self._current_index = 0
@@ -66,6 +75,8 @@ class SphericalMeasurementPointsArcs:
 
     def next(self) -> CylindricalPosition:
         i = self._current_index
+        logger.info(f'Point {i} of {self._actual_nr_of_points}')
+
         r = self._r_cyl[i]
         theta = self._theta_cyl[i]
         z = self._z_cyl[i]

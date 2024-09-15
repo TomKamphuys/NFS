@@ -48,7 +48,7 @@ class SphericalMeasurementPointsArcsRandom:
         z_cyl = z[sorted_indices]
 
         # everything in mm and degrees
-        keep_indices = (r_cyl > 30.0)
+        keep_indices = (r_cyl > 30.0)  # diameter central pole is 50mm
         self._r_cyl = r_cyl[keep_indices]
         self._theta_cyl = theta_cyl[keep_indices]
         self._z_cyl = z_cyl[keep_indices]

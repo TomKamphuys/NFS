@@ -12,7 +12,7 @@
    limitations under the License.
 """
 
-import remi.gui as gui
+from remi import gui
 from remi import start, App
 import sys
 from nfs import NearFieldScannerFactory
@@ -20,15 +20,12 @@ from nfs import NearFieldScannerFactory
 
 class NFSApp(App):
     def __init__(self, *args):
-        super(NFSApp, self).__init__(*args)
+        super().__init__(*args)
 
     def idle(self):
         pass
 
     def main(self):
-        self.nfs = NearFieldScannerFactory().create('./config.ini')
-        self.scanner = self.nfs.scanner
-
         # the margin 0px auto centers the main container
         vertical_container = gui.Container(width=540, margin='0px auto',
                                           style={'display': 'block', 'overflow': 'hidden'})
@@ -96,6 +93,9 @@ class NFSApp(App):
 
         # this flag will be used to stop the display_counter Timer
         self.stop_flag = False
+
+        self.nfs = NearFieldScannerFactory().create('./config.ini')
+        self.scanner = self.nfs.scanner
 
         # returning the root widget
         return vertical_container
