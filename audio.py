@@ -1,16 +1,24 @@
 import os
 import math
 import configparser
-import pyfar as pf
+import pyfar as pf  # type: ignore
 import numpy as np
 import sounddevice as sd  # type: ignore
 from loguru import logger
 from datatypes import CylindricalPosition
+from abc import ABC, abstractmethod
+
 
 logger.add('scanner.log', mode='w', level="TRACE")
 
 
-class Audio:
+class IAudio(ABC):
+    @abstractmethod
+    def measure_ir(self, position: CylindricalPosition) -> None:
+        pass
+
+
+class Audio(IAudio):
     """
     Simple audio class that handles the audio measurement.
     """
@@ -57,7 +65,7 @@ class Audio:
             'DOUBLE')
 
 
-class AudioMock:
+class AudioMock(IAudio):
     def __init__(self):
         pass
 

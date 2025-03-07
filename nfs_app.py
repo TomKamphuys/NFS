@@ -19,6 +19,55 @@ from nfs import NearFieldScannerFactory
 
 
 class NFSApp(App):
+    """
+    Represents a Near Field Scanner application for controlling hardware movements, performing
+    measurements, and managing a user interface for scanner operations.
+
+    The class is designed to support various scanner movement commands through UI buttons and
+    provides an interactive interface that allows users to control a Near Field Scanner for
+    precise operations. It integrates with a GUI framework and scanner factory to provide
+    functionalities such as measurements, resetting scanner position to zero, and exiting
+    the application.
+
+    :ivar count: Internal counter used for tracking application-specific operations.
+    :type count: int
+    :ivar counter: GUI label widget for displaying counter value.
+    :type counter: gui.Label
+    :ivar lbl: GUI label widget for displaying the last command executed.
+    :type lbl: gui.Label
+    :ivar move_out_10_btn: GUI button for moving the scanner outwards by 10 mm.
+    :type move_out_10_btn: gui.Button
+    :ivar move_out_1_btn: GUI button for moving the scanner outwards by 1 mm.
+    :type move_out_1_btn: gui.Button
+    :ivar move_in_1_btn: GUI button for moving the scanner inwards by 1 mm.
+    :type move_in_1_btn: gui.Button
+    :ivar move_in_10_btn: GUI button for moving the scanner inwards by 10 mm.
+    :type move_in_10_btn: gui.Button
+    :ivar move_up_10_btn: GUI button for moving the scanner upwards by 10 mm.
+    :type move_up_10_btn: gui.Button
+    :ivar move_up_1_btn: GUI button for moving the scanner upwards by 1 mm.
+    :type move_up_1_btn: gui.Button
+    :ivar move_down_1_btn: GUI button for moving the scanner downwards by 1 mm.
+    :type move_down_1_btn: gui.Button
+    :ivar move_down_10_btn: GUI button for moving the scanner downwards by 10 mm.
+    :type move_down_10_btn: gui.Button
+    :ivar zero_btn: GUI button for resetting the scanner position to zero.
+    :type zero_btn: gui.Button
+    :ivar take_measurement_btn: GUI button for taking a single measurement.
+    :type take_measurement_btn: gui.Button
+    :ivar take_measurement_set_btn: GUI button for taking a set of measurements.
+    :type take_measurement_set_btn: gui.Button
+    :ivar exit_btn: GUI button for exiting the application.
+    :type exit_btn: gui.Button
+    :ivar sub_container_right: GUI container for holding various buttons and labels.
+    :type sub_container_right: gui.Container
+    :ivar stop_flag: Flag indicating whether to stop the timer for display_counter.
+    :type stop_flag: bool
+    :ivar nfs: Instance of the NearFieldScannerFactory for managing the scanner operations.
+    :type nfs: NearFieldScannerFactory
+    :ivar scanner: Scanner object created by the NearFieldScannerFactory instance.
+    :type scanner: NearFieldScanner
+    """
     def __init__(self, *args):
         super().__init__(*args)
 

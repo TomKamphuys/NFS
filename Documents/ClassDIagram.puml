@@ -1,0 +1,61 @@
+@startuml
+
+class Audio
+class AudioMock
+class PlanarMover
+class TicRotator
+class RotatorMock
+class SphericalMeasurementMotionManager
+class Scanner
+class IGrblController
+class NearFieldScanner
+class ESP32Duino
+class GrblRotator
+class GrblStreamerMock
+class Arduino
+class GrblStreamer
+class IGrblStreamer
+class IAudio
+class Tic
+class IRotator
+class MeasurementPoints
+class GrblControllerMock
+
+
+GrblRotator -[hidden]> RotatorMock
+
+
+GrblStreamer -u-|> IGrblStreamer
+GrblStreamerMock -u-|> IGrblStreamer
+
+Audio -u-|> IAudio
+AudioMock -u-|> IAudio
+
+TicRotator -u-|> IRotator
+GrblRotator -u-|> IRotator
+RotatorMock -u-|> IRotator
+
+Arduino -u-|> IGrblController
+ESP32Duino -u-|> IGrblController
+GrblControllerMock -u-|> IGrblController
+
+
+IGrblController -u-* GrblRotator
+
+IGrblStreamer -u-* Arduino
+
+Scanner -u-* NearFieldScanner
+IAudio -u-* NearFieldScanner
+SphericalMeasurementMotionManager -u-* NearFieldScanner
+
+IGrblController -u-* PlanarMover
+
+Tic -u-* TicRotator
+
+Scanner -u-* SphericalMeasurementMotionManager
+MeasurementPoints -u-* SphericalMeasurementMotionManager
+
+PlanarMover -u-* Scanner
+IRotator -u-* Scanner
+
+@enduml

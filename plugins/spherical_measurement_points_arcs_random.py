@@ -3,6 +3,43 @@ import numpy as np
 
 
 class SphericalMeasurementPointsArcsRandom:
+    """
+    Class designed to generate a set of random 3D spherical measurement points
+    distributed across arcs, which are then transformed into cylindrical
+    coordinates for further processing, while maintaining constraints like
+    specific radius, wall spacing, and minimum radial distance.
+
+    This class provides methods to access the calculated points sequentially, reset
+    access to the beginning of the list, and verify if all points have been
+    accessed. The algorithm ensures a uniform distribution of points over a sphere,
+    followed by transformations and filtering to meet physical constraints.
+
+    :ivar _ready: Flag indicating whether all points have been accessed.
+    :type _ready: bool
+    :ivar _radius: Desired radius of the spherical region from which random
+        measurements are generated.
+    :type _radius: float
+    :ivar _wall_spacing: Spacing constraint for wall measurements.
+    :type _wall_spacing: float
+    :ivar _nr_of_points: Total number of spherical measurement points to generate.
+    :type _nr_of_points: int
+    :ivar _thetas: Array of polar angles of generated spherical coordinates.
+    :type _thetas: numpy.ndarray
+    :ivar _phis: Array of azimuthal angles of generated spherical coordinates.
+    :type _phis: numpy.ndarray
+    :ivar _r_cyl: Filtered radial distances in cylindrical coordinates.
+    :type _r_cyl: numpy.ndarray
+    :ivar _theta_cyl: Filtered angular positions in cylindrical coordinates, in
+        degrees.
+    :type _theta_cyl: numpy.ndarray
+    :ivar _z_cyl: Filtered z-coordinates in cylindrical coordinates.
+    :type _z_cyl: numpy.ndarray
+    :ivar _actual_nr_of_points: Actual number of points after filtering for
+        constraints.
+    :type _actual_nr_of_points: int
+    :ivar _current_index: Index tracking the next point to be retrieved.
+    :type _current_index: int
+    """
     def __init__(self,
                  nr_of_points,
                  wall_spacing,
@@ -80,4 +117,15 @@ class SphericalMeasurementPointsArcsRandom:
 
 
 def register(factory) -> None:
+    """
+    Registers a specific class or object with a given factory. This allows the
+    provided factory instance to handle the creation or instantiation of the
+    "SphericalMeasurementPointsArcsRandom" class, facilitating dynamic object
+    creation and loose coupling between components.
+
+    :param factory: The factory instance that will be used to register
+        the "SphericalMeasurementPointsArcsRandom" class.
+    :type factory: Any
+    :return: None
+    """
     factory.register("SphericalMeasurementPointsArcsRandom", SphericalMeasurementPointsArcsRandom)

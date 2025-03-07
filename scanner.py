@@ -1,15 +1,31 @@
 import configparser
-import time
 import math
 from loguru import logger
-from grbl_streamer import GrblStreamer  # type: ignore
 from ticlib import TicUSB  # type: ignore
 import numpy as np
-import factory
 from datatypes import CylindricalPosition, cyl_to_cart
+from grbl_controller import GrblControllerFactory, IGrblController
+from measurement_points import MeasurementPoints
+from rotator import RotatorControllerFactory, IRotator
 
 
 def has_intersect(plane_normal, ray_direction, epsilon=1e-6) -> bool:
+    """
+    Determines whether a ray intersects with a plane. The calculation is based on the dot
+    product of the plane's normal vector and the ray's direction vector. If the absolute
+    value of this dot product is less than a small threshold (epsilon), the ray is
+    considered parallel to the plane, and thus does not intersect.
+
+    :param plane_normal: A vector representing the normal of the plane.
+    :type plane_normal: numpy.ndarray
+    :param ray_direction: A vector representing the direction of the ray.
+    :type ray_direction: numpy.ndarray
+    :param epsilon: A very small value used as a threshold to determine if the dot
+        product is sufficiently close to zero to consider the ray parallel.
+    :type epsilon: float
+    :return: ``True`` if an intersection occurs; otherwise, ``False``.
+    :rtype: bool
+    """
     n_dot_u = plane_normal.dot(ray_direction)
     if abs(n_dot_u) < epsilon:
         return False
@@ -18,6 +34,18 @@ def has_intersect(plane_normal, ray_direction, epsilon=1e-6) -> bool:
 
 
 def line_plane_intersection(plane_normal, plane_point, ray_direction, ray_point) -> np.array:
+    """
+    Calculates the intersection point of a ray and a plane defined in 3D space. The function
+    performs the computation based on vector mathematics and returns the intersection
+    coordinate as a NumPy array. If the ray is parallel to the plane and does not intersect,
+    the results may be undefined.
+
+    :param plane_normal: The normal vector of the plane, defining its orientation.
+    :param plane_point: A point on the plane used to define its position in 3D space.
+    :param ray_direction: The direction vector of the ray, indicating its trajectory.
+    :param ray_point: A point on the ray representing its position.
+    :return: A NumPy array representing the coordinate of the intersection point.
+    """
     n_dot_u = plane_normal.dot(ray_direction)
 
     w = ray_point - plane_point
@@ -26,12 +54,37 @@ def line_plane_intersection(plane_normal, plane_point, ray_direction, ray_point)
     return psi
 
 def is_between(a, b, c):
+    """
+    Determines whether a given value `b` lies between two other values, `a` and
+    `c`. The function checks the order of `a` and `c`, allowing for cases where
+    `a` might be greater than `c` or where `a` is less than or equal to `c`.
+
+    :param a: The first boundary value in the comparison.
+    :type a: int or float
+    :param b: The value to check if it lies between `a` and `c`.
+    :type b: int or float
+    :param c: The second boundary value in the comparison.
+    :type c: int or float
+    :return: A boolean indicating if `b` lies between `a` and `c` inclusively.
+    :rtype: bool
+    """
     if a >= c:
         return a >= b >= c
 
     return a <= b <= c
 
 def is_vertical_move_safe(current_position, next_position, plane_point_z):
+    """
+    Determines if a vertical movement between two positions is safe given constraints related to
+    a predefined plane. The function checks whether the path between the two positions intersects
+    the plane, and if the potential intersection point lies within specific boundaries.
+
+    :param current_position: The starting position of the movement.
+    :param next_position: The intended end position of the movement.
+    :param plane_point_z: The z-coordinate of a fixed plane against which the movement's safety
+        is evaluated.
+    :return: A boolean value indicating whether the vertical move is safe (True) or unsafe (False).
+    """
     plane_normal = np.array([0, 0, 1])
     move_direction = np.array([0, 0, 1])
     plane_point = np.array([0, 0, plane_point_z])
@@ -52,6 +105,23 @@ def is_vertical_move_safe(current_position, next_position, plane_point_z):
 
 
 def is_radial_move_safe(current_position, next_position):
+    """
+    Check if a radial move is safe based on the current and next positions.
+
+    The function evaluates whether the move from the given current position
+    to the specified next position is within the acceptable radial and positional
+    boundaries. If the move is deemed unsafe, it logs the occurrence and triggers
+    a revert to an evasive maneuver.
+
+    :param current_position: The current position of the object with coordinates
+                             including a z-component.
+    :type current_position: Any
+    :param next_position: The next calculated radial position to evaluate.
+    :type next_position: float
+    :return: A boolean value indicating if the radial move is safe
+             (True if safe, False otherwise).
+    :rtype: bool
+    """
     radius = np.sqrt((195 / 2) ** 2 + (270 / 2) ** 2)
     if np.abs(current_position.z()) <= 375 / 2 and next_position < radius:
         logger.info('Unsafe radial move requested. Reverting to evasive move')
@@ -60,301 +130,96 @@ def is_radial_move_safe(current_position, next_position):
     return True
 
 
-class Grbl:
-    def on_grbl_event(self, event, *data):
-        logger.trace(event)
-        if event == "on_rx_buffer_percent":
-            self._ready = True
-        args = []
-        for d in data:
-            args.append(str(d))
-        logger.trace("MY CALLBACK: event={} data={}".format(event.ljust(30), ", ".join(args)))
+class PlanarMover:
+    """
+    Handles GRBL axis-related operations and commands for CNC machines.
 
-    def __init__(self, config_file):
-        config_parser = configparser.ConfigParser(inline_comment_prefixes="#")
-        config_parser.read(config_file)
-        section = 'grbl_streamer'
-        port = config_parser.get(section, 'port')
-        baudrate = config_parser.getint(section, 'baudrate')
+    This class provides an interface to send commands specific to axis control,
+    manage zero settings, perform arc movements (clockwise and counterclockwise),
+    and move to specified positions based on R and Z coordinates. It interacts
+    with a GRBL controller object for executing these commands effectively.
 
-        grbl_streamer = GrblStreamer(self.on_grbl_event)
-        grbl_streamer.setup_logging()
-        grbl_streamer.cnect(port, baudrate)
-        logger.info('Waiting for gbrl to initialize..')
-        time.sleep(3)
-        grbl_streamer.poll_start()
-        grbl_streamer.incremental_streaming = True
-        self._grbl_streamer = grbl_streamer
+    """
+    def __init__(self, grbl_controller: IGrblController, feed_rate: float):
+        self._feed_rate = feed_rate
+        self._grbl_controller = grbl_controller
 
-        self.send('$3=1')
+    def cw_arc_move_to(self, r: float, z: float, radius: float) -> None:
+        self._grbl_controller.send_and_wait(f'G02 X{z:.4f} Y{r:.4f} R{radius:.4f} F{self._feed_rate}')
 
-        self._set_axis_according_to_config(config_parser, 'x')
-        self._set_axis_according_to_config(config_parser, 'y')
+    def ccw_arc_move_to(self, r: float, z: float, radius: float) -> None:
+        self._grbl_controller.send_and_wait(f'G03 X{z:.4f} Y{r:.4f} R{radius:.4f} F{self._feed_rate}')
 
-        self._feed_rate = config_parser.getfloat('grbl_x_axis', 'maximum_rate')
+    def move_to_rz(self, r: float, z: float) -> None:
+        self._grbl_controller.send_and_wait(f'G0 X{z}Y{r}')
 
-        self.send('$1=255')  # servo's always on
-        self.send('$$')
-        self._ready = True
+    def move_to_vertical(self, z: float) -> None:
+        self._grbl_controller.send_and_wait(f'G0 X{z}')
+
+    def move_to_radial(self, r: float) -> None:
+        self._grbl_controller.send_and_wait(f'G0 Y{r}')
+
+    def set_as_zero(self) -> None:
+        self._grbl_controller.send('G92 X0 Y0')
+        self._grbl_controller.send('$10=0')
 
     def shutdown(self):
         logger.info('Disconnecting from GRBL')
-        self._grbl_streamer.disconnect()
-
-    def move_x_to(self, position: float) -> None:
-        self.send_and_wait(f'G0 X{position}')
-
-    def move_y_to(self, position: float) -> None:
-        self.send_and_wait(f'G0 Y{position}')
-
-    def move_z_to(self, position: float) -> None:
-        self.send_and_wait(f'G0 Z{position}')
-
-    def cw_arc_move_to(self, x: float, y: float, radius: float) -> None:
-        self.send_and_wait(f'G02 X{x:.4f} Y{y:.4f} R{radius:.4f} F{self._feed_rate}')
-
-    def ccw_arc_move_to(self, x: float, y: float, radius: float) -> None:
-        self.send_and_wait(f'G03 X{x:.4f} Y{y:.4f} R{radius:.4f} F{self._feed_rate}')
-
-    def move_to(self, x: float, y: float) -> None:
-        self.send_and_wait(f'G0 X{x}Y{y}')
-
-    def get_current_position(self):
-        self._grbl_streamer.write('?')
-
-    def send(self, message: str) -> None:
-        logger.trace(f'Sending message to grbl: {message}')
-        self._grbl_streamer.send_immediately(message)
-
-    def send_and_wait(self, message: str) -> None:
-        self._ready = False
-        self.send(message)
-        while not self._ready:
-            time.sleep(0.01)
-
-        self._ready = False
-        self.send('G04 P0')
-        while not self._ready:
-            time.sleep(0.01)
-
-    def _set_axis_according_to_config(self, config_parser, axis: str) -> None:
-        section = f'grbl_{axis}_axis'
-        steps_per_millimeter = config_parser.getfloat(section, 'steps_per_millimeter')
-        maximum_rate = config_parser.getfloat(section, 'maximum_rate')
-        acceleration = config_parser.getfloat(section, 'acceleration')
-
-        nr = 0  # silence the code analyzer
-        if axis == 'x':
-            nr = 0
-        elif axis == 'y':
-            nr = 1
-        else:
-            logger.critical('Unsupported axis in configuration file. Axis found is ' + axis)
-
-        self.send(f'${100 + nr}={steps_per_millimeter}')
-        self.send(f'${110 + nr}={maximum_rate}')
-        self.send(f'${120 + nr}={acceleration}')
-
-
-class GrblAxis:
-    def __init__(self, grbl: Grbl):
-        self._grbl = grbl
-
-    def send(self, message) -> None:
-        self._grbl.send(message)
-
-    def set_as_zero(self) -> None:
-        self._grbl.send('G92 X0 Y0')
-        self._grbl.send('$10=0')
-
-    def cw_arc_move_to(self, r: float, z: float, radius: float) -> None:
-        self._grbl.cw_arc_move_to(z, r, radius)
-
-    def ccw_arc_move_to(self, r: float, z: float, radius: float) -> None:
-        self._grbl.ccw_arc_move_to(z, r, radius)
-
-    def move_to_rz(self, r: float, z: float) -> None:
-        self._grbl.move_to(z, r)
-
-    def shutdown(self):
-        self._grbl.shutdown()
-
-
-class GrblXAxis(GrblAxis):
-    def __init__(self, grbl):
-        super().__init__(grbl)
-
-    def move_to(self, position: float) -> None:
-        self._grbl.move_x_to(position)
-
-
-class GrblYAxis(GrblAxis):
-    def __init__(self, grbl):
-        super().__init__(grbl)
-
-    def move_to(self, position: float) -> None:
-        self._grbl.move_y_to(position)
-
-
-class TicAxis:
-    def __init__(self, tic, steps_per_degree):
-        self._steps_per_degree = steps_per_degree
-        self._tic = tic
-
-    def move_to(self, position: float) -> None:
-        self._tic.energize()
-        self._tic.exit_safe_start()
-        nr_of_steps = round(self._steps_per_degree * position)
-        self._tic.set_target_position(nr_of_steps)
-        self._wait_until_move_ready(nr_of_steps)
-        self._tic.deenergize()
-
-    def _wait_until_move_ready(self, nr_of_steps: int) -> None:
-        while self._tic.get_current_position() != nr_of_steps:
-            time.sleep(0.1)
-
-    def set_as_zero(self) -> None:
-        self._tic.halt_and_set_position(0)
-
-    def get_position(self) -> float:
-        return self._tic.get_current_position() / self._steps_per_degree
-
-
-class TicAxisMock:
-    def __init__(self):
-        pass
-
-    def move_to(self, position: float) -> None:
-        logger.trace(f'{position}')
-
-    def _wait_until_move_ready(self, nr_of_steps: int) -> None:
-        logger.trace(f'{int}')
-
-    def set_as_zero(self) -> None:
-        pass
-
-    def get_position(self) -> float:
-        return 0.0
-
-
-class TicFactory:
-    @staticmethod
-    def create(config_file: str) -> TicAxisMock | TicAxis:
-        config_parser = configparser.ConfigParser(inline_comment_prefixes="#")
-        config_parser.read(config_file)
-
-        section = 'tic'
-
-        mock = config_parser.getboolean(section, 'mock')
-        if mock:
-            return TicAxisMock()
-
-        degree_per_step = config_parser.getfloat(section, 'degree_per_step')
-        large_gear_nr_of_teeth = config_parser.getint(section, 'large_gear_nr_of_teeth')
-        small_gear_nr_of_teeth = config_parser.getint(section, 'small_gear_nr_of_teeth')
-        stepper_step_size = config_parser.getint(section, 'stepper_step_size')
-        steps_per_degree = large_gear_nr_of_teeth / small_gear_nr_of_teeth * stepper_step_size / degree_per_step
-
-        tic = TicUSB()
-
-        return TicAxis(tic, steps_per_degree)
-
-
-class SphericalMeasurementMotionManager:
-    def __init__(self, angular_mover, plane_mover, measurement_points):
-        self._angular_mover = angular_mover
-        self._plane_mover = plane_mover
-        self._measurement_points = measurement_points
-        self._current_position = CylindricalPosition(320, 0.0, 0.0)
-
-    def move_to_safe_starting_position(self) -> None:
-        radius = self._measurement_points.get_radius()
-        logger.info(f'Performing a first move to a safe radius: {radius} mm')
-        self._plane_mover.move_to_rz(radius, 0.0)
-        self._current_position = CylindricalPosition(radius, 0.0, 0.0)
-
-    def next(self) -> CylindricalPosition:
-        position = self._measurement_points.next()
-        self._move_to_next_measurement_point(position)
-        return position
-
-    def ready(self) -> bool:
-        return self._measurement_points.ready()
-
-    def shutdown(self):
-        self._plane_mover.shutdown()
-
-    def _move_to_next_measurement_point(self, position: CylindricalPosition) -> None:
-        logger.info(f'Moving to {position} from {self._current_position}')
-
-        if self._current_position.t() != position.t():
-            logger.debug(f'Performing an angular move from {self._current_position.t()} degrees to {position.t()} degrees')
-            self._angular_mover.move_to(position.t())
-            self._current_position.set_t(position.t())
-        else:
-            logger.debug('No Angular move needed.')
-
-        if math.fabs(self._current_position.length() - position.length()) > 0.1:
-            ratio = position.length() / self._current_position.length()
-            x, y, z = cyl_to_cart(self._current_position)
-            x *= ratio
-            y *= ratio
-            z *= ratio
-            x_plane = math.sqrt(x ** 2 + y ** 2)
-            logger.debug(f'Performing a (spherical) radius move {self._current_position.length()} mm to {position.length()} mm')
-            self._plane_mover.move_to_rz(x_plane, z)
-            self._current_position.set_r(x_plane)
-            self._current_position.set_z(z)
-        else:
-            logger.debug('No (spherical) radial move needed.')
-
-        radius = position.length()
-        old_angle = np.around(math.atan2(self._current_position.z(), self._current_position.r()) / math.pi * 180.0, 2)
-        new_angle = np.around(math.atan2(position.z(), position.r()) / math.pi * 180.0, 2)
-        if new_angle > old_angle:
-            logger.debug(f'Move using an CW arc move from {old_angle:.2f} to {new_angle:.2f} degrees')
-            self._plane_mover.cw_arc_move_to(position.r(), position.z(), radius)
-        elif new_angle < old_angle:
-            logger.debug(f'Move using an CCW arc move from {old_angle:.2f} to {new_angle:.2f} degrees')
-            self._plane_mover.ccw_arc_move_to(position.r(), position.z(), radius)
-        else:
-            logger.debug('No arc move needed')
-
-        self._current_position = position
+        self._grbl_controller.shutdown()
 
 
 class Scanner:
-    """The Scanner class controls all the motions of the Near Field Scanner
-
-    It delegates the movement per axis to lower level controllers.
-
     """
-    def __init__(self, radial_mover, angular_mover, vertical_mover, measurement_motion_manager):
-        self._radial_mover = radial_mover
+    Provides functionality for controlling a scanner with radial, angular, and vertical
+    movement capabilities. Encapsulates motion control for cylindrical coordinate systems.
+
+    The Scanner class manages movement along radial, angular, and vertical axes while
+    maintaining the current position in cylindrical coordinates. It also provides utility
+    methods for adjustments, setting the position to zero, and shutting down the system
+    safely. This class ensures smooth control through abstraction over lower-level motion
+    controllers provided externally.
+
+    :ivar _planar_mover: Low-level controller for planar movement.
+    :type _planar_mover: Any
+    :ivar _angular_mover: Low-level controller for angular movement.
+    :type _angular_mover: Any
+    :ivar _cylindrical_position: The current position of the scanner in cylindrical
+        coordinates, represented internally.
+    :type _cylindrical_position: CylindricalPosition
+    """
+    def __init__(self, planar_mover: PlanarMover, angular_mover: IRotator):
+        self._planar_mover = planar_mover
         self._angular_mover = angular_mover
-        self._vertical_mover = vertical_mover
-        self._measurement_motion_manager = measurement_motion_manager
         self._cylindrical_position = CylindricalPosition(0, 0, 0)
 
-    def radial_move_to(self, position: float) -> None:
-        logger.trace(f'Radial move to {position}')
-        if self.get_position().r() != position:
-            self._radial_mover.move_to(position)
-        self._cylindrical_position.set_r(position)
+    def radial_move_to(self, r: float) -> None:
+        logger.trace(f'Radial move to {r}')
+        if self.get_position().r() != r:
+            self._planar_mover.move_to_radial(r)
+        self._cylindrical_position.set_r(r)
 
-    def angular_move_to(self, position: float) -> None:
-        logger.trace(f'Angular move to {position}')
-        if self.get_position().t() != position:
-            self._angular_mover.move_to(position)
-        self._cylindrical_position.set_t(position)
+    def planar_move_to(self, r: float, z: float):
+        self._planar_mover.move_to_rz(r, z)
 
-    def vertical_move_to(self, position: float) -> None:
-        logger.trace(f'Vertical move to {position}')
+    def cw_arc_move_to(self, r: float, z: float, radius: float) -> None:
+        self._planar_mover.cw_arc_move_to(r, z, radius)
 
-        if self.get_position().z() != position:
-            self._vertical_mover.move_to(position)
+    def ccw_arc_move_to(self, r: float, z: float, radius: float) -> None:
+        self._planar_mover.ccw_arc_move_to(r, z, radius)
 
-        self._cylindrical_position.set_z(position)
+    def angular_move_to(self, angle: float) -> None:
+        logger.trace(f'Angular move to {angle}')
+        if self.get_position().t() != angle:
+            self._angular_mover.move_to(angle)
+        self._cylindrical_position.set_t(angle)
+
+    def vertical_move_to(self, z: float) -> None:
+        logger.trace(f'Vertical move to {z}')
+
+        if self.get_position().z() != z:
+            self._planar_mover.move_to_vertical(z)
+
+        self._cylindrical_position.set_z(z)
 
     def rotate_counterclockwise(self, amount: float) -> None:
         self.angular_move_to(self._cylindrical_position.t() + amount)
@@ -374,46 +239,127 @@ class Scanner:
     def move_down(self, amount: float) -> None:
         self.move_up(-amount)
 
-    def get_position(self) -> CylindricalPosition:  # TODO get the position from the lower level controllers
+    def get_position(self) -> CylindricalPosition:
         return self._cylindrical_position
 
     def set_as_zero(self) -> None:
-        self._radial_mover.set_as_zero()
+        self._planar_mover.set_as_zero()
         self._angular_mover.set_as_zero()
-        self._vertical_mover.set_as_zero()
         self._cylindrical_position.set_r(0)
         self._cylindrical_position.set_t(0)
         self._cylindrical_position.set_z(0)
 
     def shutdown(self) -> None:
-        self._measurement_motion_manager.shutdown()
+        self._planar_mover.shutdown()
+        self._angular_mover.shutdown()
 
-    @property
-    def angular_mover(self):
-        return self._angular_mover
 
-    @property
-    def radial_mover(self):
-        return self._radial_mover
+class SphericalMeasurementMotionManager:
+    """
+    Manages motion for taking spherical measurements.
+
+    This class provides functionality to move a device to specified measurement
+    points in a spherical coordinate system. It ensures safe starting positions and
+    handles angular, radial, and arc movements as necessary.
+
+    :ivar _measurement_points: Object holding details about the sequence of
+        measurement points. Provides information for current and next points.
+    :type _measurement_points: MeasurementPoints
+    :ivar _current_position: Tracks the current position of the device in cylindrical
+        coordinates, updated during movement.
+    :type _current_position: CylindricalPosition
+    """
+    def __init__(self, scanner: Scanner, measurement_points: MeasurementPoints):
+        self._scanner = scanner
+        self._measurement_points = measurement_points
+        self._current_position = CylindricalPosition(320, 0.0, 0.0)
+
+    def move_to_safe_starting_position(self) -> None:
+        radius = self._measurement_points.get_radius()
+        logger.info(f'Performing a first move to a safe radius: {radius} mm')
+        self._scanner.planar_move_to(radius, 0.0)
+        self._current_position = CylindricalPosition(radius, 0.0, 0.0)
+
+    def next(self) -> CylindricalPosition:
+        position = self._measurement_points.next()
+        self._move_to_next_measurement_point(position)
+        return position
+
+    def ready(self) -> bool:
+        return self._measurement_points.ready()
+
+    def shutdown(self):
+        self._scanner.shutdown()
+
+    def _move_to_next_measurement_point(self, position: CylindricalPosition) -> None:
+
+        logger.info(f'Moving to {position} from {self._current_position}')
+
+        if self._current_position.t() != position.t():
+            logger.debug(f'Performing an angular move from {self._current_position.t()} degrees to {position.t()} degrees')
+            self._scanner.angular_move_to(position.t())
+            self._current_position.set_t(position.t())
+        else:
+            logger.debug('No Angular move needed.')
+
+        if math.fabs(self._current_position.length() - position.length()) > 0.1:
+            ratio = position.length() / self._current_position.length()
+            x, y, z = cyl_to_cart(self._current_position)
+            x *= ratio
+            y *= ratio
+            z *= ratio
+            x_plane = math.sqrt(x ** 2 + y ** 2)
+            logger.debug(f'Performing a (spherical) radius move {self._current_position.length()} mm to {position.length()} mm')
+            self._scanner.planar_move_to(x_plane, z)
+            self._current_position.set_r(x_plane)
+            self._current_position.set_z(z)
+        else:
+            logger.debug('No (spherical) radial move needed.')
+
+        radius = position.length()
+        old_angle = np.around(math.atan2(self._current_position.z(), self._current_position.r()) / math.pi * 180.0, 2)
+        new_angle = np.around(math.atan2(position.z(), position.r()) / math.pi * 180.0, 2)
+        if new_angle > old_angle:
+            logger.debug(f'Move using an CW arc move from {old_angle:.2f} to {new_angle:.2f} degrees')
+            self._scanner.cw_arc_move_to(position.r(), position.z(), radius)
+        elif new_angle < old_angle:
+            logger.debug(f'Move using an CCW arc move from {old_angle:.2f} to {new_angle:.2f} degrees')
+            self._scanner.ccw_arc_move_to(position.r(), position.z(), radius)
+        else:
+            logger.debug('No arc move needed')
+
+        self._current_position = position
 
 
 class ScannerFactory:
+    """
+    Factory class for creating Scanner objects.
+
+    This class provides a static method to create and configure a Scanner instance
+    using a configuration file. The method initializes all necessary components
+    required to construct the Scanner, such as motion controllers, measurement
+    points, and a measurement motion manager.
+
+    Static Methods:
+        create: Creates a Scanner instance with the specified configuration.
+
+    """
     @staticmethod
     def create(config_file: str) -> Scanner:
-        grbl = Grbl('config.ini')  # (grbl_streamer)
-        radial_mover = GrblYAxis(grbl)
-        angular_mover = TicFactory().create(config_file)
-        vertical_mover = GrblXAxis(grbl)
 
         config_parser = configparser.ConfigParser(inline_comment_prefixes="#")
         config_parser.read(config_file)
-        item = dict(config_parser.items('measurement_points'))
-        measurement_points = factory.create(item)
+        section = 'grbl'
+        feed_rate = config_parser.getfloat(section, 'feed_rate')
+        controller_section = config_parser.get(section, 'controller_section')
 
-        plane_mover = GrblAxis(grbl)
+        grbl_controller = GrblControllerFactory.create(controller_section, config_file)
 
-        measurement_motion_manager = SphericalMeasurementMotionManager(angular_mover, plane_mover, measurement_points)
+        rotation_controller = config_parser.get('scanner', 'rotation_controller')
+        angular_mover = RotatorControllerFactory.create(rotation_controller, config_file)
 
-        scanner = Scanner(radial_mover, angular_mover, vertical_mover, measurement_motion_manager)
+        planar_mover = PlanarMover(grbl_controller, feed_rate)
+
+        scanner = Scanner(planar_mover, angular_mover)
 
         return scanner

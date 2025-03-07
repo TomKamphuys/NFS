@@ -7,6 +7,21 @@ import loader
 
 
 class NearFieldScanner:
+    """
+    Represents a near-field scanner for audio and measurement management.
+
+    This class facilitates the process of measuring impulse responses using the
+    provided scanner, audio system, and motion manager. It supports taking single
+    or multiple measurements and managing the scanner's lifecycle.
+
+    :ivar _scanner: The scanner instance used for positioning and scanning.
+    :type _scanner: Any
+    :ivar _audio: The audio system used for measuring impulse responses.
+    :type _audio: Any
+    :ivar _measurement_motion_manager: The motion manager handling measurement
+        positions.
+    :type _measurement_motion_manager: Any
+    """
     def __init__(self, scanner, audio, measurement_motion_manager):
         self._scanner = scanner
         self._audio = audio
@@ -14,10 +29,10 @@ class NearFieldScanner:
 
     def take_single_measurement(self) -> None:
         """
-        This function takes a single measurement. This is handy for checking
-        the audio levels.
-        :return: nothing
-        """
+            This function takes a single measurement. This is handy for checking
+            the audio levels.
+            :return: nothing
+            """
         self._audio.measure_ir(self._scanner.get_position())
 
     def take_measurement_set(self) -> None:
@@ -47,6 +62,18 @@ class NearFieldScanner:
 
 
 class NearFieldScannerFactory:
+    """
+    Factory class for creating instances of NearFieldScanner.
+
+    This factory utilizes configuration provided in a configuration file to
+    load plugins, construct and initialize the scanner, audio components, and
+    measurement points. The constructed NearFieldScanner instance is
+    returned, allowing the user to perform near-field scanning operations.
+
+    The factory ensures that all necessary dependencies are loaded and
+    initialized correctly, providing seamless integration between the scanner,
+    audio, and measurement modules.
+    """
     @staticmethod
     def create(config_file: str) -> NearFieldScanner:
         """
@@ -65,9 +92,6 @@ class NearFieldScannerFactory:
         item = dict(config_parser.items('measurement_points'))
         measurement_points = factory.create(item)
 
-        angular_mover = scanner.angular_mover
-        plane_mover = scanner.radial_mover
-
-        measurement_manager = SphericalMeasurementMotionManager(angular_mover, plane_mover, measurement_points)
+        measurement_manager = SphericalMeasurementMotionManager(scanner, measurement_points)
 
         return NearFieldScanner(scanner, audio, measurement_manager)

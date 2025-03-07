@@ -3,6 +3,60 @@ import numpy as np
 
 
 class SphericalMeasurementPointsSorted:
+    """
+    Represents a spherical measurement point system, where coordinates are
+    calculated and organized to accommodate the measurement of sound
+    distribution from a speaker. Ensures that measurement points do not
+    intrude into the physical volume of the speaker and organizes these
+    points in cylindrical coordinates for iteration.
+
+    The class calculates spherical measurement points, validates their
+    position relative to a defined speaker's dimensions, and provides an
+    interface for iterating through these points in a structured manner.
+
+
+    :ivar _ready: True if all points have been iterated, False otherwise.
+    :type _ready: bool
+    :ivar _evasive_move_needed: True if a measurement point adjustment has
+        been flagged as needed, False otherwise.
+    :type _evasive_move_needed: bool
+    :ivar _radius: The radius of the sphere where measurement points will
+        be generated.
+    :type _radius: float
+    :ivar _wall_spacing: The spacing between the measurement sphere and
+        inner boundary.
+    :type _wall_spacing: float
+    :ivar _nr_of_points: The number of measurement points to calculate on
+        the sphere.
+    :type _nr_of_points: int
+    :ivar _speaker_height: The height of the speaker.
+    :type _speaker_height: float
+    :ivar _speaker_width: The width of the speaker.
+    :type _speaker_width: float
+    :ivar _speaker_depth: The depth of the speaker.
+    :type _speaker_depth: float
+    :ivar _thetas: Array containing theta coordinate values for measurement
+        points.
+    :type _thetas: numpy.ndarray
+    :ivar _phis: Array containing phi coordinate values for measurement
+        points.
+    :type _phis: numpy.ndarray
+    :ivar _r_cyl: Array containing radial distances in cylindrical
+        coordinates.
+    :type _r_cyl: numpy.ndarray
+    :ivar _theta_cyl: Array containing angular positions in degrees for
+        cylindrical coordinates.
+    :type _theta_cyl: numpy.ndarray
+    :ivar _z_cyl: Array containing z-coordinate values for cylindrical
+        coordinates.
+    :type _z_cyl: numpy.ndarray
+    :ivar _actual_nr_of_points: The total number of valid measurement
+        points after validation.
+    :type _actual_nr_of_points: int
+    :ivar _current_index: The current index of the measurement point in
+        iteration.
+    :type _current_index: int
+    """
     def __init__(self,
                  nr_of_points,
                  wall_spacing,
@@ -101,4 +155,19 @@ class SphericalMeasurementPointsSorted:
 
 
 def register(factory) -> None:
+    """
+    Registers a specific factory type with an associated class.
+
+    This function binds the provided factory to the
+    "SphericalMeasurementPointsSorted" configuration by associating it
+    with the `SphericalMeasurementPointsSorted` class. This enables the
+    factory to instantiate or work with the specified class through the
+    established registration.
+
+    :param factory: The factory object that requires registration of the
+        "SphericalMeasurementPointsSorted" class.
+    :type factory: Any
+    :return: This function does not return any value.
+    :rtype: None
+    """
     factory.register("SphericalMeasurementPointsSorted", SphericalMeasurementPointsSorted)

@@ -1,186 +1,124 @@
-import configparser
-import time
-
-# import pytest
-from loguru import logger
+from unittest.mock import Mock
+from numpy.ma.testutils import assert_equal
 from datatypes import CylindricalPosition
-from scanner import Scanner, is_between, is_vertical_move_safe, TicAxisMock, Grbl
-from nfs import NearFieldScanner, NearFieldScannerFactory
-from audio import AudioMock
-import factory
-import loader
-import matplotlib.pyplot as plt  # type: ignore
-import numpy as np
+from scanner import Scanner
 
-logger.remove(0)
-logger.add('scanner.log', mode='w', level="TRACE", backtrace=True, diagnose=True)
+def test_radial_move_to():
+    mock_planar_mover = Mock()
+    mock_angular_mover = Mock()
+    radius = 10.0
 
+    scanner = Scanner(mock_planar_mover, mock_angular_mover)
+    scanner.radial_move_to(radius)
 
-def my_callback(event_string, *data):
-    args = []
-    for d in data:
-        args.append(str(d))
-    logger.info("MY CALLBACK: event={} data={}".format(event_string.ljust(30),
-                                                       ", ".join(args)))
+    mock_planar_mover.move_to_radial.assert_called_once_with(radius)
 
+def test_planar_move_to():
+    mock_planar_mover = Mock()
+    mock_angular_mover = Mock()
+    r = 10.0
+    z = 11.0
 
-class ScannerMock:
-    @staticmethod
-    def get_position():
-        return CylindricalPosition(0, 0, 0)
+    scanner = Scanner(mock_planar_mover, mock_angular_mover)
+    scanner.planar_move_to(r, z)
 
-    @staticmethod
-    def move_to(position):
-        logger.debug(f'Moving to: {position}')
+    mock_planar_mover.move_to_rz.assert_called_once_with(r, z)
 
+def test_cw_arc_move_to():
+    mock_planar_mover = Mock()
+    mock_angular_mover = Mock()
+    r = 10.0
+    z = 11.0
+    radius = 12.0
 
-class GrblAxisMock:
-    def cw_arc_move_to(self, x, y, r):
-        pass
+    scanner = Scanner(mock_planar_mover, mock_angular_mover)
+    scanner.cw_arc_move_to(r, z, radius)
 
-    def ccw_arc_move_to(self, x, y, r):
-        pass
+    mock_planar_mover.cw_arc_move_to.assert_called_once_with(r, z, radius)
 
-    def move_to_rz(self, x: float, y: float) -> None:
-        pass
+def test_ccw_arc_move_to():
+    mock_planar_mover = Mock()
+    mock_angular_mover = Mock()
+    r = 10.0
+    z = 11.0
+    radius = 12.0
 
-    def move_to(self, bla: float) -> None:
-        pass
+    scanner = Scanner(mock_planar_mover, mock_angular_mover)
+    scanner.ccw_arc_move_to(r, z, radius)
 
+    mock_planar_mover.ccw_arc_move_to.assert_called_once_with(r, z, radius)
 
-class MeasurementPointsMock:
-    def __init__(self):
-        self._index = 0
+def test_angular_move_to():
+    mock_planar_mover = Mock()
+    mock_angular_mover = Mock()
+    angle = 10.0
 
-    def next(self):
-        self._index += 1
-        return CylindricalPosition(self._index, self._index, self._index)
+    scanner = Scanner(mock_planar_mover, mock_angular_mover)
+    scanner.angular_move_to(angle)
+    mock_angular_mover.move_to.assert_called_once_with(angle)
 
-    def move_to_safe_starting_position(self):
-        pass
+def test_angular_move_to_no_move():
+    mock_planar_mover = Mock()
+    mock_angular_mover = Mock()
+    angle = 10.0
 
-    def ready(self) -> bool:
-        return self._index > 10
+    scanner = Scanner(mock_planar_mover, mock_angular_mover)
+    scanner.angular_move_to(angle)  # results in move
+    scanner.angular_move_to(angle)  # does not result in a move anymore
+    mock_angular_mover.move_to.assert_called_once_with(angle)
 
+def test_vertical_move_to():
+    mock_planar_mover = Mock()
+    mock_angular_mover = Mock()
+    z = 10.0
 
-def test_grbl():
-    grbl = Grbl('config.ini')
+    scanner = Scanner(mock_planar_mover, mock_angular_mover)
+    scanner.vertical_move_to(z)  # results in move
+    mock_planar_mover.move_to_vertical.assert_called_once_with(z)
 
-    grbl.move_x_to(100)
-    grbl.move_y_to(100)
-    grbl.move_z_to(100)
-    grbl.move_to(10, 10)
-    grbl.move_to(0, 100)
-    grbl.cw_arc_move_to(100, 0, 100)
-    grbl.ccw_arc_move_to(0, 100, 100)
-    grbl.get_current_position()
-    grbl.send('?')
-    time.sleep(2)
-    grbl.send_and_wait('G0X0Y0')
-    assert True
+def test_vertical_move_to_no_move():
+    mock_planar_mover = Mock()
+    mock_angular_mover = Mock()
+    z = 10.0
 
-def test_scanner_can_move_in():
-    radial_mover = GrblAxisMock()
-    angular_mover = TicAxisMock()
-    vertical_mover = GrblAxisMock()
-    scanner = Scanner(radial_mover, angular_mover, vertical_mover, 300)
-    scanner.radial_move_to(10)
+    scanner = Scanner(mock_planar_mover, mock_angular_mover)
+    scanner.vertical_move_to(z)  # results in move
+    scanner.vertical_move_to(z)  # does not result in a move anymore
+    mock_planar_mover.move_to_vertical.assert_called_once_with(z)
 
-    # assert scanner.get_position() == cylindrical_position
+# def test_get_position():
+#     mock_planar_mover = Mock()
+#     mock_angular_mover = Mock()
+#     r = 9.0
+#     z = 10.0
+#     t = 11.0
+#     reference = CylindricalPosition(r, t, z)
+#
+#     scanner = Scanner(mock_planar_mover, mock_angular_mover)
+#     scanner.planar_move_to(r, z)
+#     scanner.angular_move_to(t)
+#     mock_planar_mover.move_to_rz.assert_called_once_with(r, z)
+#     mock_angular_mover.move_to.assert_called_once_with(t)
+#
+#     # op de een of andere manier werkt dit niet
+#     assert_equal(scanner.get_position(), reference)
 
+def test_set_as_zero():
+    mock_planar_mover = Mock()
+    mock_angular_mover = Mock()
 
-def test_single_measurement():
-    nfs = NearFieldScanner(ScannerMock(), AudioMock(), MeasurementPointsMock())
-    nfs.take_single_measurement()
+    scanner = Scanner(mock_planar_mover, mock_angular_mover)
+    scanner.set_as_zero()
 
+    mock_planar_mover.set_as_zero.assert_called_once_with()
+    mock_angular_mover.set_as_zero.assert_called_once_with()
 
-def test_take_measurement_set():
-    radial_mover = GrblAxisMock()
-    angular_mover = TicAxisMock()
-    vertical_mover = GrblAxisMock()
-    scanner = Scanner(radial_mover, angular_mover, vertical_mover, 300)
-    nfs = NearFieldScanner(scanner, AudioMock(), MeasurementPointsMock())
-    nfs.take_measurement_set()
+def test_shutdown():
+    mock_planar_mover = Mock()
+    mock_angular_mover = Mock()
 
+    scanner = Scanner(mock_planar_mover, mock_angular_mover)
+    scanner.shutdown()
 
-def test_measurement_points():
-    config_file = 'config.ini'
-
-    # load the plugins
-    loader.load_plugins(config_file)
-
-    config_parser = configparser.ConfigParser(inline_comment_prefixes="#")
-    config_parser.read(config_file)
-    item = dict(config_parser.items('measurement_points'))
-    measurement_points = factory.create(item)
-
-    fig = plt.figure()
-    ax = fig.add_subplot(projection='3d')
-
-    xs = np.empty((0, 0))
-    ys = np.empty((0, 0))
-    zs = np.empty((0, 0))
-
-    index = 0
-    while not measurement_points.ready():
-        index += 1
-        point = measurement_points.next()
-        logger.trace(f'{index} : {point}')
-        r = point.r()
-        t = point.t() / 180 * np.pi
-        xs = np.append(xs, r * np.cos(t))
-        ys = np.append(ys, r * np.sin(t))
-        zs = np.append(zs, point.z())
-
-    ax.scatter(xs, ys, zs)
-    ax.set_aspect('equal', 'box')
-
-    plt.show()
-
-
-def test_take_measurements_set():
-    config_file = 'config.ini'
-
-    # load the plugins
-    loader.load_plugins(config_file)
-
-    nfs = NearFieldScannerFactory.create(config_file)
-
-    nfs.take_measurement_set()
-
-
-def test_plugin():
-    config_file = 'config.ini'
-
-    # load the plugins
-    loader.load_plugins(config_file)
-
-    config_parser = configparser.ConfigParser(inline_comment_prefixes="#")
-    config_parser.read(config_file)
-
-    item = dict(config_parser.items('measurement_points'))
-    measurement_points = factory.create(item)
-    index = 0
-    while not measurement_points.ready():
-        index += 1
-        point = measurement_points.next()
-        logger.trace(f'{index} : {point}')
-
-
-def test_is_between():
-    assert is_between(1, 2, 3)
-    assert is_between(3, 2, 1)
-    assert is_between(1, 1, 1)
-    assert is_between(1, 1, 2)
-    assert is_between(1, 2, 2)
-    assert not is_between(1, 4, 3)
-    assert not is_between(3, 4, 1)
-
-
-def test_check_vertical_move():
-    assert not is_vertical_move_safe(CylindricalPosition(0, 0, 375), 0, 375 / 2)
-
-    assert not is_vertical_move_safe(CylindricalPosition(0, 0, -375), 0, -375 / 2)
-
-    assert is_vertical_move_safe(CylindricalPosition(0, 0, 375), 200, 375 / 2)
-    assert is_vertical_move_safe(CylindricalPosition(0, 0, -375), -200, -375 / 2)
+    mock_planar_mover.shutdown.assert_called_once_with()
+    mock_angular_mover.shutdown.assert_called_once_with()

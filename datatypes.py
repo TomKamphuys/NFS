@@ -3,7 +3,20 @@ import numpy as np
 
 class CylindricalPosition:
     """
-    Class for a position in a cylindrical coordinate system.
+    Represents a position in 3D space defined by cylindrical coordinates.
+
+    This class provides attributes and methods to manage and operate on a
+    coordinate position specified in a cylindrical coordinate system (r, t, z),
+    where `r` is the radial distance, `t` is the azimuthal angle, and `z` is the
+    height. It includes functionality to compare positions, calculate the length
+    from the origin, and access or modify individual coordinate components.
+
+    :ivar _r: The radial distance from the z-axis.
+    :type _r: float
+    :ivar _t: The azimuthal angle relative to the x-axis, in radians.
+    :type _t: float
+    :ivar _z: The height component along the z-axis.
+    :type _z: float
     """
     def __init__(self, r, t, z):
         self._r = r
@@ -51,9 +64,18 @@ class CylindricalPosition:
 
 def cyl_to_cart(cylindrical_position: CylindricalPosition):
     """
-    Coordinate transformation from cylindrical coordinates to cartesian coordinates
-    :param cylindrical_position:
-    :return: the position in cartesian coordinates
+    Converts a cylindrical coordinate position to Cartesian coordinates.
+
+    This function takes a `CylindricalPosition` object, extracts the values for
+    radius, angle, and height (z-coordinate), converts the angle from degrees
+    to radians, and computes the corresponding Cartesian coordinates (x, y, z).
+
+    :param cylindrical_position: A `CylindricalPosition` object containing the
+        cylindrical coordinates with attributes `r` (radius), `t` (angle in
+        degrees), and `z` (height).
+    :type cylindrical_position: CylindricalPosition
+    :return: A tuple containing the Cartesian coordinates as (x, y, z).
+    :rtype: tuple[float, float, float]
     """
     r = cylindrical_position.r()
     t = cylindrical_position.t() / 180 * np.pi
