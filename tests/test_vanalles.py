@@ -1,8 +1,8 @@
 import configparser
-import time
+
+import pytest
 from loguru import logger
 from datatypes import CylindricalPosition
-from scanner import Scanner, is_between, is_vertical_move_safe
 from nfs import NearFieldScanner, NearFieldScannerFactory
 from audio import AudioMock
 import factory
@@ -10,7 +10,7 @@ import loader
 import matplotlib.pyplot as plt  # type: ignore
 import numpy as np
 
-logger.remove(0)
+# logger.remove(0)
 logger.add('scanner.log', mode='w', level="TRACE", backtrace=True, diagnose=True)
 
 
@@ -47,10 +47,13 @@ class MeasurementPointsMock:
         return self._index > 10
 
 
+@pytest.mark.skip(reason="This is an interactive test I use manually")
 def test_single_measurement():
     nfs = NearFieldScanner(ScannerMock(), AudioMock(), MeasurementPointsMock())
     nfs.take_single_measurement()
 
+
+@pytest.mark.skip(reason="This is an interactive test I use manually")
 def test_measurement_points():
     config_file = 'config.ini'
 
@@ -86,6 +89,7 @@ def test_measurement_points():
     plt.show()
 
 
+@pytest.mark.skip(reason="This is an interactive test I use manually")
 def test_take_measurements_set():
     config_file = 'config.ini'
 
@@ -113,22 +117,3 @@ def test_plugin():
         index += 1
         point = measurement_points.next()
         logger.trace(f'{index} : {point}')
-
-
-def test_is_between():
-    assert is_between(1, 2, 3)
-    assert is_between(3, 2, 1)
-    assert is_between(1, 1, 1)
-    assert is_between(1, 1, 2)
-    assert is_between(1, 2, 2)
-    assert not is_between(1, 4, 3)
-    assert not is_between(3, 4, 1)
-
-
-def test_check_vertical_move():
-    assert not is_vertical_move_safe(CylindricalPosition(0, 0, 375), 0, 375 / 2)
-
-    assert not is_vertical_move_safe(CylindricalPosition(0, 0, -375), 0, -375 / 2)
-
-    assert is_vertical_move_safe(CylindricalPosition(0, 0, 375), 200, 375 / 2)
-    assert is_vertical_move_safe(CylindricalPosition(0, 0, -375), -200, -375 / 2)

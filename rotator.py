@@ -2,9 +2,9 @@ import configparser
 import time
 from abc import abstractmethod, ABC
 from loguru import logger
-from ticlib import TicUSB
+from ticlib import TicUSB  # type: ignore
 from websocket import create_connection
-from grbl_controller import IGrblController, ESP32Duino
+from grbl_controller import IGrblController, ESP32Duino, GrblControllerFactory
 
 
 class IRotator(ABC):
@@ -26,23 +26,20 @@ class GrblRotator(IRotator):
 
     def __init__(self, grbl_controller: IGrblController, steps_per_degree: float):
         self._steps_per_degree = steps_per_degree
-        self._current_angle = 0.0
         self._grbl_controller = grbl_controller
         logger.trace('init')
 
-    def move_to(self, position: float) -> None:
-        logger.trace('moveto')
+    def move_to(self, angle: float) -> None:
+        logger.trace(f'move to {angle} degrees')
 
-        self._current_angle = position
-        nr_of_steps = round(self._steps_per_degree * position)
-        self._grbl_controller.send_and_wait(f'G0 X{nr_of_steps}')
+        nr_of_steps = round(self._steps_per_degree * angle)
+        self._grbl_controller.send_and_wait_for_move_ready(f'G0 X{nr_of_steps}')
 
     def set_as_zero(self) -> None:
-        logger.trace('setaszero')
+        logger.trace('set_as_zero')
 
         self._grbl_controller.send('G92 X0 Y0')
         self._grbl_controller.send('$10=0')
-        self._current_angle = 0.0
 
     def shutdown(self) -> None:
         self._grbl_controller.shutdown()
@@ -108,10 +105,6 @@ class TicFactory:
 
         section = 'tic'
 
-        mock = config_parser.getboolean(section, 'mock')
-        if mock:
-            return RotatorMock()
-
         degree_per_step = config_parser.getfloat(section, 'degree_per_step')
         large_gear_nr_of_teeth = config_parser.getint(section, 'large_gear_nr_of_teeth')
         small_gear_nr_of_teeth = config_parser.getint(section, 'small_gear_nr_of_teeth')
@@ -123,7 +116,7 @@ class TicFactory:
         return TicRotator(tic, steps_per_degree)
 
 
-class RotatorControllerFactory:
+class RotatorFactory:
     @staticmethod
     def create(section: str, config_file: str) -> IRotator:
         config_parser = configparser.ConfigParser(inline_comment_prefixes="#")
@@ -134,13 +127,14 @@ class RotatorControllerFactory:
         if type_to_build == 'TIC':
             return TicFactory.create(config_file)
         elif type_to_build == 'ESP32DuinoRotation':
-            web_socket = config_parser.get(section, 'web_socket')
-            connection = create_connection(web_socket)
             degree_per_step = config_parser.getfloat(section, 'degree_per_step')
             large_gear_nr_of_teeth = config_parser.getint(section, 'large_gear_nr_of_teeth')
             small_gear_nr_of_teeth = config_parser.getint(section, 'small_gear_nr_of_teeth')
             stepper_step_size = config_parser.getint(section, 'stepper_step_size')
             steps_per_degree = large_gear_nr_of_teeth / small_gear_nr_of_teeth * stepper_step_size / degree_per_step
-            return GrblRotator(ESP32Duino(connection), steps_per_degree)
+            grbl_config_section = config_parser.get(section, 'rotation_mover_controller')
+            return GrblRotator(GrblControllerFactory.create(grbl_config_section, config_file), steps_per_degree)
+        elif type_to_build == 'Mock':
+            return RotatorMock()
         else:
             raise Exception(f'Unknown controller type: {type}')

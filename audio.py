@@ -1,6 +1,8 @@
 import os
 import math
 import configparser
+import time
+
 import pyfar as pf  # type: ignore
 import numpy as np
 import sounddevice as sd  # type: ignore

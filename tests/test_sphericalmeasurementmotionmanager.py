@@ -21,12 +21,13 @@ def test_next():
     mock_scanner = Mock()
     mock_measurement_points = Mock()
 
-    sphericalmeasurementmotionmanager = SphericalMeasurementMotionManager(mock_scanner, mock_measurement_points)
+    motion_manager = SphericalMeasurementMotionManager(mock_scanner, mock_measurement_points)
 
     position_reference = CylindricalPosition(1.0, 2.0, 3.0)
     mock_measurement_points.next.return_value = position_reference
+    mock_scanner.get_position.return_value = position_reference
 
-    position = sphericalmeasurementmotionmanager.next()
+    position = motion_manager.next()
 
     assert position == position_reference
 
@@ -34,10 +35,10 @@ def test_ready():
     mock_scanner = Mock()
     mock_measurement_points = Mock()
 
-    sphericalmeasurementmotionmanager = SphericalMeasurementMotionManager(mock_scanner, mock_measurement_points)
+    motion_manager = SphericalMeasurementMotionManager(mock_scanner, mock_measurement_points)
 
     mock_measurement_points.ready.return_value = True
 
-    result = sphericalmeasurementmotionmanager.ready()
+    result = motion_manager.ready()
 
     assert result == True

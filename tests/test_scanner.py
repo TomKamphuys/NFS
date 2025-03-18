@@ -1,4 +1,4 @@
-from unittest.mock import Mock
+from unittest.mock import Mock, call
 from numpy.ma.testutils import assert_equal
 from datatypes import CylindricalPosition
 from scanner import Scanner
@@ -86,22 +86,21 @@ def test_vertical_move_to_no_move():
     scanner.vertical_move_to(z)  # does not result in a move anymore
     mock_planar_mover.move_to_vertical.assert_called_once_with(z)
 
-# def test_get_position():
-#     mock_planar_mover = Mock()
-#     mock_angular_mover = Mock()
-#     r = 9.0
-#     z = 10.0
-#     t = 11.0
-#     reference = CylindricalPosition(r, t, z)
-#
-#     scanner = Scanner(mock_planar_mover, mock_angular_mover)
-#     scanner.planar_move_to(r, z)
-#     scanner.angular_move_to(t)
-#     mock_planar_mover.move_to_rz.assert_called_once_with(r, z)
-#     mock_angular_mover.move_to.assert_called_once_with(t)
-#
-#     # op de een of andere manier werkt dit niet
-#     assert_equal(scanner.get_position(), reference)
+def test_get_position():
+    mock_planar_mover = Mock()
+    mock_angular_mover = Mock()
+    r = 9.0
+    z = 10.0
+    t = 11.0
+    reference = CylindricalPosition(r, t, z)
+
+    scanner = Scanner(mock_planar_mover, mock_angular_mover)
+    scanner.planar_move_to(r, z)
+    scanner.angular_move_to(t)
+    mock_planar_mover.move_to_rz.assert_called_once_with(r, z)
+    mock_angular_mover.move_to.assert_called_once_with(t)
+
+    assert_equal(scanner.get_position(), reference)
 
 def test_set_as_zero():
     mock_planar_mover = Mock()
@@ -110,8 +109,9 @@ def test_set_as_zero():
     scanner = Scanner(mock_planar_mover, mock_angular_mover)
     scanner.set_as_zero()
 
-    mock_planar_mover.set_as_zero.assert_called_once_with()
-    mock_angular_mover.set_as_zero.assert_called_once_with()
+    calls = [call(), call()]  # both in init and on line above this one
+    mock_planar_mover.set_as_zero.assert_has_calls(calls)
+    mock_angular_mover.set_as_zero.assert_has_calls(calls)
 
 def test_shutdown():
     mock_planar_mover = Mock()

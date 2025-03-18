@@ -1,7 +1,7 @@
 import configparser
-from scanner import ScannerFactory
+from scanner import ScannerFactory, Scanner
 from scanner import SphericalMeasurementMotionManager
-from audio import AudioFactory
+from audio import AudioFactory, IAudio
 import factory
 import loader
 
@@ -22,7 +22,7 @@ class NearFieldScanner:
         positions.
     :type _measurement_motion_manager: Any
     """
-    def __init__(self, scanner, audio, measurement_motion_manager):
+    def __init__(self, scanner: Scanner, audio: IAudio, measurement_motion_manager):
         self._scanner = scanner
         self._audio = audio
         self._measurement_motion_manager = measurement_motion_manager
@@ -51,14 +51,7 @@ class NearFieldScanner:
         self._scanner.shutdown()
 
     def shutdown(self) -> None:
-        pass  # turn off stuff and tidy
-
-    @property
-    def scanner(self):
-        """
-        :return: the scanner for use in the app
-        """
-        return self._scanner
+        self._scanner.shutdown()  # turn off stuff and tidy
 
 
 class NearFieldScannerFactory:
@@ -84,8 +77,8 @@ class NearFieldScannerFactory:
 
         loader.load_plugins(config_file)
 
-        scanner = ScannerFactory().create(config_file)
-        audio = AudioFactory().create(config_file)
+        scanner = ScannerFactory.create(config_file)
+        audio = AudioFactory.create(config_file)
 
         config_parser = configparser.ConfigParser(inline_comment_prefixes="#")
         config_parser.read(config_file)

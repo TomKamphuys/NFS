@@ -2,14 +2,16 @@ import configparser
 import sys
 import time
 from abc import ABC, abstractmethod
-from grbl_streamer import GrblStreamer
+from grbl_streamer import GrblStreamer  # type: ignore
 from loguru import logger
 from websocket import create_connection
+
+from datatypes import GrblConfig
 
 
 class IGrblController(ABC):
     @abstractmethod
-    def shutdown(self):
+    def shutdown(self) -> None:
         pass
 
     @abstractmethod
@@ -17,18 +19,18 @@ class IGrblController(ABC):
         pass
 
     @abstractmethod
-    def send_and_wait(self, message: str) -> None:
+    def send_and_wait_for_move_ready(self, message: str) -> None:
         pass
 
 
 class GrblControllerMock(IGrblController):
-    def shutdown(self):
+    def shutdown(self) -> None:
         logger.trace(f'MockingShutting down')
 
     def send(self, message: str) -> None:
         logger.trace(f'Mocking sending message')
 
-    def send_and_wait(self, message: str) -> None:
+    def send_and_wait_for_move_ready(self, message: str) -> None:
         logger.trace(f'Mocking send and wait')
 
 
@@ -43,17 +45,11 @@ class ESP32Duino(IGrblController):
 
     def __init__(self, connection):
         self._connection = connection
-        self._initialize_connection()
+        self._unlock()
 
-    def _initialize_connection(self) -> None:
+    def _unlock(self) -> None:
         """Initialize the connection by unlocking and clearing the buffer."""
         self.send(self.UNLOCK_COMMAND)
-        self._clear_initial_buffer()
-
-    def _clear_initial_buffer(self) -> None:
-        """Clear the buffer by calling _receive multiple times."""
-        for _ in range(3):
-            self._receive()
 
     def shutdown(self) -> None:
         """
@@ -70,19 +66,15 @@ class ESP32Duino(IGrblController):
         self._connection.close()
 
     def send(self, message: str) -> None:
-        """
-        Sends a formatted message to the FluidNC system through an established connection.
-
-        This method appends a newline character to the provided message and forwards
-        it to the connected FluidNC system using the underlying connection.
-
-        :param message: The message to be sent to the FluidNC system, as a string.
-        :return: None
-        """
-        logger.info(f'Sending message to FluidNC: {message}')
         self._connection.send(message + '\n')
+        logger.info(f'Sending message to FluidNC: {message}')
+        self._wait_for_ack()
 
-    def send_and_wait(self, message: str) -> None:
+    def _send_immediate(self, message: str) -> None:
+        logger.info(f'Sending immediate message to FluidNC: {message}')
+        self._connection.send(message)
+
+    def send_and_wait_for_move_ready(self, message: str) -> None:
         """
         Sends a message, waits for acknowledgment, sends a signal, and
         waits for another acknowledgment.
@@ -92,15 +84,22 @@ class ESP32Duino(IGrblController):
         :return: None
         """
         self.send(message)
-        self._wait_for_ack()
-        self.send('G04P0')
-        self._wait_for_ack()
+        self._wait_for_idle()
+
+    def _wait_for_idle(self) -> None:
+        ready = False
+        while not ready:
+            self._send_immediate('?')
+            time.sleep(0.2)
+            result = self._receive()
+            if "Idle" in result:
+                ready = True
 
     def _wait_for_ack(self) -> None:
         """Wait until an 'ok' acknowledgment is received from the hardware."""
         ready = False
         while not ready:
-            time.sleep(0.1)
+            time.sleep(0.01)
             result = self._receive()
             if "ok" in result:
                 ready = True
@@ -127,11 +126,36 @@ class GrblControllerFactory:
         elif type_to_build == 'ESP32Duino':
             web_socket = config_parser.get(section, 'web_socket')
             connection = create_connection(web_socket)
-            return ESP32Duino(connection)
+            esp32duino =  ESP32Duino(connection)
+
+            grbl_config_x = GrblControllerFactory.create_grbl_config('x', config_parser)
+            grbl_config_y = GrblControllerFactory.create_grbl_config('y', config_parser)
+
+            GrblControllerFactory._set_axis_according_to_config(esp32duino, grbl_config_x, 'x')
+            GrblControllerFactory._set_axis_according_to_config(esp32duino, grbl_config_y, 'y')
+
+            return esp32duino
         elif type_to_build == 'Mock':
             return GrblControllerMock()
         else:
             raise Exception(f'Unknown controller type: {type}')
+
+    @staticmethod
+    def create_grbl_config(axis, config_parser) -> GrblConfig:
+        section = f'grbl_{axis}_axis'
+        steps_per_millimeter = config_parser.getfloat(section, 'steps_per_millimeter')
+        maximum_rate = config_parser.getfloat(section, 'maximum_rate')
+        acceleration = config_parser.getfloat(section, 'acceleration')
+        invert_direction = config_parser.getboolean(section, 'invert_direction')
+        return GrblConfig(steps_per_millimeter, maximum_rate, acceleration, invert_direction)
+
+    @staticmethod
+    def _set_axis_according_to_config(esp32duino: ESP32Duino, grbl_config: GrblConfig, axis: str) -> None:
+        prefix = f'$/axes/{axis}/'
+        esp32duino.send(f'{prefix}steps_per_mm={grbl_config.steps_per_millimeter}')
+        esp32duino.send(f'{prefix}max_rate_mm_per_min={grbl_config.maximum_rate}')
+        esp32duino.send(f'{prefix}acceleration_mm_per_sec2={grbl_config.acceleration}')
+        esp32duino.send(f'{prefix}homing/positive_direction={grbl_config.invert_direction}')
 
 
 class Arduino(IGrblController):
@@ -149,7 +173,7 @@ class Arduino(IGrblController):
     :ivar _ready: Indicates if the system is ready to receive the next command.
     :type _ready: bool
     """
-    def on_grbl_event(self, event, *data):
+    def _on_grbl_event(self, event, *data) -> None:
         logger.trace(event)
         if event == "on_rx_buffer_percent":
             self._ready = True
@@ -167,7 +191,7 @@ class Arduino(IGrblController):
         if mock:
             grbl_streamer = GrblStreamerMock()
         else:
-            grbl_streamer = GrblStreamer(self.on_grbl_event)
+            grbl_streamer = GrblStreamer(self._on_grbl_event)
 
         port = 0
         if sys.platform.startswith('win32'):
@@ -194,7 +218,7 @@ class Arduino(IGrblController):
         self.send('$$')
         self._ready = True
 
-    def shutdown(self):
+    def shutdown(self) -> None:
         logger.info('Disconnecting from GRBL')
         self._grbl_streamer.disconnect()
 
@@ -202,7 +226,7 @@ class Arduino(IGrblController):
         logger.trace(f'Sending message to grbl: {message}')
         self._grbl_streamer.send_immediately(message)
 
-    def send_and_wait(self, message: str) -> None:
+    def send_and_wait_for_move_ready(self, message: str) -> None:
         self._ready = False
         self.send(message)
         while not self._ready:
@@ -246,29 +270,29 @@ class GrblStreamerMock:
         """
         pass
 
-    def setup_logging(self):
+    def setup_logging(self) -> None:
         logger.debug('mocked setup_logging')
 
-    def cnect(self, port, baudrate):
+    def cnect(self, port, baudrate) -> None:
         logger.debug(f'Mock cnect to {port} baudrate {baudrate}')
 
-    def poll_start(self):
+    def poll_start(self) -> None:
         logger.debug('Mock poll_start')
 
-    def disconnect(self):
+    def disconnect(self) -> None:
         logger.debug('Mock disconnect')
 
-    def send_immediately(self, message):
+    def send_immediately(self, message) -> None:
         logger.debug(f'Mock send_immediately {message}')
 
-    def write(self, message):
+    def write(self, message) -> None:
         logger.debug(f'Mock write {message}')
 
-    def on_rx_buffer_percent(self, percent):
+    def on_rx_buffer_percent(self, percent) -> None:
         logger.debug(f'Mock on_rx_buffer_percent {percent}')
 
-    def on_grbl_event(self, event, *data):
+    def on_grbl_event(self, event, *data) -> None:
         logger.debug(f'Mock on_grbl_event {event} {data}')
 
-    def incremental_streaming(self, flag):
+    def incremental_streaming(self, flag) -> None:
         logger.debug(f'Mock incremental_streaming {flag}')
