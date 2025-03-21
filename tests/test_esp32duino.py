@@ -1,7 +1,8 @@
 from unittest.mock import Mock, call
-from loguru import logger
-from grbl_controller import ESP32Duino
 
+from loguru import logger
+
+from grbl_controller import ESP32Duino
 
 # logger.remove(0)
 logger.add('ESP32Duino.log', mode='w', level="TRACE", backtrace=True, diagnose=True)

@@ -1,20 +1,27 @@
-import os
-import math
 import configparser
-import time
-
-import pyfar as pf  # type: ignore
-import numpy as np
-import sounddevice as sd  # type: ignore
-from loguru import logger
-from datatypes import CylindricalPosition
+import math
+import os
 from abc import ABC, abstractmethod
 
+import numpy as np
+import pyfar as pf  # type: ignore
+import sounddevice as sd  # type: ignore
+from loguru import logger
+
+from datatypes import CylindricalPosition
 
 logger.add('scanner.log', mode='w', level="TRACE")
 
 
 class IAudio(ABC):
+    """
+    Interface for audio-related operations.
+
+    This abstract base class provides a contract for classes that implement
+    audio measurements, specifically for measuring impulse responses (IR).
+    It ensures that any subclass implements necessary functionality for IR
+    measurement using specific positional data.
+    """
     @abstractmethod
     def measure_ir(self, position: CylindricalPosition) -> None:
         pass
@@ -22,9 +29,32 @@ class IAudio(ABC):
 
 class Audio(IAudio):
     """
-    Simple audio class that handles the audio measurement.
+    Handles audio-related operations including impulse response measurement
+    using an exponential sweep signal.
+
+    This class provides functionality to measure and process impulse responses
+    for a specified cylindrical position. It is initialized with audio settings
+    like sample rate, frequency range, and duration, and sets the default audio
+    device for recording.
+
+    :ivar _sample_rate: Sampling rate for audio processing.
+    :type _sample_rate: int
+    :ivar _minimum_frequency: Minimum frequency for exponential sweep.
+    :type _minimum_frequency: float
+    :ivar _maximum_frequency: Maximum frequency for exponential sweep.
+    :type _maximum_frequency: float
+    :ivar _duration: Duration of the sweep signal in seconds.
+    :type _duration: int
+    :ivar _padding_time: Padding time applied before and after the sweep signal.
+    :type _padding_time: float
     """
-    def __init__(self, device_id, sample_rate, minimum_frequency, maximum_frequency, duration, padding_time):
+    def __init__(self,
+                 device_id,
+                 sample_rate,
+                 minimum_frequency,
+                 maximum_frequency,
+                 duration,
+                 padding_time):
         self._sample_rate = sample_rate
         self._minimum_frequency = minimum_frequency
         self._maximum_frequency = maximum_frequency
@@ -42,10 +72,13 @@ class Audio(IAudio):
             n_samples=self._duration * self._sample_rate,
             frequency_range=[self._minimum_frequency, self._maximum_frequency],
             sampling_rate=self._sample_rate)
-        x_padded = pf.dsp.pad_zeros(x, pad_width=math.floor(self._padding_time * x.sampling_rate))
+        x_padded = pf.dsp.pad_zeros(x,
+                                    pad_width=math.floor(self._padding_time * x.sampling_rate))
 
         recording = sd.playrec(
-            np.concatenate((x_padded.time.T, x_padded.time.T), axis=1), x_padded.sampling_rate, channels=2,
+            np.concatenate((x_padded.time.T, x_padded.time.T), axis=1),
+            x_padded.sampling_rate,
+            channels=2,
             blocking=True)
 
         y = pf.Signal(recording[:, 0].T, x_padded.sampling_rate)
@@ -68,6 +101,13 @@ class Audio(IAudio):
 
 
 class AudioMock(IAudio):
+    """
+    Mock implementation of the IAudio interface.
+
+    This class serves as a simulated audio system component for testing or
+    development purposes. It provides a mock implementation of the methods
+    defined in the IAudio interface without performing actual audio processing.
+    """
     def __init__(self):
         pass
 
@@ -75,6 +115,16 @@ class AudioMock(IAudio):
         logger.info(f'[MOCK] IR measurement for position {position}')
 
 class AudioFactory:
+    """
+    Factory class responsible for creating instances of Audio or AudioMock
+    based on configuration settings.
+
+    This class provides a static method that parses a configuration file
+    to dynamically decide which type of Audio-related object should be
+    instantiated and returned. The configuration file must define
+    specific parameters under a designated section for the factory method
+    to operate correctly.
+    """
     @staticmethod
     def create(config_file: str) -> AudioMock | Audio:
         """

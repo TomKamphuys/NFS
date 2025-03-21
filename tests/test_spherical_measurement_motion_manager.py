@@ -1,4 +1,4 @@
-from unittest.mock import Mock, call
+from unittest.mock import Mock
 
 from datatypes import CylindricalPosition
 from scanner import SphericalMeasurementMotionManager

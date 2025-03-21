@@ -1,6 +1,7 @@
 """Factory for creating a MeasurementPoints."""
 
 from typing import Any, Callable
+
 from measurement_points import MeasurementPoints
 
 measurement_points_creation_funcs: dict[str, Callable[..., MeasurementPoints]] = {}
@@ -18,22 +19,28 @@ def unregister(measurement_points_type: str) -> None:
 
 def create(arguments: dict[str, Any]) -> MeasurementPoints:
     """
-    Creates an instance of MeasurementPoints based on the provided arguments.
+    Create an instance of `MeasurementPoints` based on the provided arguments.
 
-    This function dynamically determines which specific factory function to call by
-    examining the "type" key in the given dictionary. It retrieves the appropriate
-    factory function from a predefined mapping and then invokes that function with
-    the remaining arguments. If an unknown type is provided, an exception is raised.
+    This function selects an appropriate `creator_func` from the
+    `measurement_points_creation_funcs` dictionary using the "type" key in the
+    arguments. It then uses this function to create and return the desired
+    `MeasurementPoints` instance. If the specified type is not found in the
+    dictionary, an exception is raised. The "type" key in the `arguments` dictionary
+    is extracted and is not passed to the creator function.
 
-    :param arguments: A dictionary containing the type of measurement points under
-        the "type" key, along with the additional arguments required for creating
-        the measurement points instance.
-    :type arguments: dict[str, Any]
-    :return: An instance of MeasurementPoints created using the corresponding
-        factory function.
-    :rtype: MeasurementPoints
-    :raises ValueError: If the "type" key is not present in the predefined mapping
-        `measurement_points_creation_funcs`.
+    :param arguments:
+        A dictionary where keys are string identifiers and their values include
+        the required configuration for the measurement points object. The
+        "type" key specifies the type of measurement points to create, used to
+        look up the appropriate creation function.
+
+    :return:
+        An instance of `MeasurementPoints`, created using the specified type and
+        configuration in the `arguments`.
+
+    :raises ValueError:
+        If the "type" value in the `arguments` dictionary is not recognized in
+        the `measurement_points_creation_funcs` mapping.
     """
     args_copy = arguments.copy()
     measurement_points_type = args_copy.pop("type")

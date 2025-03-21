@@ -3,4 +3,3 @@ __pycache__
 *.log
 /tests/Recordings
 /Recordings
-config.ini

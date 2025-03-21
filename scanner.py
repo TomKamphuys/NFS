@@ -1,7 +1,8 @@
 import configparser
 import math
+
 from loguru import logger
-import numpy as np
+
 from datatypes import CylindricalPosition, cyl_to_cart
 from grbl_controller import GrblControllerFactory, IGrblController
 from measurement_points import MeasurementPoints
@@ -10,13 +11,17 @@ from rotator import RotatorFactory, IRotator
 
 class PlanarMover:
     """
-    Handles GRBL axis-related operations and commands for CNC machines.
+    Provides functionality to control movement in a planar system using a GRBL controller.
 
-    This class provides an interface to send commands specific to axis control,
-    manage zero settings, perform arc movements (clockwise and counterclockwise),
-    and move to specified positions based on R and Z coordinates. It interacts
-    with a GRBL controller object for executing these commands effectively.
+    This class interacts with a GRBL controller to execute movement commands in a planar
+    coordinate system. It supports various movement types such as circular clockwise arcs,
+    counterclockwise arcs, and linear movements in radial and vertical directions.
+    It is designed to be used in scenarios where precise control over movement is required.
 
+    :ivar _grbl_controller: Instance of the GRBL controller used to send movement commands.
+    :type _grbl_controller: IGrblController
+    :ivar _feed_rate: The feed rate for motions in the system.
+    :type _feed_rate: float
     """
     def __init__(self, grbl_controller: IGrblController, feed_rate: float):
         self._feed_rate = feed_rate
@@ -47,123 +52,151 @@ class PlanarMover:
 
 class Scanner:
     """
-    Provides functionality for controlling a scanner with radial, angular, and vertical
-    movement capabilities. Encapsulates motion control for cylindrical coordinate systems.
-
-    The Scanner class manages movement along radial, angular, and vertical axes while
-    maintaining the current position in cylindrical coordinates. It also provides utility
-    methods for adjustments, setting the position to zero, and shutting down the system
-    safely. This class ensures smooth control through abstraction over lower-level motion
-    controllers provided externally.
-
-    :ivar _planar_mover: Low-level controller for planar movement.
-    :type _planar_mover: Any
-    :ivar _angular_mover: Low-level controller for angular movement.
-    :type _angular_mover: Any
-    :ivar _cylindrical_position: The current position of the scanner in cylindrical
-        coordinates, represented internally.
-    :type _cylindrical_position: CylindricalPosition
+    Controls the movement of a scanner in cylindrical coordinates (radial, angular, vertical).
+    Combines planar and angular movement capabilities and manages scanner's position.
     """
+    ZERO_POSITION = (0, 0, 0)  # Constant for zeroed coordinates (r, theta, z)
+
     def __init__(self, planar_mover: PlanarMover, angular_mover: IRotator):
         self._planar_mover = planar_mover
         self._angular_mover = angular_mover
-        self._cylindrical_position = CylindricalPosition(0, 0, 0)
+        self._cylindrical_position = CylindricalPosition(*self.ZERO_POSITION)
         self.set_as_zero()
 
     def radial_move_to(self, r: float) -> None:
-        logger.trace(f'Radial move to {r}')
+        """Move to specified radial position."""
         if self.get_position().r() != r:
             self._planar_mover.move_to_radial(r)
-        self._cylindrical_position.set_r(r)
+        self._update_position(r=r)
 
     def planar_move_to(self, r: float, z: float):
+        """Move to a specified planar position (radial + vertical)."""
         self._planar_mover.move_to_rz(r, z)
-        self._cylindrical_position.set_r(r)
-        self._cylindrical_position.set_z(z)
+        self._update_position(r=r, z=z)
 
     def cw_arc_move_to(self, r: float, z: float, radius: float) -> None:
+        """Move in a clockwise arc to the specified radial and vertical position."""
         self._planar_mover.cw_arc_move_to(r, z, radius)
-        self._cylindrical_position.set_r(r)
-        self._cylindrical_position.set_z(z)
+        self._update_position(r=r, z=z)
 
     def ccw_arc_move_to(self, r: float, z: float, radius: float) -> None:
+        """Move in a counter-clockwise arc to the specified radial and vertical position."""
         self._planar_mover.ccw_arc_move_to(r, z, radius)
-        self._cylindrical_position.set_r(r)
-        self._cylindrical_position.set_z(z)
+        self._update_position(r=r, z=z)
 
     def angular_move_to(self, angle: float) -> None:
-        logger.trace(f'Angular move to {angle}')
+        """Rotate to a specified angular position."""
         if self.get_position().t() != angle:
             self._angular_mover.move_to(angle)
-        self._cylindrical_position.set_t(angle)
+        self._update_position(t=angle)
 
     def vertical_move_to(self, z: float) -> None:
-        logger.trace(f'Vertical move to {z}')
+        """Move to a specified vertical position."""
         if self.get_position().z() != z:
             self._planar_mover.move_to_vertical(z)
-        self._cylindrical_position.set_z(z)
+        self._update_position(z=z)
 
-    def rotate_counterclockwise(self, amount: float) -> None:
-        new_value = self._cylindrical_position.t() + amount
-        self._cylindrical_position.set_t(new_value)
-        self.angular_move_to(new_value)
+    def rotate_ccw(self, amount: float) -> None:
+        """Rotate counterclockwise by a specified amount."""
+        self.angular_move_to(self._cylindrical_position.t() + amount)
 
-    def rotate_clockwise(self, amount: float) -> None:
-        self.rotate_counterclockwise(-amount)
+    def rotate_cw(self, amount: float) -> None:
+        """Rotate clockwise by a specified amount."""
+        self.rotate_ccw(-amount)
 
     def move_out(self, amount: float) -> None:
-        new_value = self._cylindrical_position.r() + amount
-        self._cylindrical_position.set_r(new_value)
-        self.radial_move_to(new_value)
+        """Increase radial distance by a specified amount."""
+        self.radial_move_to(self._cylindrical_position.r() + amount)
 
     def move_in(self, amount: float) -> None:
+        """Decrease radial distance by a specified amount."""
         self.move_out(-amount)
 
     def move_up(self, amount: float) -> None:
-        new_value = self._cylindrical_position.z() + amount
-        self._cylindrical_position.set_z(new_value)
-        self.vertical_move_to(new_value)
+        """Increase vertical position by a specified amount."""
+        self.vertical_move_to(self._cylindrical_position.z() + amount)
 
     def move_down(self, amount: float) -> None:
+        """Decrease vertical position by a specified amount."""
         self.move_up(-amount)
 
     def get_position(self) -> CylindricalPosition:
+        """Return the current cylindrical position."""
         return self._cylindrical_position
 
     def set_as_zero(self) -> None:
+        """Reset scanner to the zero position."""
         self._planar_mover.set_as_zero()
         self._angular_mover.set_as_zero()
-        self._cylindrical_position.set_r(0)
-        self._cylindrical_position.set_t(0)
-        self._cylindrical_position.set_z(0)
+        self._update_position(*self.ZERO_POSITION)
 
     def shutdown(self) -> None:
+        """Shutdown the scanner's movers."""
         self._planar_mover.shutdown()
         self._angular_mover.shutdown()
+
+    def _update_position(self, r: float = None, t: float = None, z: float = None) -> None:
+        """Update the specified cylindrical position components."""
+        if r is not None:
+            self._cylindrical_position.set_r(r)
+        if t is not None:
+            self._cylindrical_position.set_t(t)
+        if z is not None:
+            self._cylindrical_position.set_z(z)
 
 
 class SphericalMeasurementMotionManager:
     """
-    Manages motion for taking spherical measurements.
+    Manages the motion of a scanner for spherical measurements.
 
-    This class provides functionality to move a device to specified measurement
-    points in a spherical coordinate system. It ensures safe starting positions and
-    handles angular, radial, and arc movements as necessary.
+    This class oversees the movement of a scanner to specified
+    spherical measurement points using cylindrical coordinates.
+    It ensures that the scanner moves safely to predetermined
+    positions and transitions between measurement points
+    efficiently while maintaining accuracy. The class also
+    provides operations for shutting down the scanner gracefully.
 
-    :ivar _measurement_points: Object holding details about the sequence of
-        measurement points. Provides information for current and next points.
+    :ivar _scanner: The scanner instance responsible for performing
+        the physical movements.
+    :type _scanner: Scanner
+    :ivar _measurement_points: The collection of measurement points
+        that dictate the scanner's movement.
     :type _measurement_points: MeasurementPoints
     """
+
+    DEGREE_CONVERSION_FACTOR = 180.0 / math.pi
+
     def __init__(self, scanner: Scanner, measurement_points: MeasurementPoints):
         self._scanner = scanner
         self._measurement_points = measurement_points
 
     def move_to_safe_starting_position(self) -> None:
+        """
+        Moves the scanner to a safe starting position at a specified radius.
+
+        This method performs an initial movement of the scanner to a predefined
+        safe radius that allows subsequent operations to proceed without
+        interference or collision risks. The radius value is retrieved from the
+        scanner's measurement points configuration.
+
+        :return: None
+        """
         radius = self._measurement_points.get_radius()
         logger.info(f'Performing a first move to a safe radius: {radius} mm')
         self._scanner.planar_move_to(radius, 0.0)
 
     def next(self) -> CylindricalPosition:
+        """
+        Advances to the next measurement point and moves to its position.
+
+        This method retrieves the next position from the sequence of measurement points,
+        moves to the specified position using an internal process, and then
+        returns the position object.
+
+        :return: The next cylindrical position object from the measurement points
+            sequence.
+        :rtype: CylindricalPosition
+        """
         position = self._measurement_points.next()
         self._move_to_next_measurement_point(position)
         return position
@@ -175,26 +208,49 @@ class SphericalMeasurementMotionManager:
         self._scanner.shutdown()
 
     def _move_to_next_measurement_point(self, position: CylindricalPosition) -> None:
+        """
+        Move the scanner to the specified next measurement point in the cylindrical
+        coordinate system. This method performs a sequence of angular, radial, and
+        circular arc movements to reach the target position. The movement ensures
+        precision in transitioning to the target point while maintaining the integrity
+        of the scanning process.
+
+        :param position: The target position to which the scanner should move in
+            cylindrical coordinates.
+        :type position: CylindricalPosition
+        :return: This method does not return a value.
+        :rtype: None
+        """
         current_position = self._scanner.get_position()
         logger.info(f'Moving to {position} from {current_position}')
-
         self._perform_angular_move(position)
         self._perform_radial_move(position)
-        self._perform_arc_move(position)
+        self._perform_circular_arc_move(position)
 
-    def _perform_arc_move(self, position: CylindricalPosition) -> None:
+    def _calculate_angle_degree(self, z: float, r: float) -> float:
+        """
+        Calculates the angle in degrees from the given z and r coordinates.
+        :param z: The z-coordinate.
+        :param r: The radial distance.
+        :return: The angle in degrees.
+        """
+        return round(math.atan2(z, r) * self.DEGREE_CONVERSION_FACTOR, 2)
+
+    def _perform_circular_arc_move(self, position: CylindricalPosition) -> None:
         current_position = self._scanner.get_position()
         radius = position.length()
-        old_angle = np.around(math.atan2(current_position.z(), current_position.r()) / math.pi * 180.0, 2)
-        new_angle = np.around(math.atan2(position.z(), position.r()) / math.pi * 180.0, 2)
-        if new_angle > old_angle:
-            logger.debug(f'Move using an CW arc move from {old_angle:.2f} to {new_angle:.2f} degrees')
+        old_angle_deg = self._calculate_angle_degree(current_position.z(), current_position.r())
+        new_angle_deg = self._calculate_angle_degree(position.z(), position.r())
+
+        if new_angle_deg > old_angle_deg:
+            logger.debug(f'Move using a CW arc move from {old_angle_deg:.2f}° to {new_angle_deg:.2f}°')
             self._scanner.cw_arc_move_to(position.r(), position.z(), radius)
-        elif new_angle < old_angle:
-            logger.debug(f'Move using an CCW arc move from {old_angle:.2f} to {new_angle:.2f} degrees')
+        elif new_angle_deg < old_angle_deg:
+            logger.debug(f'Move using a CCW arc move from {old_angle_deg:.2f}° to {new_angle_deg:.2f}°')
             self._scanner.ccw_arc_move_to(position.r(), position.z(), radius)
         else:
-            logger.debug('No arc move needed')
+            logger.debug('No arc move needed.')
+
 
     def _perform_radial_move(self, position: CylindricalPosition) -> None:
         current_position = self._scanner.get_position()
@@ -223,16 +279,16 @@ class SphericalMeasurementMotionManager:
 
 class ScannerFactory:
     """
-    Factory class for creating Scanner objects.
+    Factory for creating Scanner objects.
 
-    This class provides a static method to create and configure a Scanner instance
-    using a configuration file. The method initializes all necessary components
-    required to construct the Scanner, such as motion controllers, measurement
-    points, and a measurement motion manager.
+    This class provides a mechanism to create and configure a Scanner object
+    using a configuration file. It reads the configuration file, initializes
+    necessary components such as angular and planar movers, and builds the
+    Scanner object.
 
-    Static Methods:
-        create: Creates a Scanner instance with the specified configuration.
-
+    :ivar config_file: The path to the configuration file used to initialize
+        the Scanner.
+    :type config_file: str
     """
     @staticmethod
     def create(config_file: str) -> Scanner:

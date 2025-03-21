@@ -1,4 +1,5 @@
 from unittest.mock import Mock
+
 from datatypes import CylindricalPosition
 from nfs import NearFieldScanner
 

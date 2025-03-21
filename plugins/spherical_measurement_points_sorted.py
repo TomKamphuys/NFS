@@ -1,5 +1,6 @@
-from datatypes import CylindricalPosition
 import numpy as np
+
+from datatypes import CylindricalPosition
 
 
 class SphericalMeasurementPointsSorted:

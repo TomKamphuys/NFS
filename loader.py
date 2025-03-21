@@ -1,22 +1,21 @@
 """A simple plugin loader."""
-import importlib
 import configparser
+import importlib
+
 from loguru import logger
+
 import factory
 
 
 class ModuleInterface:
     """
-    Interface for modules to define a standard structure for functionality.
+    Interface definition for modules that can be registered with a factory.
 
-    This class provides a guideline for implementing modules that need to
-    interface with a measurement points factory. Its purpose is to ensure
-    that all modules can be registered consistently.
+    This class provides a static method to register modules with a factory,
+    enabling the integration of necessary measurement points or other
+    functionality. Intended to be used as a base definition for module
+    implementations.
 
-    :ivar attribute1: Description of attribute1.
-    :type attribute1: type
-    :ivar attribute2: Description of attribute2.
-    :type attribute2: type
     """
 
     @staticmethod
@@ -28,30 +27,34 @@ class ModuleInterface:
 
 def import_module(name: str) -> ModuleInterface:
     """
-    Imports a module by its name dynamically and returns it as a usable module
-    interface. This function utilizes Python's `importlib` to perform the import
-    at runtime, providing flexibility in scenarios where the module name is
-    determined programmatically.
+    Imports a module dynamically by its name and returns the module object. This function utilizes the
+    `importlib.import_module` method and expects the name of the target module as a string. If the import
+    fails, an exception may be raised, typically `ModuleNotFoundError` or other related errors raised
+    by the `importlib`.
 
-    :param name: The name of the module to be imported.
+    :param name: The name of the module to be imported. It should be a fully qualified name if the
+        module is located in a package, e.g., 'package.module'.
     :type name: str
-    :return: The imported module as a usable interface.
+
+    :return: The imported module object.
     :rtype: ModuleInterface
     """
     return importlib.import_module(name)  # type: ignore
 
 def load_plugins(config_file):
     """
-    Load and initialize plugins as defined in the configuration file.
+    Load and initialize plugins listed in the specified configuration file.
 
-    This function reads a configuration file and loads plugins defined in the
-    'plugins' section. It utilizes a configuration parser to process inline
-    comments and extract the relevant plugin definitions. The extracted plugins
-    are then passed to an internal handler for loading.
+    This function reads the provided configuration file to access the list of
+    plugins under the section "plugins". Once the plugins are extracted,
+    it initializes and loads them by delegating the operation to an internal
+    method.
 
-    :param config_file: Path to the configuration file containing plugin definitions.
+    :param config_file: Path to the configuration file to parse for plugin
+        information.
     :type config_file: str
     :return: None
+    :rtype: NoneType
     """
     config_parser = configparser.ConfigParser(inline_comment_prefixes="#")
     config_parser.read(config_file)
@@ -64,15 +67,14 @@ def load_plugins(config_file):
 
 def _load_plugins(plugins: list[str]) -> None:
     """
-    Loads and registers a list of plugins using their module names.
+    Loads and registers a list of plugin modules using their file names.
 
-    This function iterates through a given list of plugin module names. It imports
-    each module dynamically, logs the loading of each plugin, and invokes the
-    module's `register` method onto a provided factory. The factory is expected
-    to be available in the current scope.
+    This function iterates over a list of plugin file names, dynamically imports
+    each module, and registers them using a predefined factory. It ensures that
+    each plugin is properly loaded and registered for further use.
 
-    :param plugins: A list of strings, each representing the module name of a
-        plugin to be loaded and registered.
+    :param plugins: List of plugin file names to be imported and registered.
+    :type plugins: list[str]
     :return: None
     """
     for plugin_file in plugins:

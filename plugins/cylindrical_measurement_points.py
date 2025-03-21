@@ -1,5 +1,6 @@
-from datatypes import CylindricalPosition
 from loguru import logger
+
+from datatypes import CylindricalPosition
 
 
 class CylindricalMeasurementPoints:

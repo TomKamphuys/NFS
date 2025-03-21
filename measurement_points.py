@@ -1,16 +1,15 @@
 from typing import Protocol
+
 from datatypes import CylindricalPosition
 
 
 class MeasurementPoints(Protocol):
     """
-    Interface for managing and acquiring measurement points.
-
-    This protocol defines the structure for interacting with measurement
-    points in a system. It provides methods to retrieve the next measurement
-    point, check if the system is ready for measurement, and determine if
-    an evasive move is required. Implementing classes should provide the
-    specific behavior for these operations.
+    This class defines the protocol for measurement points in a system, ensuring a specific interface
+    is followed. It provides functionality to retrieve measurement positions in cylindrical coordinates,
+    check the readiness state of the points, get a specified radius, reset internal states, and determine
+    if evasive maneuvers are necessary. It is typically utilized in applications involving positional
+    data collection or path planning.
     """
     def next(self) -> CylindricalPosition:
         pass

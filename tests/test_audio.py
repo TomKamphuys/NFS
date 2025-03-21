@@ -1,11 +1,7 @@
 from loguru import logger
-from audio import AudioFactory, Audio
-from datatypes import CylindricalPosition
-
 
 logger.remove(0)
 logger.add('audio.log', mode='w', level="TRACE", backtrace=True, diagnose=True)
-
 
 # def test_measure_ir():
 #     audio = Audio()

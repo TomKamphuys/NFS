@@ -1,6 +1,7 @@
-from datatypes import CylindricalPosition
 import numpy as np
 from loguru import logger
+
+from datatypes import CylindricalPosition
 
 logger.add('scanner.log', mode='w', level="TRACE")
 

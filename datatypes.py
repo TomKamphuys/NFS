@@ -1,8 +1,27 @@
 import math
+
 import numpy as np
 
 
 class GrblConfig:
+    """
+    Represents the configuration for a GRBL stepper motor controller.
+
+    This class encapsulates various settings required to configure a stepper motor controller
+    operating with GRBL firmware. Settings include steps per millimeter, maximum rate,
+    acceleration, and whether the direction is inverted.
+
+    :ivar _steps_per_millimeter: Defines the number of steps required for the motor to move
+        one millimeter.
+    :type _steps_per_millimeter: float
+    :ivar _maximum_rate: Specifies the maximum allowable movement rate (in units per minute).
+    :type _maximum_rate: float
+    :ivar _acceleration: Configures the acceleration of the motor (in units per second
+        squared).
+    :type _acceleration: float
+    :ivar _invert_direction: Indicates whether the direction of the motor is inverted.
+    :type _invert_direction: bool
+    """
     def __init__(self, steps_per_millimeter: float, maximum_rate: float, acceleration: float, invert_direction: bool):
         self._steps_per_millimeter = steps_per_millimeter
         self._maximum_rate = maximum_rate
@@ -28,19 +47,18 @@ class GrblConfig:
 
 class CylindricalPosition:
     """
-    Represents a position in 3D space defined by cylindrical coordinates.
+    Represents a position in cylindrical coordinates.
 
-    This class provides attributes and methods to manage and operate on a
-    coordinate position specified in a cylindrical coordinate system (r, t, z),
-    where `r` is the radial distance, `t` is the azimuthal angle, and `z` is the
-    height. It includes functionality to compare positions, calculate the length
-    from the origin, and access or modify individual coordinate components.
+    This class encapsulates a point in cylindrical coordinates defined by radius (r),
+    theta (t, angular displacement), and height (z). It provides methods for accessing
+    and modifying its coordinates, as well as calculating the length of the point from
+    the origin.
 
-    :ivar _r: The radial distance from the z-axis.
+    :ivar _r: The radial distance from the origin.
     :type _r: float
-    :ivar _t: The azimuthal angle relative to the x-axis, in radians.
+    :ivar _t: The angular coordinate in radians.
     :type _t: float
-    :ivar _z: The height component along the z-axis.
+    :ivar _z: The height coordinate in cylindrical space.
     :type _z: float
     """
     def __init__(self, r, t, z):
@@ -91,15 +109,15 @@ def cyl_to_cart(cylindrical_position: CylindricalPosition):
     """
     Converts a cylindrical coordinate position to Cartesian coordinates.
 
-    This function takes a `CylindricalPosition` object, extracts the values for
-    radius, angle, and height (z-coordinate), converts the angle from degrees
-    to radians, and computes the corresponding Cartesian coordinates (x, y, z).
+    This function takes an object `cylindrical_position`, which represents a
+    point in cylindrical coordinate space, and converts it to its corresponding
+    Cartesian coordinate representation. It uses the radius `r`, azimuthal angle
+    `t` (in degrees, converted to radians internally), and height `z` to compute
+    the x, y, and z positions in Cartesian space.
 
-    :param cylindrical_position: A `CylindricalPosition` object containing the
-        cylindrical coordinates with attributes `r` (radius), `t` (angle in
-        degrees), and `z` (height).
-    :type cylindrical_position: CylindricalPosition
-    :return: A tuple containing the Cartesian coordinates as (x, y, z).
+    :param cylindrical_position: A CylindricalPosition object containing the
+        radius (r), angle (t, in degrees), and height (z).
+    :return: A tuple containing the Cartesian coordinates (x, y, z).
     :rtype: tuple[float, float, float]
     """
     r = cylindrical_position.r()

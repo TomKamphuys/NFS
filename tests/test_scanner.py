@@ -1,7 +1,10 @@
 from unittest.mock import Mock, call
+
 from numpy.ma.testutils import assert_equal
+
 from datatypes import CylindricalPosition
 from scanner import Scanner
+
 
 def test_radial_move_to():
     mock_planar_mover = Mock()

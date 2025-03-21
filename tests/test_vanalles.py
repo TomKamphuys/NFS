@@ -1,16 +1,17 @@
 import configparser
 
-import pytest
-from loguru import logger
-from datatypes import CylindricalPosition
-from nfs import NearFieldScanner, NearFieldScannerFactory
-from audio import AudioMock
-import factory
-import loader
 import matplotlib.pyplot as plt  # type: ignore
 import numpy as np
+import pytest
+from loguru import logger
 
-# logger.remove(0)
+import factory
+import loader
+from audio import AudioMock
+from datatypes import CylindricalPosition
+from nfs import NearFieldScanner, NearFieldScannerFactory
+from scanner import ScannerFactory
+
 logger.add('scanner.log', mode='w', level="TRACE", backtrace=True, diagnose=True)
 
 
@@ -68,9 +69,9 @@ def test_measurement_points():
     fig = plt.figure()
     ax = fig.add_subplot(projection='3d')
 
-    xs = np.empty((0, 0))
-    ys = np.empty((0, 0))
-    zs = np.empty((0, 0))
+    xs = []
+    ys = []
+    zs = []
 
     index = 0
     while not measurement_points.ready():
@@ -89,15 +90,15 @@ def test_measurement_points():
     plt.show()
 
 
-@pytest.mark.skip(reason="This is an interactive test I use manually")
+# @pytest.mark.skip(reason="This is an interactive test I use manually")
 def test_take_measurements_set():
     config_file = 'config.ini'
 
     # load the plugins
     loader.load_plugins(config_file)
 
-    nfs = NearFieldScannerFactory.create(config_file)
-
+    scanner = ScannerFactory.create(config_file)
+    nfs = NearFieldScannerFactory.create(scanner, config_file)
     nfs.take_measurement_set()
 
 
