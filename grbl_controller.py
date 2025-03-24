@@ -33,6 +33,10 @@ class IGrblController(ABC):
     def send_and_wait_for_move_ready(self, message: str) -> None:
         pass
 
+    @abstractmethod
+    def get_position(self):
+        pass
+
 
 class GrblControllerMock(IGrblController):
     """
@@ -51,6 +55,10 @@ class GrblControllerMock(IGrblController):
 
     def send_and_wait_for_move_ready(self, message: str) -> None:
         logger.trace(f'Mocking send and wait')
+
+    def get_position(self):
+        logger.trace(f'Mocking get_position')
+        return CylindricalPosition(0, 0, 0)
 
 
 class ESP32Duino(IGrblController):
@@ -75,6 +83,9 @@ class ESP32Duino(IGrblController):
         self._connection = connection
         self._unlock()
 
+    def get_position(self):
+        return self._position
+
     def _unlock(self) -> None:
         """Initialize the connection by unlocking and clearing the buffer."""
         self.send(self.UNLOCK_COMMAND)
@@ -95,11 +106,11 @@ class ESP32Duino(IGrblController):
 
     def send(self, message: str) -> None:
         self._connection.send(message + '\n')
-        logger.info(f'Sending message to FluidNC: {message}')
+        logger.trace(f'Sending message to FluidNC: {message}')
         self._wait_for_ack()
 
     def _send_immediate(self, message: str) -> None:
-        logger.info(f'Sending immediate message to FluidNC: {message}')
+        logger.trace(f'Sending immediate message to FluidNC: {message}')
         self._connection.send(message)
 
     def send_and_wait_for_move_ready(self, message: str) -> None:
@@ -121,7 +132,7 @@ class ESP32Duino(IGrblController):
             time.sleep(0.2)
             result = self._receive()
             self._parse_position(result)
-            logger.info(f'Scanner is at: {self._position}')
+            logger.trace(f'Scanner is at: {self._position}')
             if "Idle" in result:
                 ready = True
 
@@ -156,7 +167,6 @@ class ESP32Duino(IGrblController):
         result = self._connection.recv()
         if isinstance(result, bytes):
             result = result.decode("utf-8")
-        # logger.trace(f'Result: {result.strip()}')
         return result
 
 
@@ -185,8 +195,10 @@ class GrblControllerFactory:
             connection = create_connection(web_socket)
             esp32duino =  ESP32Duino(connection)
 
-            grbl_config_x = GrblControllerFactory.create_grbl_config('x', config_parser)
-            grbl_config_y = GrblControllerFactory.create_grbl_config('y', config_parser)
+            x_section = config_parser.get(section, 'grbl_x_axis_config')
+            grbl_config_x = GrblControllerFactory.create_grbl_config(x_section, config_parser)
+            y_section = config_parser.get(section, 'grbl_y_axis_config')
+            grbl_config_y = GrblControllerFactory.create_grbl_config(y_section, config_parser)
 
             GrblControllerFactory._set_axis_according_to_config(esp32duino, grbl_config_x, 'x')
             GrblControllerFactory._set_axis_according_to_config(esp32duino, grbl_config_y, 'y')
@@ -198,8 +210,7 @@ class GrblControllerFactory:
             raise Exception(f'Unknown controller type: {type}')
 
     @staticmethod
-    def create_grbl_config(axis, config_parser) -> GrblConfig:
-        section = f'grbl_{axis}_axis'
+    def create_grbl_config(section, config_parser) -> GrblConfig:
         steps_per_millimeter = config_parser.getfloat(section, 'steps_per_millimeter')
         maximum_rate = config_parser.getfloat(section, 'maximum_rate')
         acceleration = config_parser.getfloat(section, 'acceleration')

@@ -3,8 +3,10 @@ import time
 from abc import abstractmethod, ABC
 
 from loguru import logger
+from configparser import ConfigParser
 from ticlib import TicUSB  # type: ignore
 
+from datatypes import CylindricalPosition
 from grbl_controller import IGrblController, GrblControllerFactory
 
 
@@ -33,6 +35,10 @@ class IRotator(ABC):
     def shutdown(self) -> None:
         pass
 
+    @abstractmethod
+    def get_position(self) -> CylindricalPosition:
+        pass
+
 
 class GrblRotator(IRotator):
     """
@@ -42,8 +48,7 @@ class GrblRotator(IRotator):
     ZERO_POSITION_COMMAND = "G92 X0 Y0"
     REPORT_POSITION_COMMAND = "$10=0"
 
-    def __init__(self, grbl_controller: IGrblController, steps_per_degree: float):
-        self._steps_per_degree = steps_per_degree
+    def __init__(self, grbl_controller: IGrblController):
         self._grbl_controller = grbl_controller
         logger.trace('GrblRotator initialized')
 
@@ -51,8 +56,8 @@ class GrblRotator(IRotator):
         """
         Rotate to the specified angle.
         """
-        steps = self._calculate_steps(angle)
-        self._send_move_to_command(steps)
+        logger.trace(f'Sending move-to command for {angle} degrees')
+        self._grbl_controller.send_and_wait_for_move_ready(f'G0 X{angle}')
 
     def set_as_zero(self) -> None:
         """
@@ -66,16 +71,11 @@ class GrblRotator(IRotator):
         """
         self._grbl_controller.shutdown()
 
+    def get_position(self) -> CylindricalPosition:
+        # bit weird, but rotation is x axis on cnc shield which ends up in r...
+        return CylindricalPosition(0.0, self._grbl_controller.get_position().r(), 0.0)
+
     # Private helper methods
-    def _calculate_steps(self, angle: float) -> int:
-        """Calculate the number of motor steps needed to achieve the target angle."""
-        return round(self._steps_per_degree * angle)
-
-    def _send_move_to_command(self, steps: int) -> None:
-        """Send move-to command to the GRBL controller."""
-        logger.trace(f'Sending move-to command for {steps} steps')
-        self._grbl_controller.send_and_wait_for_move_ready(f'G0 X{steps}')
-
     def _send_reset_position_commands(self) -> None:
         """Send reset position-related commands to the GRBL controller."""
         logger.trace('Resetting position to zero')
@@ -122,6 +122,9 @@ class TicRotator(IRotator):
     def shutdown(self) -> None:
         pass  # nothing to do here
 
+    def get_position(self) -> CylindricalPosition:
+        return CylindricalPosition(self._tic.get_current_position(), 0, 0)
+
 
 class RotatorMock(IRotator):
     """
@@ -145,8 +148,24 @@ class RotatorMock(IRotator):
     def shutdown(self) -> None:
         pass
 
+    def get_position(self) -> CylindricalPosition:
+        return CylindricalPosition(0, 0, 0)
 
-def calculate_steps_per_degree(config_parser, section):
+
+def calculate_steps_per_degree(config_parser: ConfigParser, section: str) -> float:
+    """
+    Calculate the number of steps required per degree of rotation based on the
+    configuration provided.
+
+    :param config_parser: A configuration parser object providing access to the
+        configuration file data.
+    :type config_parser: configparser.ConfigParser
+    :param section: The section within the configuration file where the required
+        parameters are located.
+    :type section: str
+    :return: The calculated steps per degree of rotation.
+    :rtype: float
+    """
     degree_per_step = config_parser.getfloat(section, 'degree_per_step')
     large_gear_nr_of_teeth = config_parser.getint(section, 'large_gear_nr_of_teeth')
     small_gear_nr_of_teeth = config_parser.getint(section, 'small_gear_nr_of_teeth')
@@ -197,10 +216,8 @@ class RotatorFactory:
             return TicFactory.create(config_file)
 
         if type_to_build == 'ESP32DuinoRotation':
-            steps_per_degree = calculate_steps_per_degree(config_parser, section)
-
             grbl_config_section = config_parser.get(section, 'rotation_mover_controller')
-            return GrblRotator(GrblControllerFactory.create(grbl_config_section, config_file), steps_per_degree)
+            return GrblRotator(GrblControllerFactory.create(grbl_config_section, config_file))
 
         if type_to_build == 'Mock':
             return RotatorMock()

@@ -27,6 +27,10 @@ class PlanarMover:
         self._feed_rate = feed_rate
         self._grbl_controller = grbl_controller
 
+    def get_position(self) -> CylindricalPosition:
+        # bit weird, but mapping from x,y to r, z
+        return CylindricalPosition(self._grbl_controller.get_position().t(), 0.0, self._grbl_controller.get_position().r())
+
     def cw_arc_move_to(self, r: float, z: float, radius: float) -> None:
         self._grbl_controller.send_and_wait_for_move_ready(f'G02 X{z:.4f} Y{r:.4f} R{radius:.4f} F{self._feed_rate}')
 
@@ -122,7 +126,9 @@ class Scanner:
 
     def get_position(self) -> CylindricalPosition:
         """Return the current cylindrical position."""
-        return self._cylindrical_position
+        t = self._angular_mover.get_position()
+        rz = self._planar_mover.get_position()
+        return CylindricalPosition(rz.r(), t.t(), rz.z())
 
     def set_as_zero(self) -> None:
         """Reset scanner to the zero position."""

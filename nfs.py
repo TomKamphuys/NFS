@@ -42,11 +42,11 @@ class NearFieldScanner:
         """
         self._measurement_motion_manager.move_to_safe_starting_position()
         while not self._measurement_motion_manager.ready():
-            position = self._measurement_motion_manager.next()
+            self._measurement_motion_manager.next()
             if self._measurement_motion_manager.ready():
                 break
 
-            self._audio.measure_ir(position)
+            self._audio.measure_ir(self._scanner.get_position())
 
         self._scanner.shutdown()
 
