@@ -171,6 +171,7 @@ class SphericalMeasurementMotionManager:
     """
 
     DEGREE_CONVERSION_FACTOR = 180.0 / math.pi
+    TOLERANCE = 0.1
 
     def __init__(self, scanner: Scanner, measurement_points: MeasurementPoints):
         self._scanner = scanner
@@ -276,7 +277,7 @@ class SphericalMeasurementMotionManager:
     def _perform_angular_move(self, position: CylindricalPosition) -> None:
         current_position = self._scanner.get_position()
 
-        if current_position.t() != position.t():
+        if abs(current_position.t() - position.t()) > self.TOLERANCE:
             logger.debug(f'Performing an angular move from {current_position.t()} degrees to {position.t()} degrees')
             self._scanner.angular_move_to(position.t())
         else:

@@ -4,7 +4,9 @@ import time
 from abc import ABC, abstractmethod
 from grbl_streamer import GrblStreamer  # type: ignore
 from loguru import logger
-from websocket import create_connection
+# from websocket import create_connection
+from websockets.sync.client import connect
+
 
 from datatypes import GrblConfig, CylindricalPosition
 
@@ -58,7 +60,7 @@ class GrblControllerMock(IGrblController):
 
     def get_position(self):
         logger.trace(f'Mocking get_position')
-        return CylindricalPosition(0, 0, 0)
+        return CylindricalPosition(100, 0, 0)
 
 
 class ESP32Duino(IGrblController):
@@ -192,7 +194,8 @@ class GrblControllerFactory:
             return Arduino(config_file)
         elif type_to_build == 'ESP32Duino':
             web_socket = config_parser.get(section, 'web_socket')
-            connection = create_connection(web_socket)
+            connection = connect(web_socket, ping_interval=None)
+            # connection = create_connection(web_socket)
             esp32duino =  ESP32Duino(connection)
 
             x_section = config_parser.get(section, 'grbl_x_axis_config')

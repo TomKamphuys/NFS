@@ -53,7 +53,7 @@ class SphericalMeasurementPointsArcs:
         theta_cyl_temp = np.arctan2(x, y) / np.pi * 180
 
         # r_temp = np.around(r_temp, 2)
-        theta_cyl_temp = np.around(theta_cyl_temp, 2)
+        theta_cyl_temp = np.around(theta_cyl_temp, 0)
         # z = np.around(z, 2)
 
         sorted_indices = np.argsort(theta_cyl_temp * 100000 + z)
