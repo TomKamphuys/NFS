@@ -50,7 +50,7 @@ class PlanarMover:
         self._grbl_controller.send('G92 X0 Y0')
         self._grbl_controller.send('$10=0')
 
-    def shutdown(self):
+    def shutdown(self) -> None:
         self._grbl_controller.shutdown()
 
 
@@ -68,7 +68,7 @@ class Scanner:
         self.set_as_zero()
 
     def radial_move_to(self, r: float) -> None:
-        """Move to specified radial position."""
+        """Move to the specified radial position."""
         if self.get_position().r() != r:
             self._planar_mover.move_to_radial(r)
         self._update_position(r=r)
@@ -212,6 +212,16 @@ class SphericalMeasurementMotionManager:
         return self._measurement_points.ready()
 
     def shutdown(self) -> None:
+        """
+        Shuts down the scanner instance.
+
+        This method invokes the `shutdown` method of the scanner instance, ensuring
+        proper cleanup and termination of any processes or resources associated
+        with it.
+
+        :raises RuntimeError: If the scanner instance fails to shut down properly.
+        :return: None
+        """
         self._scanner.shutdown()
 
     def _move_to_next_measurement_point(self, position: CylindricalPosition) -> None:
@@ -244,6 +254,17 @@ class SphericalMeasurementMotionManager:
         return round(math.atan2(z, r) * self.DEGREE_CONVERSION_FACTOR, 2)
 
     def _perform_circular_arc_move(self, position: CylindricalPosition) -> None:
+        """
+        Performs a circular arc move from the scanner's current position to the given
+        target position. It determines the direction of the movement (clockwise or
+        counterclockwise) based on the angular positions of the current and target
+        positions.
+
+        :param position: Target cylindrical position for the arc move.
+        :type position: CylindricalPosition
+        :return: None
+        :rtype: NoneType
+        """
         current_position = self._scanner.get_position()
         radius = position.length()
         old_angle_deg = self._calculate_angle_degree(current_position.z(), current_position.r())
@@ -260,6 +281,18 @@ class SphericalMeasurementMotionManager:
 
 
     def _perform_radial_move(self, position: CylindricalPosition) -> None:
+        """
+        Performs a radial movement in spherical coordinates. If the radial distance
+        between the current position and the target position exceeds a threshold value 
+        (0.1 mm), the function calculates a new set of Cartesian coordinates based on 
+        the ratio of the distances. It then initiates a planar move to the new calculated
+        coordinates. If the radial distance is within the threshold, no movement is 
+        performed.
+
+        :param position: The target cylindrical position for the radial movement.
+        :type position: CylindricalPosition
+        :return: None
+        """
         current_position = self._scanner.get_position()
         if math.fabs(current_position.length() - position.length()) > 0.1:
             ratio = position.length() / current_position.length()
@@ -275,6 +308,16 @@ class SphericalMeasurementMotionManager:
             logger.debug('No (spherical) radial move needed.')
 
     def _perform_angular_move(self, position: CylindricalPosition) -> None:
+        """
+        Performs an angular move of the scanner to the specified position if the difference
+        between the current and desired positions exceeds the predefined tolerance.
+
+        :param position: The target position in cylindrical coordinates where the angular move
+            is desired.
+        :type position: CylindricalPosition
+        :return: This function does not return a value.
+        :rtype: None
+        """
         current_position = self._scanner.get_position()
 
         if abs(current_position.t() - position.t()) > self.TOLERANCE:
@@ -290,7 +333,7 @@ class ScannerFactory:
 
     This class provides a mechanism to create and configure a Scanner object
     using a configuration file. It reads the configuration file, initializes
-    necessary components such as angular and planar movers, and builds the
+    the necessary components such as angular and planar movers, and builds the
     Scanner object.
 
     :ivar config_file: The path to the configuration file used to initialize

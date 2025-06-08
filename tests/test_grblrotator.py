@@ -6,19 +6,17 @@ from rotator import GrblRotator
 
 def test_move_to():
     grbl_controller_mock = Mock(spec=IGrblController)
-    steps_per_degree = 10.0
-    rotator = GrblRotator(grbl_controller_mock, steps_per_degree)
+    rotator = GrblRotator(grbl_controller_mock)
     angle = 30.0
 
     rotator.move_to(angle)
 
-    expected_steps = int(steps_per_degree * angle)
-    grbl_controller_mock.send_and_wait_for_move_ready.assert_called_once_with(f'G0 X{expected_steps}')
+    grbl_controller_mock.send_and_wait_for_move_ready.assert_called_once_with(f'G0 X{angle}')
 
 
 def test_set_as_zero():
     grbl_controller_mock = Mock(spec=IGrblController)
-    rotator = GrblRotator(grbl_controller_mock, 10.0)
+    rotator = GrblRotator(grbl_controller_mock)
 
     rotator.set_as_zero()
 
@@ -28,7 +26,7 @@ def test_set_as_zero():
 
 def test_shutdown():
     grbl_controller_mock = Mock(spec=IGrblController)
-    rotator = GrblRotator(grbl_controller_mock, 10.0)
+    rotator = GrblRotator(grbl_controller_mock)
 
     rotator.shutdown()
 
@@ -37,11 +35,9 @@ def test_shutdown():
 
 def test_move_to_negative_angle():
     grbl_controller_mock = Mock(spec=IGrblController)
-    steps_per_degree = 15.0  # more fine-grained control
-    rotator = GrblRotator(grbl_controller_mock, steps_per_degree)
+    rotator = GrblRotator(grbl_controller_mock)
     angle = -45.0
 
     rotator.move_to(angle)
 
-    expected_steps = int(steps_per_degree * angle)
-    grbl_controller_mock.send_and_wait_for_move_ready.assert_called_once_with(f'G0 X{expected_steps}')
+    grbl_controller_mock.send_and_wait_for_move_ready.assert_called_once_with(f'G0 X{angle}')

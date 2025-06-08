@@ -41,25 +41,62 @@ class SphericalMeasurementPointsArcsRandom:
     :ivar _current_index: Index tracking the next point to be retrieved.
     :type _current_index: int
     """
-    def __init__(self,
-                 nr_of_points,
-                 wall_spacing,
-                 radius):
-        self._ready = False
-        self._radius = float(radius)
-        self._wall_spacing = float(wall_spacing)
-        self._nr_of_points = int(nr_of_points)
 
+    def __init__(self,
+                 nr_of_points: int,
+                 wall_spacing: float,
+                 radius: float) -> None:
+
+        self._ready = False
+        self._radius = radius
+        self._wall_spacing = wall_spacing
+        self._nr_of_points = nr_of_points
+
+        self._generate_evenly_spread_points_on_unit_sphere()
+
+        radius = np.random.uniform(self._radius - self._wall_spacing, self._radius, np.size(self._phis))
+
+        x, y, z = self._spherical_to_cartesian(radius)
+
+        r_cyl, theta_cyl, z_cyl = self._convert_to_sorted_cylindrical_coordinates(x, y, z)
+
+        self._remove_points_inside_speaker_stand(r_cyl, theta_cyl, z_cyl)
+
+        self._actual_nr_of_points = self._r_cyl.size
+        self._current_index = 0
+
+    def _convert_to_sorted_cylindrical_coordinates(self, x, y, z):
+        r_temp = np.sqrt(x ** 2 + y ** 2)
+        theta_cyl_temp = np.arctan2(x, y) / np.pi * 180
+        theta_cyl_temp = np.around(theta_cyl_temp, 0)
+        sorted_indices = np.argsort(theta_cyl_temp * 100000 + z)
+        r_cyl = r_temp[sorted_indices]
+        theta_cyl = theta_cyl_temp[sorted_indices]
+        z_cyl = z[sorted_indices]
+        return r_cyl, theta_cyl, z_cyl
+
+    def _remove_points_inside_speaker_stand(self, r_cyl, theta_cyl, z_cyl):
+        # everything in mm and degrees
+        keep_indices = (r_cyl > 30.0)  # diameter central pole is 50mm
+        self._r_cyl = r_cyl[keep_indices]
+        self._theta_cyl = theta_cyl[keep_indices]
+        self._z_cyl = z_cyl[keep_indices]
+
+    def _spherical_to_cartesian(self, radius):
+        x = radius * np.sin(self._thetas) * np.cos(self._phis)
+        y = radius * np.sin(self._thetas) * np.sin(self._phis)
+        z = radius * np.cos(self._thetas)
+        return x, y, z
+
+    def _generate_evenly_spread_points_on_unit_sphere(self):
         n = self._nr_of_points
         a = 4 * np.pi / n  # r ^ 2 = 1, 'a' is the surface area around a single point
         d = np.sqrt(a)  # this is the length of the (assumed) square area
         m_theta = round(np.pi / d)  # this is the amount of circles
         d_theta = np.pi / m_theta  # length resulting in an integer number of circles
         d_phi = a / d_theta  # other side of square (which has become a rectangle)
-
         self._thetas = np.empty((0, 0))
         self._phis = np.empty((0, 0))
-
         for m in range(m_theta):
             theta = np.pi * (m + 0.5) / m_theta  # theta of the circle
             m_phi = round(2 * np.pi * np.sin(theta) / d_phi)  # number of points on circle
@@ -69,46 +106,44 @@ class SphericalMeasurementPointsArcsRandom:
                 self._thetas = np.append(self._thetas, theta)
                 self._phis = np.append(self._phis, phi)
 
-        radius = np.random.uniform(self._radius - self._wall_spacing, self._radius, np.size(self._phis))
-
-        x = radius * np.sin(self._thetas) * np.cos(self._phis)
-        y = radius * np.sin(self._thetas) * np.sin(self._phis)
-        z = radius * np.cos(self._thetas)
-
-        r_temp = np.sqrt(x ** 2 + y ** 2)
-        theta_cyl_temp = np.arctan2(x, y) / np.pi * 180
-        theta_cyl_temp = np.around(theta_cyl_temp, 2)
-
-        sorted_indices = np.argsort(theta_cyl_temp * 100000 + z)
-
-        r_cyl = r_temp[sorted_indices]
-        theta_cyl = theta_cyl_temp[sorted_indices]
-        z_cyl = z[sorted_indices]
-
-        # everything in mm and degrees
-        keep_indices = (r_cyl > 30.0)  # diameter central pole is 50mm
-        self._r_cyl = r_cyl[keep_indices]
-        self._theta_cyl = theta_cyl[keep_indices]
-        self._z_cyl = z_cyl[keep_indices]
-
-        self._actual_nr_of_points = self._r_cyl.size
-        self._current_index = 0
-
     def get_radius(self) -> float:
+        """
+        Represents a function to retrieve the radius of a given object.
+
+        This method is designed to return the private attribute `_radius`, which stores
+        the radius value. It does not modify any attribute or take any parameters, and
+        it returns the radius as a float.
+
+        :return: The radius of the object.
+        :rtype: float
+        """
         return self._radius
 
     def next(self) -> CylindricalPosition:
-        i = self._current_index
-        r = self._r_cyl[i]
-        theta = self._theta_cyl[i]
-        z = self._z_cyl[i]
+        """
+        Retrieve the next cylindrical position from the internal lists of cylindrical
+        coordinates. The method iterates through a pre-defined set of cylindrical
+        positions. Once the end of the list is reached, the ready status is updated.
+        :raises IndexError: If the lists are accessed out of bounds due to incorrect
+            indexing or inconsistent list sizes.
+        :return: A `CylindricalPosition` object representing the current cylindrical
+            coordinates.
+        :rtype: CylindricalPosition
+        """
+        # Extract current cylindrical data as a tuple
+        current_coords = (self._r_cyl[self._current_index],
+                          self._theta_cyl[self._current_index],
+                          self._z_cyl[self._current_index])
 
         self._current_index += 1
+        self._check_ready_status()  # Update ready flag if iteration is complete
 
-        if self._current_index == self._actual_nr_of_points:
-            self._ready = True
+        # Create the CylindricalPosition object and return
+        return CylindricalPosition(*current_coords)
 
-        return CylindricalPosition(r, theta, z)
+    def _check_ready_status(self) -> None:
+        """Update the ready status when iteration is complete."""
+        self._ready = self._current_index >= self._actual_nr_of_points
 
     def reset(self) -> None:
         self._current_index = 0

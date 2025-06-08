@@ -66,7 +66,7 @@ def test_angular_move_to_no_move():
     angle = 10.0
 
     scanner = Scanner(mock_planar_mover, mock_angular_mover)
-    scanner.angular_move_to(angle)  # results in move
+    scanner.angular_move_to(angle)  # results in a move
     scanner.angular_move_to(angle)  # does not result in a move anymore
     mock_angular_mover.move_to.assert_called_once_with(angle)
 
@@ -85,7 +85,7 @@ def test_vertical_move_to_no_move():
     z = 10.0
 
     scanner = Scanner(mock_planar_mover, mock_angular_mover)
-    scanner.vertical_move_to(z)  # results in move
+    scanner.vertical_move_to(z)  # results in a move
     scanner.vertical_move_to(z)  # does not result in a move anymore
     mock_planar_mover.move_to_vertical.assert_called_once_with(z)
 

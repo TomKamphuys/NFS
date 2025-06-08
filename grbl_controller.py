@@ -4,24 +4,21 @@ import time
 from abc import ABC, abstractmethod
 from grbl_streamer import GrblStreamer  # type: ignore
 from loguru import logger
-# from websocket import create_connection
-from websockets.sync.client import connect
-
+from websockets.sync.client import connect, ClientConnection
 
 from datatypes import GrblConfig, CylindricalPosition
 
 
 class IGrblController(ABC):
     """
-    Interface that defines the contract for a GRBL Controller.
+    Represents an interface for a GRBL controller.
 
-    This class serves as an abstract base class (ABC) for creating GRBL controller
-    implementations. It defines the essential methods needed for communication
-    with GRBL devices, including shutting down the controller, sending messages,
-    and sending messages while waiting for the machine to be ready for movement.
-    All methods must be implemented by subclasses. The interface ensures consistent
-    behavior in any derived GRBL controller implementation.
-
+    This abstract base class defines a set of methods to communicate
+    and control a GRBL-powered device. It provides functionality for
+    sending messages, shutting down the controller, and querying the
+    device's position. Implementations of this interface must provide
+    concrete behavior for these methods to suit specific GRBL device
+    requirements.
     """
     @abstractmethod
     def shutdown(self) -> None:
@@ -36,18 +33,19 @@ class IGrblController(ABC):
         pass
 
     @abstractmethod
-    def get_position(self):
+    def get_position(self) -> CylindricalPosition:
         pass
 
 
 class GrblControllerMock(IGrblController):
     """
-    Mock implementation of IGrblController interface.
+    Mock implementation of the GrblController interface.
 
-    This class is used for testing purposes to simulate the functionality
-    of a Grbl controller without requiring actual hardware. It provides
-    basic mocking capabilities for shutdown, sending messages, and sending
-    messages while waiting for the system to be ready for the next move.
+    This class is used to simulate the behavior of a GRBL controller without
+    interacting with actual hardware. It provides basic mock functionality for
+    testing purposes, such as simulating message sending, obtaining position,
+    and shutting down operations. This allows developers to test systems that
+    rely on GRBL controllers in a controlled and predictable manner.
     """
     def shutdown(self) -> None:
         logger.trace(f'MockingShutting down')
@@ -65,27 +63,42 @@ class GrblControllerMock(IGrblController):
 
 class ESP32Duino(IGrblController):
     """
-    Represents a controller for managing an ESP32-based FluidNC GRBL system.
+    Provides an implementation of the ESP32Duino controller for managing FluidNC-based
+    CNC machines.
 
-    This class is a specialized implementation designed to control and manage an
-    ESP32-based FluidNC GRBL controller through a given connection. It provides
-    methods for communication, including sending messages, handling acknowledgments,
-    and ensuring proper connection management during initialization and shutdown.
+    The `ESP32Duino` class is a subclass of `IGrblController` and provides methods for
+    communicating with and controlling a FluidNC CNC machine. It includes features for
+    sending and receiving messages, handling position updates, and ensuring proper
+    connection management.
 
-    :ivar UNLOCK_COMMAND: Command used to unlock and clear any existing alarm.
+    :ivar UNLOCK_COMMAND: Command used to unlock and clear any alarm state.
     :type UNLOCK_COMMAND: str
-    :ivar _connection: The connection interface used for communication with the
-        device.
-    :type _connection: Any
+
+    :ivar _connection: Represents the underlying connection for communication with
+        the CNC controller.
+    :type _connection: ClientConnection
+
+    :ivar _position: Stores the current position of the CNC tool head in cylindrical
+        coordinates.
+    :type _position: CylindricalPosition
     """
     UNLOCK_COMMAND = "$X"  # Command to unlock and clear any alarm
 
-    def __init__(self, connection):
+    def __init__(self, connection: ClientConnection) -> None:
         self._position = CylindricalPosition(0, 0, 0)
         self._connection = connection
         self._unlock()
 
     def get_position(self):
+        """
+        Gets the current position value stored in the `_position` attribute.
+
+        This method retrieves the value of the `_position` attribute and returns it
+        to the caller. The `_position` attribute is expected to contain relevant
+        information about the position of the object.
+
+        :return: The current value of the `_position` attribute.
+        """
         return self._position
 
     def _unlock(self) -> None:
@@ -174,14 +187,13 @@ class ESP32Duino(IGrblController):
 
 class GrblControllerFactory:
     """
-    Factory class to create instances of different types of GRBL controllers.
+    Creates instances of GRBL controller types based on configuration.
 
-    This class provides static methods to create specific GRBL controller objects
-    based on given configuration details. It reads the configuration from a file
-    to determine the type of controller and its relevant settings. The supported
-    controller types include Arduino, ESP32Duino, and Mock implementations. This
-    class also provides methods to configure the axes of a controller according
-    to the specified GRBL settings.
+    This class provides factory methods to create various GRBL controllers, such as
+    Arduino, ESP32Duino, and Mock controllers, using a configuration file. It handles
+    the parsing of the configuration and the instantiation of the appropriate controller
+    class based on the type specified in the configuration file. Additional methods
+    assist in configuring specific GRBL controller settings like axes configurations.
     """
     @staticmethod
     def create(section: str, config_file: str) -> IGrblController:
@@ -195,7 +207,6 @@ class GrblControllerFactory:
         elif type_to_build == 'ESP32Duino':
             web_socket = config_parser.get(section, 'web_socket')
             connection = connect(web_socket, ping_interval=None)
-            # connection = create_connection(web_socket)
             esp32duino =  ESP32Duino(connection)
 
             x_section = config_parser.get(section, 'grbl_x_axis_config')
@@ -231,16 +242,20 @@ class GrblControllerFactory:
 
 class Arduino(IGrblController):
     """
-    Represents an Arduino-based GRBL controller for managing CNC operations.
+    Class representing an Arduino-based controller for interfacing with GRBL devices.
 
-    The Arduino class is designed to interface with a GRBL-enabled CNC device. It supports
-    initializing the GRBL device with configurations from a file, sending commands, and
-    managing the status of the device. The class provides functionality for axis-specific
-    settings, streaming commands, and handling GRBL events.
+    This class is a specialized implementation that integrates with GRBL firmware to
+    control CNC machines or similar devices. It handles configuration loading, GRBL
+    streaming setup, and axis-specific settings. The class provides a set of methods
+    to send commands to the GRBL device, wait for specific operations to complete,
+    and shut down the connection cleanly. Logging is extensively used for debugging
+    and monitoring events.
 
-    :ivar _grbl_streamer: Streaming interface for GRBL device communication.
+    :ivar _grbl_streamer: Instance of a GRBL streaming implementation, either a mock or
+        an actual streamer depending on the configuration.
     :type _grbl_streamer: GrblStreamer or GrblStreamerMock
-    :ivar _ready: Indicates whether the GRBL controller is ready to accept new commands.
+    :ivar _ready: Internal flag indicating whether the GRBL device is ready for the next
+        command. Used for synchronous operations.
     :type _ready: bool
     """
     def _on_grbl_event(self, event, *data) -> None:
@@ -328,12 +343,14 @@ class Arduino(IGrblController):
 
 class GrblStreamerMock:
     """
-    A mock class for simulating GRBL streamer behavior for testing purposes.
+    Mock implementation of a Grbl streamer.
 
-    This class provides a mocked implementation of the GRBL streaming interface,
-    allowing users to simulate connections, commands, and events in controlled
-    test environments. It is intended to aid in the development and testing of
-    systems that interact with GRBL without requiring actual hardware.
+    This class serves as a mock for testing purposes, simulating the behavior of
+    a Grbl streamer without requiring actual hardware or network connections. It
+    replicates key functionality such as connecting, sending messages, and
+    handling events, with logging used to simulate and record operations. This
+    is useful in testing environments where actual hardware-in-the-loop is not
+    feasible.
     """
     def __init__(self):
         """

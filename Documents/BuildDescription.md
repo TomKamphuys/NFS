@@ -195,6 +195,15 @@ RCA cable
 DC power supply (20V) for servo motors
 
 
+# Build description
+
+## Rotation Table
+
+## Motion Controllers
+
+## Arm
+
+
 
 
 

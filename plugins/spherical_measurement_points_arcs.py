@@ -7,6 +7,36 @@ logger.add('scanner.log', mode='w', level="TRACE")
 
 
 class SphericalMeasurementPointsArcs:
+    """
+    Handles the computation of spherical measurement points and their conversion to
+    cylindrical coordinates for a specified spherical surface. This class calculates
+    point positions on a spherical grid, including an inner wall, and processes these
+    points into cylindrical coordinates for specific applications in measurement
+    or analysis systems. Points below a certain radius are filtered out.
+
+    :ivar _ready: Indicates whether the iteration through points is complete.
+    :type _ready: bool
+    :ivar _radius: Radius of the sphere in millimeters.
+    :type _radius: float
+    :ivar _wall_spacing: Distance between the inner and outer spherical surfaces in millimeters.
+    :type _wall_spacing: float
+    :ivar _nr_of_points: Total number of points on the spherical grid.
+    :type _nr_of_points: int
+    :ivar _thetas: Collection of theta angles of the spherical grid points.
+    :type _thetas: numpy.ndarray
+    :ivar _phis: Collection of phi angles of the spherical grid points.
+    :type _phis: numpy.ndarray
+    :ivar _r_cyl: Radial cylindrical coordinates of the valid points.
+    :type _r_cyl: numpy.ndarray
+    :ivar _theta_cyl: Angular cylindrical coordinates of the valid points.
+    :type _theta_cyl: numpy.ndarray
+    :ivar _z_cyl: Axial cylindrical coordinates of the valid points.
+    :type _z_cyl: numpy.ndarray
+    :ivar _actual_nr_of_points: Total number of valid points after filtering.
+    :type _actual_nr_of_points: int
+    :ivar _current_index: Current index of the cylindrical point being iterated.
+    :type _current_index: int
+    """
     def __init__(self,
                  nr_of_points,
                  wall_spacing,
