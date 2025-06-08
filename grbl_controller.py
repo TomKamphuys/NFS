@@ -234,10 +234,22 @@ class GrblControllerFactory:
     @staticmethod
     def _set_axis_according_to_config(esp32duino: ESP32Duino, grbl_config: GrblConfig, axis: str) -> None:
         prefix = f'$/axes/{axis}/'
+        direction_pin='gpio.16'
+        if axis == 'x':
+            direction_pin = 'gpio.16'
+
+        if axis == 'y':
+            direction_pin = 'gpio.27'
+
+        addition = ':low'
+        if grbl_config.invert_direction:
+            addition = ''
+
         esp32duino.send(f'{prefix}steps_per_mm={grbl_config.steps_per_millimeter}')
         esp32duino.send(f'{prefix}max_rate_mm_per_min={grbl_config.maximum_rate}')
         esp32duino.send(f'{prefix}acceleration_mm_per_sec2={grbl_config.acceleration}')
-        esp32duino.send(f'{prefix}homing/positive_direction={grbl_config.invert_direction}')
+        esp32duino.send(f'{prefix}motor0/stepstick/direction_pin={direction_pin}{addition}')
+        esp32duino.send(f'{prefix}')
 
 
 class Arduino(IGrblController):

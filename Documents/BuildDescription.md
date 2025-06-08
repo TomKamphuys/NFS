@@ -201,7 +201,63 @@ DC power supply (20V) for servo motors
 
 ## Motion Controllers
 
+config can be found [here](https://gitlab.com/pan-tilt-slider/pants/-/blob/main/fluidncConfigFile/config.yaml)
+
+TODO motion direction...
+
+
 ## Arm
+
+## Raspberry Pi
+
+NFS (python code) is cloned into ~/NFS
+
+Start (python) virtual environment
+
+```
+source venv/bin/activate
+```
+
+Start NFS app
+```
+python nfs_app.py&
+```
+
+N.B. the '&' at the end of the command keeps it running after the terminal has closed.
+
+
+Go to the website: http://192.168.0.103:8086/
+
+N.B. The port number (8086) has to be the same as in the nfs_app.py file.
+This is not always closing properly and then you have to alter the port in the nfs_app.py, e.g. add 1,
+and point you browser to that new port.
+
+If you want to get a feel for what is happening, open a new terminal
+(e.g. using putty) on the nfs raspberry pi and type:
+
+```
+tail -f ~/NFS/scanner.log
+```
+
+Stop scanner
+
+```
+ps nfs
+```
+
+look for the PID of python nfs_app.py
+
+```
+kill {PIDNUMBER}
+``` 
+
+### login
+Username: tom
+Password: ********
+
+## Wifi network
+
+SSID : NearFieldScanner
 
 
 
