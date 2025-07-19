@@ -48,9 +48,9 @@ class SphericalMeasurementPointsArcsRandom:
                  radius: float) -> None:
 
         self._ready = False
-        self._radius = radius
-        self._wall_spacing = wall_spacing
-        self._nr_of_points = nr_of_points
+        self._radius = float(radius)
+        self._wall_spacing = float(wall_spacing)
+        self._nr_of_points = int(nr_of_points)
 
         self._generate_evenly_spread_points_on_unit_sphere()
 

@@ -210,6 +210,9 @@ TODO motion direction...
 
 ## Raspberry Pi
 
+find out audio device id:
+https://python-sounddevice.readthedocs.io/en/0.3.15/api/checking-hardware.html
+
 NFS (python code) is cloned into ~/NFS
 
 Start (python) virtual environment
@@ -218,9 +221,16 @@ Start (python) virtual environment
 source venv/bin/activate
 ```
 
+start the linux program 'screen'. It allows the nfs app to continue even after the terminal that started
+the nfs app is closed
+
+```
+screen -a
+```
+
 Start NFS app
 ```
-python nfs_app.py&
+python nfs_app.py
 ```
 
 N.B. the '&' at the end of the command keeps it running after the terminal has closed.

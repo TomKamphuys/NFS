@@ -88,7 +88,7 @@ class Audio(IAudio):
                                                            (self._minimum_frequency, self._maximum_frequency))
         h = y * x_inverted
 
-        # apply high-pass to reject out of band noise
+        # apply high-pass to reject out-of-band noise
         h_processed = pf.dsp.filter.butterworth(h, 8, 15, 'highpass')
 
         # window to reduce impulse response length
