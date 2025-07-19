@@ -38,13 +38,13 @@ class PlanarMover:
         self._grbl_controller.send_and_wait_for_move_ready(f'G03 X{z:.4f} Y{r:.4f} R{radius:.4f} F{self._feed_rate}')
 
     def move_to_rz(self, r: float, z: float) -> None:
-        self._grbl_controller.send_and_wait_for_move_ready(f'G0 X{z}Y{r}')
+        self._grbl_controller.send_and_wait_for_move_ready(f'G0 X{z:.4f} Y{r:.4f}')
 
     def move_to_vertical(self, z: float) -> None:
-        self._grbl_controller.send_and_wait_for_move_ready(f'G0 X{z}')
+        self._grbl_controller.send_and_wait_for_move_ready(f'G0 X{z:.4f}')
 
     def move_to_radial(self, r: float) -> None:
-        self._grbl_controller.send_and_wait_for_move_ready(f'G0 Y{r}')
+        self._grbl_controller.send_and_wait_for_move_ready(f'G0 Y{r:.4f}')
 
     def set_as_zero(self) -> None:
         self._grbl_controller.send('G92 X0 Y0')
