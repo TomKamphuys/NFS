@@ -21,7 +21,7 @@ class PlanarMover:
     :ivar _grbl_controller: Instance of the GRBL controller used to send movement commands.
     :type _grbl_controller: IGrblController
     :ivar _feed_rate: The feed rate for motions in the system.
-    :type _feed_rate: float
+    :type _feed_rate: Float
     """
     def __init__(self, grbl_controller: IGrblController, feed_rate: float):
         self._feed_rate = feed_rate
@@ -74,7 +74,7 @@ class Scanner:
         self._update_position(r=r)
 
     def planar_move_to(self, r: float, z: float):
-        """Move to a specified planar position (radial + vertical)."""
+        """Move to a specified planar position (radial and vertical)."""
         self._planar_mover.move_to_rz(r, z)
         self._update_position(r=r, z=z)
 
@@ -117,11 +117,11 @@ class Scanner:
         self.move_out(-amount)
 
     def move_up(self, amount: float) -> None:
-        """Increase vertical position by a specified amount."""
+        """Increase the vertical position by a specified amount."""
         self.vertical_move_to(self._cylindrical_position.z() + amount)
 
     def move_down(self, amount: float) -> None:
-        """Decrease vertical position by a specified amount."""
+        """Decrease the vertical position by a specified amount."""
         self.move_up(-amount)
 
     def get_position(self) -> CylindricalPosition:
@@ -189,7 +189,7 @@ class SphericalMeasurementMotionManager:
         :return: None
         """
         radius = self._measurement_points.get_radius()
-        logger.info(f'Performing a first move to a safe radius: {radius} mm')
+        logger.info(f'Performing a first move to a safe radius: {radius:.4f} mm')
         self._scanner.planar_move_to(radius, 0.0)
 
     def next(self) -> CylindricalPosition:
@@ -302,7 +302,7 @@ class SphericalMeasurementMotionManager:
             z *= ratio
             x_plane = math.sqrt(x ** 2 + y ** 2)
             logger.debug(
-                f'Performing a (spherical) radius move {current_position.length()} mm to {position.length()} mm')
+                f'Performing a (spherical) radius move {current_position.length():.4f} mm to {position.length():.4f} mm')
             self._scanner.planar_move_to(x_plane, z)
         else:
             logger.debug('No (spherical) radial move needed.')
@@ -321,7 +321,7 @@ class SphericalMeasurementMotionManager:
         current_position = self._scanner.get_position()
 
         if abs(current_position.t() - position.t()) > self.TOLERANCE:
-            logger.debug(f'Performing an angular move from {current_position.t()} degrees to {position.t()} degrees')
+            logger.debug(f'Performing an angular move from {current_position.t():.4f} degrees to {position.t():.4f} degrees')
             self._scanner.angular_move_to(position.t())
         else:
             logger.debug('No Angular move needed.')
@@ -333,12 +333,12 @@ class ScannerFactory:
 
     This class provides a mechanism to create and configure a Scanner object
     using a configuration file. It reads the configuration file, initializes
-    the necessary components such as angular and planar movers, and builds the
+    the necessary parts such as angular and planar movers, and builds the
     Scanner object.
 
     :ivar config_file: The path to the configuration file used to initialize
         the Scanner.
-    :type config_file: str
+    :type config_file: Str
     """
     @staticmethod
     def create(config_file: str) -> Scanner:

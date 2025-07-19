@@ -29,10 +29,10 @@ class NearFieldScanner:
 
     def take_single_measurement(self) -> None:
         """
-            This function takes a single measurement. This is handy for checking
-            the audio levels.
-            :return: nothing
-            """
+        This function takes a single measurement. This is handy for checking
+        the audio levels.
+        :return: Nothing
+        """
         self._audio.measure_ir(self._scanner.get_position())
 
     def take_measurement_set(self) -> None:
@@ -67,7 +67,7 @@ class NearFieldScannerFactory:
     """
     A factory class for creating Near Field Scanner objects.
 
-    This class provides a method to create a Near Field Scanner by utilizing
+    This class provides a method to create a Near Field Scanner by using
     the given scanner and a configuration file. It handles loading plugins,
     creating necessary audio configurations, parsing the configuration file,
     and initializing the measurement manager for the scanner.
@@ -75,7 +75,7 @@ class NearFieldScannerFactory:
     @staticmethod
     def create(scanner: Scanner, config_file: str) -> NearFieldScanner:
         """
-        Create a Near Field Scanner based on config file
+        Create a Near Field Scanner based on a config file
         :param scanner:
         :param config_file:
         :return: near field scanner

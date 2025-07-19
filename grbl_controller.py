@@ -134,7 +134,7 @@ class ESP32Duino(IGrblController):
         waits for idle.
 
         :param message: The message to be sent.
-        :type message: str
+        :type message: Str
         :return: None
         """
         self.send(message)
@@ -256,7 +256,7 @@ class Arduino(IGrblController):
     :type _grbl_streamer: GrblStreamer or GrblStreamerMock
     :ivar _ready: Internal flag indicating whether the GRBL device is ready for the next
         command. Used for synchronous operations.
-    :type _ready: bool
+    :type _ready: Bool
     """
     def _on_grbl_event(self, event, *data) -> None:
         logger.trace(event)
@@ -350,7 +350,7 @@ class GrblStreamerMock:
     replicates key functionality such as connecting, sending messages, and
     handling events, with logging used to simulate and record operations. This
     is useful in testing environments where actual hardware-in-the-loop is not
-    feasible.
+    possible.
     """
     def __init__(self):
         """
