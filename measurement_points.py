@@ -8,7 +8,7 @@ class MeasurementPoints(Protocol):
     This class defines the protocol for measurement points in a system, ensuring a specific interface
     is followed. It provides functionality to retrieve measurement positions in cylindrical coordinates,
     check the readiness state of the points, get a specified radius, reset internal states, and determine
-    if evasive maneuvers are necessary. It is typically utilized in applications involving positional
+    if evasive maneuvers are necessary. It is typically used in applications involving positional
     data collection or path planning.
     """
     def next(self) -> CylindricalPosition:

@@ -133,7 +133,7 @@ class CylindricalPosition:
                  "(self.r(), self.t(), self.z())".
         :rtype: str
         """
-        return f'({self.r()}, {self.t()}, {self.z()})'
+        return f'({self.r():.4f}, {self.t():.4f}, {self.z():.4f})'
 
     def r(self) -> float:
         """
