@@ -321,7 +321,7 @@ class SphericalMeasurementMotionManager:
         current_position = self._scanner.get_position()
 
         if abs(current_position.t() - position.t()) > self.TOLERANCE:
-            logger.debug(f'Performing an angular move from {current_position.t():.4f} degrees to {position.t():.4f} degrees')
+            logger.debug(f'Performing an angular move from {current_position.t():.4f}° to {position.t():.4f}°')
             self._scanner.angular_move_to(position.t())
         else:
             logger.debug('No Angular move needed.')

@@ -56,7 +56,7 @@ class GrblRotator(IRotator):
         """
         Rotate to the specified angle.
         """
-        logger.trace(f'Sending move-to command for {angle:.4f} degrees')
+        logger.trace(f'Sending move-to command for {angle:.4f}°')
         self._grbl_controller.send_and_wait_for_move_ready(f'G0 X{angle:.4f}')
 
     def set_as_zero(self) -> None:
@@ -140,7 +140,7 @@ class RotatorMock(IRotator):
         pass
 
     def move_to(self, angle: float) -> None:
-        logger.trace(f'{angle:.4f} degrees')
+        logger.trace(f'{angle:.4f}°')
 
     def set_as_zero(self) -> None:
         pass
