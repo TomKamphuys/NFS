@@ -238,7 +238,6 @@ class GrblControllerFactory:
         esp32duino.send(f'{prefix}steps_per_mm={grbl_config.steps_per_millimeter}')
         esp32duino.send(f'{prefix}max_rate_mm_per_min={grbl_config.maximum_rate}')
         esp32duino.send(f'{prefix}acceleration_mm_per_sec2={grbl_config.acceleration}')
-        # Invert direction not working. Don't know why
 
 
 class Arduino(IGrblController):
