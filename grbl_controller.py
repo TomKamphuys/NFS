@@ -138,7 +138,8 @@ class ESP32Duino(IGrblController):
         :return: None
         """
         self.send(message)
-        self._wait_for_idle()
+        self.send('G04 P0')
+        # self._wait_for_idle()
 
     def _wait_for_idle(self) -> None:
         ready = False
