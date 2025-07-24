@@ -47,7 +47,7 @@ class PlanarMover:
         self._grbl_controller.send_and_wait_for_move_ready(f'G0 Y{r:.4f}')
 
     def set_as_zero(self) -> None:
-        self._grbl_controller.send('G92 X0 Y0')
+        self._grbl_controller.send('G92 X0 Y230')  # TODO quick hack, should be both zero
         self._grbl_controller.send('$10=0')
 
     def shutdown(self) -> None:
