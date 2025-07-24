@@ -139,6 +139,10 @@ class ESP32Duino(IGrblController):
         """
         self.send(message)
         self.send('G04 P0')
+        self._send_immediate('?')
+        time.sleep(0.2)
+        result = self._receive()
+        self._parse_position(result)
         # self._wait_for_idle()
 
     def _wait_for_idle(self) -> None:
