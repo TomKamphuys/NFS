@@ -4,8 +4,8 @@ import time
 from abc import ABC, abstractmethod
 from grbl_streamer import GrblStreamer  # type: ignore
 from loguru import logger
-from websockets.sync.client import connect, ClientConnection
 
+from client_connection import ClientConnectionFactory, IClientConnection
 from datatypes import GrblConfig, CylindricalPosition
 
 
@@ -56,9 +56,26 @@ class GrblControllerMock(IGrblController):
     def send_and_wait_for_move_ready(self, message: str) -> None:
         logger.trace(f'Mocking send and wait')
 
-    def get_position(self):
+    def get_position(self) -> CylindricalPosition:
         logger.trace(f'Mocking get_position')
         return CylindricalPosition(100, 0, 0)
+
+
+class GrblFileWriter(IGrblController):
+    def shutdown(self) -> None:
+        pass
+
+    def send(self, message: str) -> None:
+        with open('grbl_file.gcode', 'a') as f:
+            f.write(message + '\n')
+
+    def send_and_wait_for_move_ready(self, message: str) -> None:
+        with open('grbl_file.gcode', 'a') as f:
+            f.write(message + '\n')
+            f.write('G04 P0' + '\n')  # TODO this seems to be at the wrong level. Mock ClientConnection
+
+    def get_position(self) -> CylindricalPosition:
+        return CylindricalPosition(1000, 0, 0)
 
 
 class ESP32Duino(IGrblController):
@@ -84,7 +101,7 @@ class ESP32Duino(IGrblController):
     """
     UNLOCK_COMMAND = "$X"  # Command to unlock and clear any alarm
 
-    def __init__(self, connection: ClientConnection) -> None:
+    def __init__(self, connection: IClientConnection) -> None:
         self._position = CylindricalPosition(0, 0, 0)
         self._connection = connection
         self._unlock()
@@ -139,21 +156,17 @@ class ESP32Duino(IGrblController):
         """
         self.send(message)
         self.send('G04 P0')
-        self._send_immediate('?')
-        time.sleep(0.2)
-        result = self._receive()
-        self._parse_position(result)
-        # self._wait_for_idle()
+        self._wait_for_idle()  # TODO this might do exactly what needs to be done, but '_get_current_position' is a better name
 
     def _wait_for_idle(self) -> None:
         ready = False
+        self._send_immediate('?')
         while not ready:
-            self._send_immediate('?')
             time.sleep(0.2)
             result = self._receive()
-            self._parse_position(result)
-            logger.trace(f'Scanner is at: {self._position}')
             if "Idle" in result:
+                self._parse_position(result)  # TODO shouldn't this be in the if Idle?
+                logger.trace(f'Scanner is at: {self._position}')
                 ready = True
 
     def _parse_position(self, status: str) -> None:
@@ -178,13 +191,14 @@ class ESP32Duino(IGrblController):
         ready = False
         while not ready:
             time.sleep(0.01)
-            result = self._receive()
+            result = self._receive().rstrip()
+            logger.trace(f'Received: {result}')
             if "ok" in result:
                 ready = True
 
     def _receive(self) -> str:
         """Receive a message from the connection."""
-        result = self._connection.recv()
+        result = self._connection.receive()
         if isinstance(result, bytes):
             result = result.decode("utf-8")
         return result
@@ -210,8 +224,8 @@ class GrblControllerFactory:
         if type_to_build == 'Arduino':
             return Arduino(config_file)
         elif type_to_build == 'ESP32Duino':
-            web_socket = config_parser.get(section, 'web_socket')
-            connection = connect(web_socket, ping_interval=None)
+            client_controller_section = config_parser.get(section, 'client_controller')
+            connection = ClientConnectionFactory.create(client_controller_section, config_file)
             esp32duino =  ESP32Duino(connection)
 
             x_section = config_parser.get(section, 'grbl_x_axis_config')
@@ -225,6 +239,8 @@ class GrblControllerFactory:
             return esp32duino
         elif type_to_build == 'Mock':
             return GrblControllerMock()
+        elif type_to_build == 'GrblFileWriter':
+            return GrblFileWriter()
         else:
             raise Exception(f'Unknown controller type: {type}')
 

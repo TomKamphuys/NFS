@@ -239,7 +239,7 @@ class SphericalMeasurementMotionManager:
         :rtype: None
         """
         current_position = self._scanner.get_position()
-        logger.info(f'Moving to {position} from {current_position}')
+        logger.info(f'Moving: {current_position} --> {position}')
         self._perform_angular_move(position)
         self._perform_radial_move(position)
         self._perform_circular_arc_move(position)
@@ -324,7 +324,7 @@ class SphericalMeasurementMotionManager:
             logger.debug(f'Performing an angular move from {current_position.t():.4f}° to {position.t():.4f}°')
             self._scanner.angular_move_to(position.t())
         else:
-            logger.debug('No Angular move needed.')
+            logger.debug('No angular move needed.')
 
 
 class ScannerFactory:

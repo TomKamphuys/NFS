@@ -72,7 +72,7 @@ class GrblRotator(IRotator):
         self._grbl_controller.shutdown()
 
     def get_position(self) -> CylindricalPosition:
-        # bit weird, but rotation is x axis on cnc shield which ends up in r...
+        # looks a bit weird, but rotation is x-axis on cnc shield which ends up in r, so it is correct
         return CylindricalPosition(0.0, self._grbl_controller.get_position().r(), 0.0)
 
     # Private helper methods
