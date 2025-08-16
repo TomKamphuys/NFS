@@ -32,10 +32,6 @@ class IGrblController(ABC):
     def send_and_wait_for_move_ready(self, message: str) -> None:
         pass
 
-    @abstractmethod
-    def get_position(self) -> CylindricalPosition:
-        pass
-
 
 class GrblControllerMock(IGrblController):
     """
@@ -56,10 +52,6 @@ class GrblControllerMock(IGrblController):
     def send_and_wait_for_move_ready(self, message: str) -> None:
         logger.trace(f'Mocking send and wait')
 
-    def get_position(self) -> CylindricalPosition:
-        logger.trace(f'Mocking get_position')
-        return CylindricalPosition(100, 0, 0)
-
 
 class GrblFileWriter(IGrblController):
     def shutdown(self) -> None:
@@ -73,9 +65,6 @@ class GrblFileWriter(IGrblController):
         with open('grbl_file.gcode', 'a') as f:
             f.write(message + '\n')
             f.write('G04 P0' + '\n')  # TODO this seems to be at the wrong level. Mock ClientConnection
-
-    def get_position(self) -> CylindricalPosition:
-        return CylindricalPosition(1000, 0, 0)
 
 
 class ESP32Duino(IGrblController):
@@ -102,21 +91,8 @@ class ESP32Duino(IGrblController):
     UNLOCK_COMMAND = "$X"  # Command to unlock and clear any alarm
 
     def __init__(self, connection: IClientConnection) -> None:
-        self._position = CylindricalPosition(0, 0, 0)
         self._connection = connection
         self._unlock()
-
-    def get_position(self):
-        """
-        Gets the current position value stored in the `_position` attribute.
-
-        This method retrieves the value of the `_position` attribute and returns it
-        to the caller. The `_position` attribute is expected to contain relevant
-        information about the position of the object.
-
-        :return: The current value of the `_position` attribute.
-        """
-        return self._position
 
     def _unlock(self) -> None:
         """Initialize the connection by unlocking and clearing the buffer."""
@@ -156,35 +132,6 @@ class ESP32Duino(IGrblController):
         """
         self.send(message)
         self.send('G04 P0')
-        self._wait_for_idle()  # TODO this might do exactly what needs to be done, but '_get_current_position' is a better name
-
-    def _wait_for_idle(self) -> None:
-        ready = False
-        self._send_immediate('?')
-        while not ready:
-            time.sleep(0.2)
-            result = self._receive()
-            if "Idle" in result:
-                self._parse_position(result)  # TODO shouldn't this be in the if Idle?
-                logger.trace(f'Scanner is at: {self._position}')
-                ready = True
-
-    def _parse_position(self, status: str) -> None:
-        """
-        Parses the machine status string to extract WPos (Work Position) coordinates.
-    
-        :param status: The status string to parse, e.g., '<Idle|WPos:147.982,249.409,-1333.558,-1333.558|FS:0,0>'.
-        :return: A CylindricalPosition object representing the WPos values.
-        """
-        start = status.find(":") + 1
-
-        if start < 6:
-            return
-
-        end = status.find("|", start)
-        position = status[start:end].split(",")
-        self._position = CylindricalPosition(float(position[0]), float(position[1]), float(position[2]))
-        return
 
     def _wait_for_ack(self) -> None:
         """Wait until an 'ok' acknowledgment is received from the hardware."""

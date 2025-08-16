@@ -27,10 +27,6 @@ class PlanarMover:
         self._feed_rate = feed_rate
         self._grbl_controller = grbl_controller
 
-    def get_position(self) -> CylindricalPosition:
-        # bit weird, but mapping from x,y to r, z
-        return CylindricalPosition(self._grbl_controller.get_position().t(), 0.0, self._grbl_controller.get_position().r())
-
     def cw_arc_move_to(self, r: float, z: float, radius: float) -> None:
         self._grbl_controller.send_and_wait_for_move_ready(f'G02 X{z:.4f} Y{r:.4f} R{radius:.4f} F{self._feed_rate}')
 
@@ -126,9 +122,7 @@ class Scanner:
 
     def get_position(self) -> CylindricalPosition:
         """Return the current cylindrical position."""
-        t = self._angular_mover.get_position()
-        rz = self._planar_mover.get_position()
-        return CylindricalPosition(rz.r(), t.t(), rz.z())
+        return self._cylindrical_position
 
     def set_as_zero(self) -> None:
         """Reset scanner to the zero position."""
@@ -189,7 +183,7 @@ class SphericalMeasurementMotionManager:
         :return: None
         """
         radius = self._measurement_points.get_radius()
-        logger.info(f'Performing a first move to a safe radius: {radius:.4f} mm')
+        logger.info(f'Performing a first move to a safe radius: {radius:.4f}mm')
         self._scanner.planar_move_to(radius, 0.0)
 
     def next(self) -> CylindricalPosition:
@@ -302,7 +296,7 @@ class SphericalMeasurementMotionManager:
             z *= ratio
             x_plane = math.sqrt(x ** 2 + y ** 2)
             logger.debug(
-                f'Performing a (spherical) radius move {current_position.length():.4f} mm to {position.length():.4f} mm')
+                f'Performing a (spherical) radius move {current_position.length():.4f}mm to {position.length():.4f}mm')
             self._scanner.planar_move_to(x_plane, z)
         else:
             logger.debug('No (spherical) radial move needed.')

@@ -6,7 +6,6 @@ from loguru import logger
 from configparser import ConfigParser
 from ticlib import TicUSB  # type: ignore
 
-from datatypes import CylindricalPosition
 from grbl_controller import IGrblController, GrblControllerFactory
 
 
@@ -33,10 +32,6 @@ class IRotator(ABC):
 
     @abstractmethod
     def shutdown(self) -> None:
-        pass
-
-    @abstractmethod
-    def get_position(self) -> CylindricalPosition:
         pass
 
 
@@ -70,10 +65,6 @@ class GrblRotator(IRotator):
         Safely shutdown the controller.
         """
         self._grbl_controller.shutdown()
-
-    def get_position(self) -> CylindricalPosition:
-        # looks a bit weird, but rotation is x-axis on cnc shield which ends up in r, so it is correct
-        return CylindricalPosition(0.0, self._grbl_controller.get_position().r(), 0.0)
 
     # Private helper methods
     def _send_reset_position_commands(self) -> None:
@@ -122,9 +113,6 @@ class TicRotator(IRotator):
     def shutdown(self) -> None:
         pass  # nothing to do here
 
-    def get_position(self) -> CylindricalPosition:
-        return CylindricalPosition(self._tic.get_current_position(), 0, 0)
-
 
 class RotatorMock(IRotator):
     """
@@ -147,9 +135,6 @@ class RotatorMock(IRotator):
 
     def shutdown(self) -> None:
         pass
-
-    def get_position(self) -> CylindricalPosition:
-        return CylindricalPosition(0, 0, 0)
 
 
 def calculate_steps_per_degree(config_parser: ConfigParser, section: str) -> float:
