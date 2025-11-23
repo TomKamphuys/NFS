@@ -1,6 +1,6 @@
 import pytest
-from datatypes import CylindricalPosition
-from plugins.spherical_measurement_points_arcs_random import SphericalMeasurementPointsArcsRandom
+from src.nfs.datatypes import CylindricalPosition
+from nfs.plugins.spherical_measurement_points_arcs_random import SphericalMeasurementPointsArcsRandom
 
 
 def test_spherical_initialization():

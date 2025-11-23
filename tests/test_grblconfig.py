@@ -1,4 +1,4 @@
-from datatypes import GrblConfig
+from src.nfs.datatypes import GrblConfig
 
 
 def test_grbl_config_initialization():

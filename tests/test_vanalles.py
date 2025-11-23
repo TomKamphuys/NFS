@@ -5,12 +5,11 @@ import numpy as np
 import pytest
 from loguru import logger
 
-import factory
-import loader
-from audio import AudioMock
-from datatypes import CylindricalPosition
-from nfs import NearFieldScanner, NearFieldScannerFactory
-from scanner import ScannerFactory
+from src.nfs import loader, factory
+from src.nfs.audio import AudioMock
+from src.nfs.datatypes import CylindricalPosition
+from src.nfs.nfs import NearFieldScanner, NearFieldScannerFactory
+from src.nfs.scanner import ScannerFactory
 
 logger.add('scanner.log', mode='w', level="TRACE", backtrace=True, diagnose=True)
 
@@ -118,3 +117,5 @@ def test_plugin():
         index += 1
         point = measurement_points.next()
         logger.trace(f'{index} : {point}')
+
+

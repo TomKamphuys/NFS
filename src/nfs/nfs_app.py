@@ -17,8 +17,8 @@ import sys
 from remi import gui
 from remi import start, App
 
-from nfs import NearFieldScannerFactory
-from scanner import ScannerFactory
+from .nfs import NearFieldScannerFactory
+from .scanner import ScannerFactory
 
 
 class NFSApp(App):
@@ -126,6 +126,18 @@ class NFSApp(App):
         self.move_down_10_btn = gui.Button('Down 10 mm', width=100, height=30, margkin='10px')
         self.move_down_10_btn.onclick.do(self.move_down_10)
 
+        self.move_ccw_1_btn = gui.Button('CCW 1 degree', width=100, height=30, margkin='10px')
+        self.move_ccw_1_btn.onclick.do(self.move_ccw_1)
+
+        self.move_ccw_10_btn = gui.Button('CCW 10 degrees', width=100, height=30, margkin='10px')
+        self.move_ccw_10_btn.onclick.do(self.move_ccw_10)
+
+        self.move_cw_1_btn = gui.Button('CW 1 degree', width=100, height=30, margkin='10px')
+        self.move_cw_1_btn.onclick.do(self.move_cw_1)
+
+        self.move_cw_10_btn = gui.Button('CW 10 degrees', width=100, height=30, margkin='10px')
+        self.move_cw_10_btn.onclick.do(self.move_cw_10)
+
         self.zero_btn = gui.Button('Zero scanner', width=100, height=30, margkin='10px')
         self.zero_btn.onclick.do(self.zero)
 
@@ -142,7 +154,7 @@ class NFSApp(App):
         sub_container_right.append([self.counter, self.lbl,
                                     self.move_out_10_btn, self.move_out_1_btn, self.move_in_1_btn, self.move_in_10_btn,
                                     self.move_up_10_btn, self.move_up_1_btn, self.move_down_1_btn,
-                                    self.move_down_10_btn,
+                                    self.move_down_10_btn, self.move_ccw_1_btn, self.move_ccw_10_btn, self.move_cw_1_btn, self.move_cw_10_btn,
                                     self.zero_btn,
                                     self.take_measurement_btn, self.take_measurement_set_btn,
                                     self.exit_btn])
@@ -156,7 +168,7 @@ class NFSApp(App):
         # this flag will be used to stop the display_counter Timer
         self.stop_flag = False
 
-        config_file = './config.ini'
+        config_file = '../../config.ini'
         self.scanner = ScannerFactory.create(config_file)
 
         self.nfs = NearFieldScannerFactory.create(self.scanner, config_file)
@@ -194,8 +206,24 @@ class NFSApp(App):
         self.scanner.move_down(1)
 
     def move_down_10(self, widget):
-        self.lbl.set_text('Moving in down mm')
+        self.lbl.set_text('Moving down 10 mm')
         self.scanner.move_down(10)
+
+    def move_ccw_1(self, widget):
+        self.lbl.set_text('Moving ccw 1 degree')
+        self.scanner.rotate_ccw(1)
+
+    def move_ccw_10(self, widget):
+        self.lbl.set_text('Moving ccw 10 degrees')
+        self.scanner.rotate_ccw(10)
+
+    def move_cw_1(self, widget):
+        self.lbl.set_text('Moving cw 1 degree')
+        self.scanner.rotate_cw(1)
+
+    def move_cw_10(self, widget):
+        self.lbl.set_text('Moving cw 10 degrees')
+        self.scanner.rotate_cw(10)
 
     def zero(self, widget):
         self.lbl.set_text('Zero scanner')

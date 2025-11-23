@@ -1,6 +1,6 @@
 import numpy as np
 
-from datatypes import CylindricalPosition
+from nfs.datatypes import CylindricalPosition
 
 
 class SphericalMeasurementPointsArcsRandom:
@@ -58,6 +58,8 @@ class SphericalMeasurementPointsArcsRandom:
 
         x, y, z = self._spherical_to_cartesian(radius)
 
+        # TODO split spherical measurement points and translated origin to measure off-center
+        # TODO and split (conversion to) cylindrical coordinates with limiting angle steps somewhere
         r_cyl, theta_cyl, z_cyl = self._convert_to_sorted_cylindrical_coordinates(x, y, z)
 
         self._remove_points_inside_speaker_stand(r_cyl, theta_cyl, z_cyl)
@@ -68,7 +70,7 @@ class SphericalMeasurementPointsArcsRandom:
     def _convert_to_sorted_cylindrical_coordinates(self, x, y, z):
         r_temp = np.sqrt(x ** 2 + y ** 2)
         theta_cyl_temp = np.arctan2(x, y) / np.pi * 180
-        theta_cyl_temp = np.around(theta_cyl_temp, 0)
+        theta_cyl_temp = np.around(theta_cyl_temp, 0)  # this makes sure angular steps of a degree are taken
         sorted_indices = np.argsort(theta_cyl_temp * 100000 + z)
         r_cyl = r_temp[sorted_indices]
         theta_cyl = theta_cyl_temp[sorted_indices]

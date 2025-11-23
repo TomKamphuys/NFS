@@ -1,7 +1,7 @@
 from unittest.mock import Mock, patch
 
 import pytest
-from grbl_controller import Arduino, GrblStreamerMock
+from src.nfs.grbl_controller import Arduino, GrblStreamerMock
 
 
 @pytest.fixture

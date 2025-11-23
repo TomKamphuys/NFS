@@ -5,8 +5,8 @@ from abc import ABC, abstractmethod
 from grbl_streamer import GrblStreamer  # type: ignore
 from loguru import logger
 
-from client_connection import ClientConnectionFactory, IClientConnection
-from datatypes import GrblConfig, CylindricalPosition
+from .client_connection import ClientConnectionFactory, IClientConnection
+from .datatypes import GrblConfig, CylindricalPosition
 
 
 class IGrblController(ABC):
@@ -183,6 +183,11 @@ class GrblControllerFactory:
             GrblControllerFactory._set_axis_according_to_config(esp32duino, grbl_config_x, 'x')
             GrblControllerFactory._set_axis_according_to_config(esp32duino, grbl_config_y, 'y')
 
+            esp32duino.send('$/stepping/idle_ms=255')  # always on, so no drift of position
+            esp32duino.send('$Motors/Init')  # Trinamic drivers (e.g., TMC2209) need this.
+
+            esp32duino.send('$CD=config.yaml')
+
             return esp32duino
         elif type_to_build == 'Mock':
             return GrblControllerMock()
@@ -201,11 +206,15 @@ class GrblControllerFactory:
 
     @staticmethod
     def _set_axis_according_to_config(esp32duino: ESP32Duino, grbl_config: GrblConfig, axis: str) -> None:
-        prefix = f'$/axes/{axis}/'
+        prefix = f'$/axes/{axis}'
 
-        esp32duino.send(f'{prefix}steps_per_mm={grbl_config.steps_per_millimeter}')
-        esp32duino.send(f'{prefix}max_rate_mm_per_min={grbl_config.maximum_rate}')
-        esp32duino.send(f'{prefix}acceleration_mm_per_sec2={grbl_config.acceleration}')
+        direction_pin = 16 if axis == 'x' else 27
+        direction_pin_attribute = 'low' if grbl_config.invert_direction else 'high'
+
+        esp32duino.send(f'{prefix}/steps_per_mm={grbl_config.steps_per_millimeter}')
+        esp32duino.send(f'{prefix}/max_rate_mm_per_min={grbl_config.maximum_rate}')
+        esp32duino.send(f'{prefix}/acceleration_mm_per_sec2={grbl_config.acceleration}')
+        esp32duino.send(f'{prefix}/motor0/stepstick/direction_pin=gpio.{direction_pin}:{direction_pin_attribute}')
 
 
 class Arduino(IGrblController):

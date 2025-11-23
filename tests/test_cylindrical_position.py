@@ -1,5 +1,5 @@
 import pytest
-from datatypes import CylindricalPosition
+from src.nfs.datatypes import CylindricalPosition
 
 
 def test_cylindrical_position_initialization():
@@ -42,4 +42,4 @@ def test_cylindrical_position_length():
 
 def test_cylindrical_position_str():
     position = CylindricalPosition(3.0, 1.57, 5.0)
-    assert str(position) == "(3.0, 1.57, 5.0)"
+    assert str(position) == "(3.0mm, 1.6°, 5.0mm)"

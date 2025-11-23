@@ -8,9 +8,64 @@ import pyfar as pf  # type: ignore
 import sounddevice as sd  # type: ignore
 from loguru import logger
 
-from datatypes import CylindricalPosition
+from .datatypes import CylindricalPosition
 
-logger.add('scanner.log', mode='w', level="TRACE")
+class Sweep:
+    def __init__(self, sweep: pf.Signal, minimum_frequency, maximum_frequency):
+        self.sweep = sweep
+        self.minimum_frequency = minimum_frequency
+        self.maximum_frequency = maximum_frequency
+
+
+class ISweep(ABC):
+    @abstractmethod
+    def generate(self) -> Sweep:
+        pass
+
+
+class WavSweep(ISweep):
+    def __init__(self, sweep_file: str, minimum_frequency, maximum_frequency):
+        self._sweep_file = sweep_file
+        self._minimum_frequency = minimum_frequency
+        self._maximum_frequency = maximum_frequency
+
+    def generate(self) -> Sweep:
+        return Sweep(pf.io.read_audio(self._sweep_file), self._minimum_frequency, self._maximum_frequency)
+
+
+class ExponentialSweep(ISweep):
+    def __init__(self, minimum_frequency, maximum_frequency, sampling_rate, duration, padding_time):
+        self._minimum_frequency = minimum_frequency
+        self._maximum_frequency = maximum_frequency
+        self._sampling_rate = sampling_rate
+        self._duration = duration
+        self._padding_time = padding_time
+
+    def generate(self) -> Sweep:
+        x = pf.signals.exponential_sweep_time(
+            n_samples=self._duration * self._sampling_rate,
+            frequency_range=[self._minimum_frequency, self._maximum_frequency],
+            sampling_rate=self._sampling_rate)
+        x_padded = pf.dsp.pad_zeros(x, pad_width=math.floor(self._padding_time * x.sampling_rate))
+        return Sweep(x_padded, self._minimum_frequency, self._maximum_frequency)
+
+
+class SweepFactory:
+    @staticmethod
+    def create(config_file: str) -> ISweep:
+        config_parser = configparser.ConfigParser(inline_comment_prefixes="#")
+        config_parser.read(config_file)
+
+        section = 'sweep'
+
+        type_to_build = config_parser.get(section, 'type')
+
+        if type_to_build == 'WavSweep':
+            return WavSweep(config_file.get(section, 'wavfile'), config_parser.getfloat(section, 'minimum_frequency'), config_parser.getfloat(section, 'maximum_frequency'))
+        elif type_to_build == 'ExponentialSweep':
+            return ExponentialSweep(config_parser.getfloat(section, 'minimum_frequency'), config_parser.getfloat(section, 'maximum_frequency'), config_parser.getint(section, 'sampling_rate'), config_parser.getfloat(section, 'duration'), config_parser.getfloat(section, 'padding_time'))
+        else:
+            raise Exception(f'Unknown sweep type: {type_to_build}')
 
 
 class IAudio(ABC):
@@ -50,17 +105,9 @@ class Audio(IAudio):
     """
     def __init__(self,
                  device_id,
-                 sample_rate,
-                 minimum_frequency,
-                 maximum_frequency,
-                 duration,
-                 padding_time):
-        self._sample_rate = sample_rate
-        self._minimum_frequency = minimum_frequency
-        self._maximum_frequency = maximum_frequency
-        self._duration = duration
-        self._padding_time = padding_time
+                 sweep: pf.Signal):
         sd.default.device = device_id
+        self._sweep = sweep
 
     def measure_ir(self, position: CylindricalPosition) -> None:
         """
@@ -68,24 +115,19 @@ class Audio(IAudio):
         It stores the result in a file with the position encoded in its name.
         """
         logger.info(f'IR measurement for position {position}')
-        x = pf.signals.exponential_sweep_time(
-            n_samples=self._duration * self._sample_rate,
-            frequency_range=[self._minimum_frequency, self._maximum_frequency],
-            sampling_rate=self._sample_rate)
-        x_padded = pf.dsp.pad_zeros(x,
-                                    pad_width=math.floor(self._padding_time * x.sampling_rate))
+        sampling_rate = self._sweep.sweep.sampling_rate
 
         recording = sd.playrec(
-            np.concatenate((x_padded.time.T, x_padded.time.T), axis=1),
-            x_padded.sampling_rate,
+            np.concatenate((self._sweep.sweep.time.T, self._sweep.sweep.time.T), axis=1),
+            sampling_rate,
             channels=2,
             blocking=True)
 
-        y = pf.Signal(recording[:, 0].T, x_padded.sampling_rate)
-        x_reference = pf.Signal(recording[:, 1].T, x_padded.sampling_rate)
+        y = pf.Signal(recording[:, 0].T, sampling_rate)
+        x_reference = pf.Signal(recording[:, 1].T, sampling_rate)
 
         x_inverted = pf.dsp.regularized_spectrum_inversion(x_reference,
-                                                           (self._minimum_frequency, self._maximum_frequency))
+                                                           (self._sweep.minimum_frequency, self.sweep.maximum_frequency))
         h = y * x_inverted
 
         # apply high-pass to reject out-of-band noise
@@ -96,7 +138,7 @@ class Audio(IAudio):
 
         pf.io.write_audio(
             h_processed,
-            os.path.join('Recordings', f'{position}.wav'),
+            os.path.join('../../Recordings', f'{position}.wav'),
             'DOUBLE')
 
 
@@ -114,6 +156,7 @@ class AudioMock(IAudio):
     def measure_ir(self, position: CylindricalPosition) -> None:
         logger.info(f'[MOCK] IR measurement for position {position}')
 
+
 class AudioFactory:
     """
     Factory class responsible for creating instances of Audio or AudioMock
@@ -126,7 +169,7 @@ class AudioFactory:
     to operate correctly.
     """
     @staticmethod
-    def create(config_file: str) -> AudioMock | Audio:
+    def create(config_file: str) -> IAudio:
         """
         Factory method that builds an Audio object based on a config file
         :param config_file: config file name containing the config
@@ -142,9 +185,6 @@ class AudioFactory:
             return AudioMock()
 
         device_id = config_parser.getint(section, 'device_id')
-        sample_rate = config_parser.getfloat(section, 'sample_rate')
-        minimum_frequency = config_parser.getfloat(section, 'minimum_frequency')
-        maximum_frequency = config_parser.getfloat(section, 'maximum_frequency')
-        duration = config_parser.getfloat(section, 'duration')
-        padding_time = config_parser.getfloat(section, 'padding_time')
-        return Audio(device_id, sample_rate, minimum_frequency, maximum_frequency, duration, padding_time)
+        sweep_generator = SweepFactory.create(config_file)
+        sweep = sweep_generator.generate()
+        return Audio(device_id, sweep)

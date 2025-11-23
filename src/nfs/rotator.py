@@ -6,7 +6,7 @@ from loguru import logger
 from configparser import ConfigParser
 from ticlib import TicUSB  # type: ignore
 
-from grbl_controller import IGrblController, GrblControllerFactory
+from .grbl_controller import IGrblController, GrblControllerFactory
 
 
 class IRotator(ABC):
@@ -40,19 +40,20 @@ class GrblRotator(IRotator):
     GrblRotator is responsible for handling rotation operations using a Grbl controller.
     """
     UNLOCK_COMMAND = "$X"  # Unlock and clear any alarm
-    ZERO_POSITION_COMMAND = "G92 X0 Y0"
+    ZERO_POSITION_COMMAND = f"G92 X0 Y0 Z0"
     REPORT_POSITION_COMMAND = "$10=0"
 
-    def __init__(self, grbl_controller: IGrblController):
+    def __init__(self, grbl_controller: IGrblController, axis: str):
         self._grbl_controller = grbl_controller
+        self._axis = axis
         logger.trace('GrblRotator initialized')
 
     def move_to(self, angle: float) -> None:
         """
         Rotate to the specified angle.
         """
-        logger.trace(f'Sending move-to command for {angle:.4f}°')
-        self._grbl_controller.send_and_wait_for_move_ready(f'G0 X{angle:.4f}')
+        logger.trace(f'Sending move-to command for {angle:.1f}°')
+        self._grbl_controller.send_and_wait_for_move_ready(f'G0 {self._axis}{angle:.1f}')
 
     def set_as_zero(self) -> None:
         """
@@ -128,7 +129,7 @@ class RotatorMock(IRotator):
         pass
 
     def move_to(self, angle: float) -> None:
-        logger.trace(f'{angle:.4f}°')
+        logger.trace(f'{angle:.1f}°')
 
     def set_as_zero(self) -> None:
         pass
@@ -202,7 +203,8 @@ class RotatorFactory:
 
         if type_to_build == 'ESP32DuinoRotation':
             grbl_config_section = config_parser.get(section, 'rotation_mover_controller')
-            return GrblRotator(GrblControllerFactory.create(grbl_config_section, config_file))
+            axis = config_parser.get(section, 'axis')
+            return GrblRotator(GrblControllerFactory.create(grbl_config_section, config_file), axis)
 
         if type_to_build == 'Mock':
             return RotatorMock()

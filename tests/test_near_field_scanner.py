@@ -1,7 +1,7 @@
 from unittest.mock import Mock
 
-from datatypes import CylindricalPosition
-from nfs import NearFieldScanner
+from src.nfs.datatypes import CylindricalPosition
+from src.nfs.nfs import NearFieldScanner
 
 
 def test_take_single_measurement():

@@ -4,7 +4,7 @@ import importlib
 
 from loguru import logger
 
-import factory
+from . import factory
 
 
 class ModuleInterface:

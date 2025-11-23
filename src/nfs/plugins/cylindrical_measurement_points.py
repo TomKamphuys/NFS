@@ -1,6 +1,6 @@
 from loguru import logger
 
-from datatypes import CylindricalPosition
+from nfs.datatypes import CylindricalPosition
 
 
 class CylindricalMeasurementPoints:

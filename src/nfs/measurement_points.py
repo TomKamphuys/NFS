@@ -1,6 +1,6 @@
 from typing import Protocol
 
-from datatypes import CylindricalPosition
+from .datatypes import CylindricalPosition
 
 
 class MeasurementPoints(Protocol):

@@ -2,7 +2,7 @@
 
 from typing import Any, Callable
 
-from measurement_points import MeasurementPoints
+from .measurement_points import MeasurementPoints
 
 measurement_points_creation_funcs: dict[str, Callable[..., MeasurementPoints]] = {}
 

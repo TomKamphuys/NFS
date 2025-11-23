@@ -1,12 +1,14 @@
 import configparser
 import math
-
+# from json import scanner
+from abc import abstractmethod, ABC
 from loguru import logger
 
-from datatypes import CylindricalPosition, cyl_to_cart
-from grbl_controller import GrblControllerFactory, IGrblController
-from measurement_points import MeasurementPoints
-from rotator import RotatorFactory, IRotator
+from .datatypes import CylindricalPosition, cyl_to_cart
+from .grbl_controller import GrblControllerFactory, IGrblController
+from .measurement_points import MeasurementPoints
+from .rotator import RotatorFactory, IRotator
+from . import factory
 
 
 class PlanarMover:
@@ -55,7 +57,7 @@ class Scanner:
     Controls the movement of a scanner in cylindrical coordinates (radial, angular, vertical).
     Combines planar and angular movement capabilities and manages scanner's position.
     """
-    ZERO_POSITION = (0, 0, 0)  # Constant for zeroed coordinates (r, theta, z)
+    ZERO_POSITION = (230, 0, 0)  # Constant for zeroed coordinates (r, theta, z)  # TODO quick hack, should be 0
 
     def __init__(self, planar_mover: PlanarMover, angular_mover: IRotator):
         self._planar_mover = planar_mover
@@ -144,8 +146,149 @@ class Scanner:
         if z is not None:
             self._cylindrical_position.set_z(z)
 
+class IMotionManager(ABC):
+    """
+    Interface for implementing a motion manager.
 
-class SphericalMeasurementMotionManager:
+    The IMotionManager class serves as an abstraction for devices or mechanisms
+    that perform rotational movements. It defines the mandatory methods
+    that any implementing class should provide to handle rotation, reset
+    the rotational position, and shut down the mechanism.
+    """
+
+    @abstractmethod
+    def move_to_safe_starting_radius(self) -> None:
+        pass
+
+    @abstractmethod
+    def next(self) -> CylindricalPosition:
+        pass
+
+    @abstractmethod
+    def ready(self) -> bool:
+        pass
+
+    @abstractmethod
+    def reset(self):
+        pass
+
+    @abstractmethod
+    def shutdown(self) -> None:
+        pass
+
+
+class CylindricalMeasurementMotionManager(IMotionManager):
+    TOLERANCE = 0.1
+
+    def __init__(self, scanner: Scanner, measurement_points: MeasurementPoints):
+        self._scanner = scanner
+        self._measurement_points = measurement_points
+
+    def move_to_safe_starting_radius(self) -> None:
+        radius = 300 # self._measurement_points.get_radius() TODO MPOT
+        logger.info(f'Performing a first move to a safe radius: {radius:.1f}mm')
+        self._scanner.planar_move_to(radius, 0.0)
+
+    def next(self) -> CylindricalPosition:
+        position = self._measurement_points.next()
+        self._move_to_next_measurement_point(position) # TODO
+        return position
+
+    def ready(self) -> bool:
+        return self._measurement_points.ready()
+
+    def reset(self):
+        self._measurement_points.reset()
+
+    def shutdown(self) -> None:
+        self._scanner.shutdown()
+
+    def _move_to_next_measurement_point(self, position: CylindricalPosition) -> None:
+        current_position = self._scanner.get_position()
+        logger.info(f'Moving: {current_position} --> {position}')
+        self._perform_angular_move(position)
+        self._perform_planar_move(position)
+
+    def _perform_angular_move(self, position: CylindricalPosition) -> None:
+        """
+        Performs an angular move of the scanner to the specified position if the difference
+        between the current and desired positions exceeds the predefined tolerance.
+
+        :param position: The target position in cylindrical coordinates where the angular move
+            is desired.
+        :type position: CylindricalPosition
+        :return: This function does not return a value.
+        :rtype: None
+        """
+        current_position = self._scanner.get_position()
+
+        if abs(current_position.t() - position.t()) > self.TOLERANCE:
+            logger.debug(f'Performing an angular move from {current_position.t():.1f}° to {position.t():.1f}°')
+            self._scanner.angular_move_to(position.t())
+        else:
+            logger.debug('No angular move needed.')
+
+    def _perform_planar_move(self, position: CylindricalPosition) -> None:
+        """
+        Performs a move in the R-Z plane.
+        Ensures the scanner moves along the cylindrical surface (Manhattan-like move)
+        rather than cutting corners or moving through the cylinder volume.
+
+        Strategy:
+        - Vertical movement (changing Z) is only performed at the safe outer radius (R_safe).
+        - Radial movement (changing R) is performed at the current Z (if Z is constant) or
+          as part of the sequence to reach R_safe.
+        """
+        current_position = self._scanner.get_position()
+        target_r = position.r()
+        target_z = position.z()
+
+        r_diff = abs(current_position.r() - target_r)
+        z_diff = abs(current_position.z() - target_z)
+
+        if r_diff <= self.TOLERANCE and z_diff <= self.TOLERANCE:
+            logger.debug('No planar move needed.')
+            return
+
+        # Get safe radius (cylinder wall radius)
+        # Assuming measurement_points has get_radius()
+        safe_radius = 0.0
+        if hasattr(self._measurement_points, 'get_radius'):
+            safe_radius = float(self._measurement_points.get_radius()) # TODO MPOT
+
+        # If we can't determine safe radius, fallback to max of current and target
+        # (which might be risky but better than nothing, though strictly we need the wall radius)
+        if safe_radius == 0.0:
+            safe_radius = max(current_position.r(), target_r)
+
+        # Strategy:
+        # 1. If Z needs to change, we MUST be at safe_radius first.
+        # 2. Then change Z.
+        # 3. Then move to target R.
+
+        if z_diff > self.TOLERANCE:
+            # Step 1: Move to Safe Radius if not already there
+            if current_position.r() < safe_radius - self.TOLERANCE:
+                logger.debug(f'Moving out to safe radius: R->{safe_radius:.1f}')
+                self._scanner.radial_move_to(safe_radius)
+
+            # Step 2: Move Z
+            logger.debug(f'Moving Z at safe radius: Z->{target_z:.1f}')
+            self._scanner.vertical_move_to(target_z)
+
+            # Step 3: Move to Target Radius if different from Safe Radius
+            if abs(target_r - safe_radius) > self.TOLERANCE:
+                logger.debug(f'Moving in to radius: R->{target_r:.1f}')
+                self._scanner.radial_move_to(target_r)
+
+        else:
+            # Z is constant, so we are just moving radially on a cap (or wall).
+            # Just move R.
+            logger.debug(f'Moving R (Z constant): R->{target_r:.1f}')
+            self._scanner.radial_move_to(target_r)
+
+
+class SphericalMeasurementMotionManager(IMotionManager):
     """
     Manages the motion of a scanner for spherical measurements.
 
@@ -171,7 +314,7 @@ class SphericalMeasurementMotionManager:
         self._scanner = scanner
         self._measurement_points = measurement_points
 
-    def move_to_safe_starting_position(self) -> None:
+    def move_to_safe_starting_radius(self) -> None:
         """
         Moves the scanner to a safe starting position at a specified radius.
 
@@ -183,7 +326,7 @@ class SphericalMeasurementMotionManager:
         :return: None
         """
         radius = self._measurement_points.get_radius()
-        logger.info(f'Performing a first move to a safe radius: {radius:.4f}mm')
+        logger.info(f'Performing a first move to a safe radius: {radius:.1f}mm')
         self._scanner.planar_move_to(radius, 0.0)
 
     def next(self) -> CylindricalPosition:
@@ -204,6 +347,9 @@ class SphericalMeasurementMotionManager:
 
     def ready(self) -> bool:
         return self._measurement_points.ready()
+
+    def reset(self):
+        self._measurement_points.reset()
 
     def shutdown(self) -> None:
         """
@@ -265,10 +411,10 @@ class SphericalMeasurementMotionManager:
         new_angle_deg = self._calculate_angle_degree(position.z(), position.r())
 
         if new_angle_deg > old_angle_deg:
-            logger.debug(f'Move using a CW arc move from {old_angle_deg:.2f}° to {new_angle_deg:.2f}°')
+            logger.debug(f'Move using a CW arc move from {old_angle_deg:.1f}° to {new_angle_deg:.1f}°')
             self._scanner.cw_arc_move_to(position.r(), position.z(), radius)
         elif new_angle_deg < old_angle_deg:
-            logger.debug(f'Move using a CCW arc move from {old_angle_deg:.2f}° to {new_angle_deg:.2f}°')
+            logger.debug(f'Move using a CCW arc move from {old_angle_deg:.1f}° to {new_angle_deg:.1f}°')
             self._scanner.ccw_arc_move_to(position.r(), position.z(), radius)
         else:
             logger.debug('No arc move needed.')
@@ -296,7 +442,7 @@ class SphericalMeasurementMotionManager:
             z *= ratio
             x_plane = math.sqrt(x ** 2 + y ** 2)
             logger.debug(
-                f'Performing a (spherical) radius move {current_position.length():.4f}mm to {position.length():.4f}mm')
+                f'Performing a (spherical) radius move {current_position.length():.1f}mm to {position.length():.1f}mm')
             self._scanner.planar_move_to(x_plane, z)
         else:
             logger.debug('No (spherical) radial move needed.')
@@ -315,7 +461,7 @@ class SphericalMeasurementMotionManager:
         current_position = self._scanner.get_position()
 
         if abs(current_position.t() - position.t()) > self.TOLERANCE:
-            logger.debug(f'Performing an angular move from {current_position.t():.4f}° to {position.t():.4f}°')
+            logger.debug(f'Performing an angular move from {current_position.t():.1f}° to {position.t():.1f}°')
             self._scanner.angular_move_to(position.t())
         else:
             logger.debug('No angular move needed.')
@@ -352,3 +498,24 @@ class ScannerFactory:
         scanner = Scanner(planar_mover, angular_mover)
 
         return scanner
+
+
+class MotionManagerFactory:
+    @staticmethod
+    def create(config_file: str, scanner) -> IMotionManager:
+
+        config_parser = configparser.ConfigParser(inline_comment_prefixes="#")
+        config_parser.read(config_file)
+        item = dict(config_parser.items('measurement_points'))
+        measurement_points = factory.create(item)
+
+        config_parser = configparser.ConfigParser(inline_comment_prefixes="#")
+        config_parser.read(config_file)
+        section = 'motion_manager'
+        motion_manager_type = config_parser.get(section, 'type')
+        if motion_manager_type == 'CylindricalMeasurementMotionManager':
+            return CylindricalMeasurementMotionManager(scanner, measurement_points)
+        elif motion_manager_type == 'SphericalMeasurementMotionManager':
+            return SphericalMeasurementMotionManager(scanner, measurement_points)
+        else:
+            raise ValueError(f'Unknown motion manager type: {motion_manager_type}')

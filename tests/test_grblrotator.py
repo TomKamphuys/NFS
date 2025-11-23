@@ -1,7 +1,7 @@
 from unittest.mock import Mock
 
-from grbl_controller import IGrblController
-from rotator import GrblRotator
+from src.nfs.grbl_controller import IGrblController
+from src.nfs.rotator import GrblRotator
 
 
 def test_move_to():

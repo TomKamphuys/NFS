@@ -1,6 +1,6 @@
 from unittest.mock import Mock, call
 
-from scanner import PlanarMover
+from src.nfs.scanner import PlanarMover
 
 
 def test_cw_arc_move_to():
@@ -34,11 +34,11 @@ def test_move_to_rz():
 
     feed_rate = 3.0
     planar_mover = PlanarMover(mock_grbl, feed_rate)
-    z = 4.0
-    r = 5.0
+    z = 4.000
+    r = 5.000
     planar_mover.move_to_rz(r, z)
 
-    mock_grbl.send_and_wait_for_move_ready.assert_called_once_with(f'G0 X{z}Y{r}')
+    mock_grbl.send_and_wait_for_move_ready.assert_called_once_with(f'G0 X{z} Y{r}')
 
 
 def test_move_to_vertical():

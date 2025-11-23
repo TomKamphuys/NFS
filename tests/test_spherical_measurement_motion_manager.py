@@ -1,7 +1,7 @@
 from unittest.mock import Mock
 
-from datatypes import CylindricalPosition
-from scanner import SphericalMeasurementMotionManager
+from src.nfs.datatypes import CylindricalPosition
+from src.nfs.scanner import SphericalMeasurementMotionManager
 
 
 def test_move_to_safe_starting_position():
@@ -11,7 +11,7 @@ def test_move_to_safe_starting_position():
     measurement_points.get_radius.return_value = safe_radius
 
     motion_manager = SphericalMeasurementMotionManager(scanner, measurement_points)
-    motion_manager.move_to_safe_starting_position()
+    motion_manager.move_to_safe_starting_radius()
 
     scanner.planar_move_to.assert_called_once_with(safe_radius, 0.0)
 

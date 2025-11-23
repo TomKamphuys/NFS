@@ -1,10 +1,10 @@
 from unittest.mock import Mock, patch
 
 import pytest
-from audio import IAudio
-from nfs import NearFieldScannerFactory
-from scanner import Scanner
-from scanner import SphericalMeasurementMotionManager
+from src.nfs.audio import IAudio
+from src.nfs.nfs import NearFieldScannerFactory
+from src.nfs.scanner import Scanner
+from src.nfs.scanner import SphericalMeasurementMotionManager
 
 
 @pytest.fixture

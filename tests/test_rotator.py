@@ -1,7 +1,7 @@
 from configparser import ConfigParser
 
 import pytest
-from rotator import calculate_steps_per_degree
+from src.nfs.rotator import calculate_steps_per_degree
 
 
 def test_calculate_steps_per_degree_valid_input():

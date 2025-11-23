@@ -90,7 +90,7 @@ class CylindricalPosition:
     Represents a 3D position in cylindrical coordinates.
 
     This class encapsulates a cylindrical coordinate system position defined by radius
-    (r), angle (t, in radians), and height (z). It provides methods to access and
+    (r), angle (t, in degrees), and height (z). It provides methods to access and
     manipulate these coordinates, as well as to compare positions and compute derived
     properties like the length (distance from the origin in the r-z plane).
 
@@ -101,7 +101,7 @@ class CylindricalPosition:
     :ivar _z: The height of the position in cylindrical coordinates.
     :type _z: float
     """
-    def __init__(self, r, t, z) -> None:
+    def __init__(self, r: float, t: float, z: float) -> None:
         self._r = r
         self._t = t
         self._z = z
