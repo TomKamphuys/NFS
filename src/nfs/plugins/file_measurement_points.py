@@ -22,7 +22,7 @@ class FileMeasurementPoints:
             r_xy_mm = float(row.get("r_xy_mm"))  # Radial distance in XY plane (mm)
             phi_deg = float(row.get("phi_deg"))  # Azimuth angle (degrees)
             z_mm = float(row.get("z_mm"))  # Height position (mm)
-            self._points.append(CylindricalPosition(r_xy_mm, phi_deg-180, (z_mm-400)/2))
+            self._points.append(CylindricalPosition(r_xy_mm*0.9, (phi_deg-180)*0.9, (z_mm-400)/1.5)) # TODO MPOT some magic to limit the motion to stay clear of end stops
 
     def next(self) -> CylindricalPosition:
         if self._current_index < len(self._points):

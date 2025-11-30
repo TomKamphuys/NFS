@@ -1,0 +1,198 @@
+@startuml
+
+package "nfs" {
+
+    class NearFieldScanner {
+        - _scanner: Scanner
+        - _audio: IAudio
+        - _measurement_motion_manager: IMotionManager
+        - _position_log_file: str
+        + take_single_measurement()
+        + take_measurement_set()
+        + shutdown()
+    }
+
+    class NearFieldScannerFactory {
+        {static} + create(scanner: Scanner, config_file: str): NearFieldScanner
+    }
+
+    package "scanner" {
+        interface IScanner {
+            + {abstract} radial_move_to(r: float)
+            + {abstract} planar_move_to(r: float, z: float)
+            + {abstract} cw_arc_move_to(r: float, z: float, radius: float)
+            + {abstract} ccw_arc_move_to(r: float, z: float, radius: float)
+            + {abstract} angular_move_to(angle: float)
+            + {abstract} vertical_move_to(z: float)
+            + {abstract} rotate_ccw(amount: float)
+            + {abstract} rotate_cw(amount: float)
+            + {abstract} move_out(amount: float)
+            + {abstract} move_in(amount: float)
+            + {abstract} move_up(amount: float)
+            + {abstract} move_down(amount: float)
+            + {abstract} get_position(): CylindricalPosition
+            + {abstract} set_as_zero()
+            + {abstract} shutdown()
+        }
+
+        class Scanner {
+            - _planar_mover: PlanarMover
+            - _angular_mover: IRotator
+            - _cylindrical_position: CylindricalPosition
+        }
+
+        class ScannerFactory {
+            {static} + create(config_file: str): Scanner
+        }
+
+        class PlanarMover {
+            - _grbl_controller: IGrblController
+            - _feed_rate: float
+            + move_to_rz(r, z)
+            + move_to_vertical(z)
+            + move_to_radial(r)
+            + cw_arc_move_to(r, z, radius)
+            + ccw_arc_move_to(r, z, radius)
+            + shutdown()
+        }
+
+        class ControllerFactory {
+            {static} + create(section: str, config_file: str): tuple[PlanarMover, IRotator]
+        }
+
+        interface IMotionManager {
+            + {abstract} move_to_safe_starting_radius()
+            + {abstract} next(): CylindricalPosition
+            + {abstract} ready(): bool
+            + {abstract} reset()
+            + {abstract} shutdown()
+        }
+
+        class MotionManagerFactory {
+            {static} + create(config_file: str, scanner): IMotionManager
+        }
+
+        class CylindricalMeasurementMotionManager {
+            - _scanner: Scanner
+            - _measurement_points: MeasurementPoints
+        }
+
+        class SphericalMeasurementMotionManager {
+            - _scanner: Scanner
+            - _measurement_points: MeasurementPoints
+        }
+    }
+
+    package "rotator" {
+        interface IRotator {
+            + {abstract} move_to(angle)
+            + {abstract} set_as_zero()
+            + {abstract} shutdown()
+        }
+
+        class RotatorFactory {
+            {static} + create(section: str, config_file: str): IRotator
+        }
+
+        class GrblRotator {
+            - _grbl_controller: IGrblController
+            - _axis: str
+        }
+
+        class TicRotator {
+            - _tic: Any
+            - _steps_per_degree: float
+        }
+
+        class RotatorMock
+    }
+
+    package "grbl_controller" {
+        interface IGrblController {
+            + {abstract} send(message)
+            + {abstract} send_and_wait_for_move_ready(message)
+            + {abstract} shutdown()
+        }
+
+        class GrblControllerFactory {
+            {static} + create(section: str, config_file: str): IGrblController
+        }
+
+        class Arduino
+        class ESP32Duino
+        class GrblControllerMock
+        class GrblFileWriter
+    }
+
+    package "datatypes" {
+        class CylindricalPosition {
+            - _r: float
+            - _t: float
+            - _z: float
+            + r(): float
+            + t(): float
+            + z(): float
+            + length(): float
+        }
+    }
+
+    package "audio" {
+        interface IAudio {
+             + {abstract} measure_ir(position: CylindricalPosition)
+        }
+        class Audio
+        class AudioMock
+        class AudioFactory {
+            {static} + create(config_file: str): IAudio
+        }
+    }
+
+    package "measurement_points" {
+         class MeasurementPoints
+    }
+
+}
+
+IScanner <|.. Scanner
+Scanner --> PlanarMover
+NearFieldScanner --> IAudio
+NearFieldScanner --> IMotionManager
+NearFieldScannerFactory ..> NearFieldScanner
+
+Scanner --> PlanarMover
+Scanner --> IRotator
+ScannerFactory ..> Scanner
+ScannerFactory ..> ControllerFactory
+
+ControllerFactory ..> PlanarMover
+ControllerFactory ..> IRotator
+ControllerFactory ..> GrblControllerFactory
+
+PlanarMover --> IGrblController
+
+IRotator <|.. GrblRotator
+IRotator <|.. TicRotator
+IRotator <|.. RotatorMock
+RotatorFactory ..> IRotator
+
+GrblRotator --> IGrblController
+
+IGrblController <|.. Arduino
+IGrblController <|.. ESP32Duino
+IGrblController <|.. GrblControllerMock
+IGrblController <|.. GrblFileWriter
+GrblControllerFactory ..> IGrblController
+
+IMotionManager <|.. CylindricalMeasurementMotionManager
+IMotionManager <|.. SphericalMeasurementMotionManager
+MotionManagerFactory ..> IMotionManager
+CylindricalMeasurementMotionManager --> Scanner
+CylindricalMeasurementMotionManager --> MeasurementPoints
+SphericalMeasurementMotionManager --> Scanner
+SphericalMeasurementMotionManager --> MeasurementPoints
+
+IAudio <|.. Audio
+IAudio <|.. AudioMock
+AudioFactory ..> IAudio
+
+@enduml

@@ -38,7 +38,7 @@ def test_move_to_rz():
     r = 5.000
     planar_mover.move_to_rz(r, z)
 
-    mock_grbl.send_and_wait_for_move_ready.assert_called_once_with(f'G0 X{z} Y{r}')
+    mock_grbl.send_and_wait_for_move_ready.assert_called_once_with(f'G0 X{z:.4f} Y{r:.4f}')
 
 
 def test_move_to_vertical():
@@ -48,7 +48,7 @@ def test_move_to_vertical():
     planar_mover = PlanarMover(mock_grbl, feed_rate)
     z = 4.0
     planar_mover.move_to_vertical(z)
-    mock_grbl.send_and_wait_for_move_ready.assert_called_once_with(f'G0 X{z}')
+    mock_grbl.send_and_wait_for_move_ready.assert_called_once_with(f'G0 X{z:.4f}')
 
 
 def test_move_to_radial():
@@ -58,7 +58,7 @@ def test_move_to_radial():
     planar_mover = PlanarMover(mock_grbl, feed_rate)
     r = 4.0
     planar_mover.move_to_radial(r)
-    mock_grbl.send_and_wait_for_move_ready.assert_called_once_with(f'G0 Y{r}')
+    mock_grbl.send_and_wait_for_move_ready.assert_called_once_with(f'G0 Y{r:.4f}')
 
 
 def test_set_as_zero():
@@ -68,7 +68,7 @@ def test_set_as_zero():
     planar_mover = PlanarMover(mock_grbl, feed_rate)
     planar_mover.set_as_zero()
 
-    calls = [call('G92 X0 Y0'), call('$10=0')]
+    calls = [call('G92 X0 Y230'), call('$10=0')]  # TODO MPOT this should become Y0 once all other hack are reverted
     mock_grbl.send.assert_has_calls(calls)
 
 

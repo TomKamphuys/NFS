@@ -25,6 +25,10 @@ class IGrblController(ABC):
         pass
 
     @abstractmethod
+    def softreset(self) -> None:
+        pass
+
+    @abstractmethod
     def send(self, message: str) -> None:
         pass
 
@@ -46,6 +50,9 @@ class GrblControllerMock(IGrblController):
     def shutdown(self) -> None:
         logger.trace(f'MockingShutting down')
 
+    def softreset(self) -> None:
+        logger.trace(f'MockingShutting down')
+
     def send(self, message: str) -> None:
         logger.trace(f'Mocking sending message')
 
@@ -55,6 +62,9 @@ class GrblControllerMock(IGrblController):
 
 class GrblFileWriter(IGrblController):
     def shutdown(self) -> None:
+        pass
+
+    def softreset(self) -> None:
         pass
 
     def send(self, message: str) -> None:
@@ -183,10 +193,10 @@ class GrblControllerFactory:
             GrblControllerFactory._set_axis_according_to_config(esp32duino, grbl_config_x, 'x')
             GrblControllerFactory._set_axis_according_to_config(esp32duino, grbl_config_y, 'y')
 
-            esp32duino.send('$/stepping/idle_ms=255')  # always on, so no drift of position
-            esp32duino.send('$Motors/Init')  # Trinamic drivers (e.g., TMC2209) need this.
-
-            esp32duino.send('$CD=config.yaml')
+            # esp32duino.send('$/stepping/idle_ms=255')  # always on, so no drift of position TODO MPOT does not work for arduino
+            # esp32duino.send('$Motors/Init')  # Trinamic drivers (e.g., TMC2209) need this.
+            #
+            # esp32duino.send('$CD=config.yaml')
 
             return esp32duino
         elif type_to_build == 'Mock':
@@ -206,15 +216,16 @@ class GrblControllerFactory:
 
     @staticmethod
     def _set_axis_according_to_config(esp32duino: ESP32Duino, grbl_config: GrblConfig, axis: str) -> None:
-        prefix = f'$/axes/{axis}'
-
-        direction_pin = 16 if axis == 'x' else 27
-        direction_pin_attribute = 'low' if grbl_config.invert_direction else 'high'
-
-        esp32duino.send(f'{prefix}/steps_per_mm={grbl_config.steps_per_millimeter}')
-        esp32duino.send(f'{prefix}/max_rate_mm_per_min={grbl_config.maximum_rate}')
-        esp32duino.send(f'{prefix}/acceleration_mm_per_sec2={grbl_config.acceleration}')
-        esp32duino.send(f'{prefix}/motor0/stepstick/direction_pin=gpio.{direction_pin}:{direction_pin_attribute}')
+        pass # TODO MPOT this is also called for arduino, but does not work
+        # prefix = f'$/axes/{axis}'
+        #
+        # direction_pin = 16 if axis == 'x' else 27
+        # direction_pin_attribute = 'low' if grbl_config.invert_direction else 'high'
+        #
+        # esp32duino.send(f'{prefix}/steps_per_mm={grbl_config.steps_per_millimeter}')
+        # esp32duino.send(f'{prefix}/max_rate_mm_per_min={grbl_config.maximum_rate}')
+        # esp32duino.send(f'{prefix}/acceleration_mm_per_sec2={grbl_config.acceleration}')
+        # esp32duino.send(f'{prefix}/motor0/stepstick/direction_pin=gpio.{direction_pin}:{direction_pin_attribute}')
 
 
 class Arduino(IGrblController):
@@ -275,13 +286,21 @@ class Arduino(IGrblController):
 
         self._set_axis_according_to_config(config_parser, 'x')
         self._set_axis_according_to_config(config_parser, 'y')
+        # TODO MPOT self._set_axis_according_to_config(config_parser, 'rot') rotation also has to be setup sometime via config
 
         self.send('$1=255')  # servo's always on
+        self.send('$X')  # unlock  TODO MPOT added
+        self.send('$3=2')  # TODO MPOT added to set axes direction ok, was changed somehow???
         self.send('$$')
         self._ready = True
 
+    def softreset(self) -> None:
+        logger.info('softreset')
+        self._grbl_streamer.softreset()
+
     def shutdown(self) -> None:
         logger.info('Disconnecting from GRBL')
+        self.softreset()
         self._grbl_streamer.disconnect()
 
     def send(self, message: str) -> None:
@@ -300,22 +319,23 @@ class Arduino(IGrblController):
             time.sleep(0.01)
 
     def _set_axis_according_to_config(self, config_parser, axis: str) -> None:
-        section = f'grbl_{axis}_axis'
-        steps_per_millimeter = config_parser.getfloat(section, 'steps_per_millimeter')
-        maximum_rate = config_parser.getfloat(section, 'maximum_rate')
-        acceleration = config_parser.getfloat(section, 'acceleration')
-
-        nr = 0  # silence the code analyzer
-        if axis == 'x':
-            nr = 0
-        elif axis == 'y':
-            nr = 1
-        else:
-            logger.critical('Unsupported axis in configuration file. Axis found is ' + axis)
-
-        self.send(f'${100 + nr}={steps_per_millimeter}')
-        self.send(f'${110 + nr}={maximum_rate}')
-        self.send(f'${120 + nr}={acceleration}')
+        pass
+        # section = f'grbl_{axis}_axis'
+        # steps_per_millimeter = config_parser.getfloat(section, 'steps_per_millimeter')
+        # maximum_rate = config_parser.getfloat(section, 'maximum_rate')
+        # acceleration = config_parser.getfloat(section, 'acceleration')
+        #
+        # nr = 0  # silence the code analyzer
+        # if axis == 'x':
+        #     nr = 0
+        # elif axis == 'y':
+        #     nr = 1
+        # else:
+        #     logger.critical('Unsupported axis in configuration file. Axis found is ' + axis)
+        #
+        # self.send(f'${100 + nr}={steps_per_millimeter}')
+        # self.send(f'${110 + nr}={maximum_rate}')
+        # self.send(f'${120 + nr}={acceleration}')
 
 
 class GrblStreamerMock:

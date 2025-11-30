@@ -74,7 +74,7 @@ class GrblStreamerClientConnection(IClientConnection):
         self._received_message = ''
         grbl_streamer = GrblStreamer(self._on_grbl_event)
         grbl_streamer.setup_logging()
-        grbl_streamer.cnect('COM5', 115200)
+        grbl_streamer.cnect('COM8', 115200) # TODO MPOT should be from config
         # logger.info('Waiting for gbrl streamer to initialize...')
         time.sleep(3)
         # grbl_streamer.poll_start()

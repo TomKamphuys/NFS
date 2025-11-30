@@ -28,11 +28,10 @@ def test_take_measurement_set():
     nfs = NearFieldScanner(scanner, audio, measurement_motion_manager)
     nfs.take_measurement_set()
 
-    measurement_motion_manager.move_to_safe_starting_position.assert_called_once_with()
-    measurement_motion_manager.ready.assert_called_once_with()
-    scanner.shutdown.assert_called_once_with()
-
-    # TODO de while loop nog testen
+    assert measurement_motion_manager.move_to_safe_starting_radius.call_count == 2
+    measurement_motion_manager.ready.assert_called()
+    measurement_motion_manager.reset.assert_called_once_with()
+    scanner.angular_move_to.assert_called_once_with(0.0)
 
 
 def test_shutdown():

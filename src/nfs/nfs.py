@@ -4,8 +4,8 @@ from loguru import logger
 
 from . import loader
 from .audio import AudioFactory, IAudio
+from .motion_manager import MotionManagerFactory, IMotionManager
 from .scanner import Scanner
-from .scanner import MotionManagerFactory, IMotionManager
 
 logger.add('../../scanner.log', mode='w', level="TRACE")
 

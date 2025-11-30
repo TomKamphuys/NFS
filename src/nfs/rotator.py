@@ -34,6 +34,10 @@ class IRotator(ABC):
     def shutdown(self) -> None:
         pass
 
+    @abstractmethod
+    def softreset(self) -> None:
+        pass
+
 
 class GrblRotator(IRotator):
     """
@@ -67,7 +71,9 @@ class GrblRotator(IRotator):
         """
         self._grbl_controller.shutdown()
 
-    # Private helper methods
+    def softreset(self) -> None:
+        self._grbl_controller.softreset()
+
     def _send_reset_position_commands(self) -> None:
         """Send reset position-related commands to the GRBL controller."""
         logger.trace('Resetting position to zero')
@@ -114,6 +120,9 @@ class TicRotator(IRotator):
     def shutdown(self) -> None:
         pass  # nothing to do here
 
+    def softreset(self) -> None:
+        pass
+
 
 class RotatorMock(IRotator):
     """
@@ -135,6 +144,9 @@ class RotatorMock(IRotator):
         pass
 
     def shutdown(self) -> None:
+        pass
+
+    def softreset(self) -> None:
         pass
 
 
