@@ -27,6 +27,15 @@ def test_cylindrical_position_set_z():
     assert position.z() == 2.0
 
 
+def test_cylindrical_position_subtraction():
+    pos1 = CylindricalPosition(10.0, 180.0, 5.0)
+    pos2 = CylindricalPosition(2.0, 30.0, 1.0)
+    result = pos1 - pos2
+    assert result.r() == 8.0
+    assert result.t() == 150.0
+    assert result.z() == 4.0
+
+
 def test_cylindrical_position_equality():
     position1 = CylindricalPosition(2.0, 1.0, 3.0)
     position2 = CylindricalPosition(2.0, 1.0, 3.0)

@@ -41,7 +41,7 @@ def import_module(name: str) -> ModuleInterface:
     """
     return importlib.import_module(name)  # type: ignore
 
-def load_plugins(config_file):
+def load_plugins(config_file: str, plugins_section: str):
     """
     Load and initialize plugins listed in the specified configuration file.
 
@@ -50,6 +50,7 @@ def load_plugins(config_file):
     it initializes and loads them by delegating the operation to an internal
     method.
 
+    :param plugins_section:
     :param config_file: Path to the configuration file to parse for plugin
         information.
     :type config_file: str
@@ -59,7 +60,7 @@ def load_plugins(config_file):
     config_parser = configparser.ConfigParser(inline_comment_prefixes="#")
     config_parser.read(config_file)
 
-    items = config_parser.items('plugins')
+    items = config_parser.items(plugins_section)
     _, plugins = zip(*items)
 
     # load the plugins

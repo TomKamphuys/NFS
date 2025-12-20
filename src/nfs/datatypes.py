@@ -120,6 +120,19 @@ class CylindricalPosition:
         """
         return (self.r(), self.t(), self.z()) == (other.r(), other.t(), other.z())
 
+    def __sub__(self, other: 'CylindricalPosition') -> 'CylindricalPosition':
+        """
+        Subtracts another CylindricalPosition from this one.
+        
+        :param other: The position to subtract.
+        :return: A new CylindricalPosition representing the difference.
+        """
+        return CylindricalPosition(
+            self.r() - other.r(),
+            self.t() - other.t(),
+            self.z() - other.z()
+        )
+
     def __str__(self) -> str:
         """
         Converts the current object to its string representation.
@@ -243,3 +256,25 @@ def cyl_to_cart(cylindrical_position: CylindricalPosition) -> tuple[float, float
     x = r * np.cos(t)
     y = r * np.sin(t)
     return x, y, z
+
+
+def test_cylindrical_position_equality():
+    position1 = CylindricalPosition(1.0, 2.0, 3.0)
+    position2 = CylindricalPosition(1.0, 2.0, 3.0)
+    position3 = CylindricalPosition(4.0, 5.0, 6.0)
+    assert position1 == position2
+    assert position1 != position3
+
+
+def test_cylindrical_position_subtraction():
+    pos1 = CylindricalPosition(10.0, 180.0, 5.0)
+    pos2 = CylindricalPosition(2.0, 30.0, 1.0)
+    result = pos1 - pos2
+    assert result.r() == 8.0
+    assert result.t() == 150.0
+    assert result.z() == 4.0
+
+
+def test_cylindrical_position_length():
+    position = CylindricalPosition(3.0, 0.0, 4.0)
+    assert position.length() == 5.0

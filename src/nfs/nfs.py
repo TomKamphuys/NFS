@@ -1,10 +1,11 @@
+import configparser
 import time
 
 from loguru import logger
 
 from . import loader
 from .audio import AudioFactory, IAudio
-from .motion_manager import MotionManagerFactory, IMotionManager
+from .motion_manager import MotionManagerFactory
 from .scanner import Scanner
 
 logger.add('../../scanner.log', mode='w', level="TRACE")
@@ -82,7 +83,6 @@ class NearFieldScanner:
         self._measurement_motion_manager.move_to_safe_starting_radius()
         self._scanner.angular_move_to(0.0)
 
-
     def shutdown(self) -> None:
         """
         Shuts down the scanner system gracefully.
@@ -113,11 +113,18 @@ class NearFieldScannerFactory:
         :param config_file:
         :return: near field scanner
         """
+        config_parser = configparser.ConfigParser(inline_comment_prefixes="#")
+        config_parser.read(config_file)
 
-        loader.load_plugins(config_file)
+        section = 'nfs'
 
-        audio = AudioFactory.create(config_file)
+        plugins_section = config_parser.get(section, 'plugins')
+        loader.load_plugins(config_file, plugins_section)
 
-        measurement_manager = MotionManagerFactory.create(config_file, scanner)
+        audio_section = config_parser.get(section, 'audio')
+        audio = AudioFactory.create(config_file, audio_section)
+
+        motion_manager_section = config_parser.get(section, 'motion_manager')
+        measurement_manager = MotionManagerFactory.create(config_file, motion_manager_section, scanner)
 
         return NearFieldScanner(scanner, audio, measurement_manager)

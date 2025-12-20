@@ -169,16 +169,15 @@ class AudioFactory:
     to operate correctly.
     """
     @staticmethod
-    def create(config_file: str) -> IAudio:
+    def create(config_file: str, section: str) -> IAudio:
         """
         Factory method that builds an Audio object based on a config file
+        :param section:
         :param config_file: config file name containing the config
         :return: an Audio object (or a mock)
         """
         config_parser = configparser.ConfigParser(inline_comment_prefixes="#")
         config_parser.read(config_file)
-
-        section = 'audio'
 
         mock = config_parser.getboolean(section, 'mock')
         if mock:

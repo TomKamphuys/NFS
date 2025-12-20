@@ -6,7 +6,7 @@ from nfs import factory
 
 from .datatypes import CylindricalPosition, cyl_to_cart
 from .measurement_points import MeasurementPoints
-from .scanner import IScanner
+from .scanner import Scanner
 
 
 class IMotionManager(ABC):
@@ -43,7 +43,7 @@ class IMotionManager(ABC):
 class CylindricalMeasurementMotionManager(IMotionManager):
     TOLERANCE = 0.1
 
-    def __init__(self, scanner: IScanner, measurement_points: MeasurementPoints):
+    def __init__(self, scanner: Scanner, measurement_points: MeasurementPoints):
         self._scanner = scanner
         self._measurement_points = measurement_points
 
@@ -164,7 +164,7 @@ class SphericalMeasurementMotionManager(IMotionManager):
     DEGREE_CONVERSION_FACTOR = 180.0 / math.pi
     TOLERANCE = 0.1
 
-    def __init__(self, scanner: IScanner, measurement_points: MeasurementPoints):
+    def __init__(self, scanner: Scanner, measurement_points: MeasurementPoints):
         self._scanner = scanner
         self._measurement_points = measurement_points
 
@@ -322,16 +322,15 @@ class SphericalMeasurementMotionManager(IMotionManager):
 
 class MotionManagerFactory:
     @staticmethod
-    def create(config_file: str, scanner: IScanner) -> IMotionManager:
+    def create(config_file: str, section: str, scanner: Scanner) -> IMotionManager:
 
         config_parser = configparser.ConfigParser(inline_comment_prefixes="#")
         config_parser.read(config_file)
-        item = dict(config_parser.items('measurement_points'))
+
+        measurement_points_section = config_parser.get(section, 'measurement_points')
+        item = dict(config_parser.items(measurement_points_section))
         measurement_points = factory.create(item)
 
-        config_parser = configparser.ConfigParser(inline_comment_prefixes="#")
-        config_parser.read(config_file)
-        section = 'motion_manager'
         motion_manager_type = config_parser.get(section, 'type')
         if motion_manager_type == 'CylindricalMeasurementMotionManager':
             return CylindricalMeasurementMotionManager(scanner, measurement_points)
