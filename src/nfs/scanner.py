@@ -104,6 +104,7 @@ class Scanner:
             wcs_zero_in_mcs = self._stool_reference
             wcs_zero_in_mcs.set_z(wcs_zero_in_mcs.z() - self._height_offset)
             self._set_as(self._cylindrical_position - wcs_zero_in_mcs)
+            logger.info('WCS set')
         else:
             logger.warning('Scanner not calibrated!')
 

@@ -195,68 +195,6 @@ class GrblStreamerClientConnection:
         self._grbl_streamer.disconnect()
 
 
-class Arduino(IGrblController):
-    """
-    Class representing an Arduino-based controller for interfacing with GRBL devices.
-
-    This class is a specialized implementation that integrates with GRBL firmware to
-    control CNC machines or similar devices. It handles configuration loading, GRBL
-    streaming setup, and axis-specific settings. The class provides a set of methods
-    to send commands to the GRBL device, wait for specific operations to complete,
-    and shut down the connection cleanly. Logging is extensively used for debugging
-    and monitoring events.
-
-    :ivar _grbl_streamer: Instance of a GRBL streaming implementation, either a mock or
-        an actual streamer depending on the configuration.
-    :type _grbl_streamer: GrblStreamer or GrblStreamerMock
-    :ivar _ready: Internal flag indicating whether the GRBL device is ready for the next
-        command. Used for synchronous operations.
-    :type _ready: Bool
-    """
-    def __init__(self, grbl_streamer: GrblStreamer):
-        self._grbl_streamer = grbl_streamer
-
-        self.send('$3=1')
-
-        self.send('$1=255')  # servo's always on
-        self.send('$X')  # unlock  TODO MPOT added
-        self.send('$3=2')  # TODO MPOT added to set axes direction ok, was changed somehow???
-        self.send('$$')
-        self._ready = True
-
-    def shutdown(self) -> None:
-        logger.info('Disconnecting from GRBL')
-        self._grbl_streamer.disconnect()
-
-    def send(self, message: str) -> None:
-        logger.trace(f'Sending message to grbl: {message}')
-        self._grbl_streamer.send_immediately(message)
-
-    def send_and_wait_for_move_ready(self, message: str) -> None:
-        self._ready = False
-        self.send(message)
-        while not self._ready:
-            time.sleep(0.01)
-
-        self._ready = False
-        self.send('G04 P0')
-        while not self._ready:
-            time.sleep(0.01)
-
-    def killalarm(self) -> None:
-        self._grbl_streamer.killalarm()
-
-    def _wait_for_ack(self) -> None:
-        """Wait until an 'ok' acknowledgment is received from the hardware."""
-        ready = False
-        while not ready:
-            time.sleep(0.01)
-            result = self._receive().rstrip()
-            logger.trace(f'Received: {result}')
-            if "ok" in result:
-                ready = True
-
-
 class ESP32Duino(IGrblController):
     """
     Provides an implementation of the ESP32Duino controller for managing FluidNC-based

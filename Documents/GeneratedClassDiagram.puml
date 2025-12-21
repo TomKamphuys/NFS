@@ -17,47 +17,24 @@ package "nfs" {
     }
 
     package "scanner" {
-        interface IScanner {
-            + {abstract} radial_move_to(r: float)
-            + {abstract} planar_move_to(r: float, z: float)
-            + {abstract} cw_arc_move_to(r: float, z: float, radius: float)
-            + {abstract} ccw_arc_move_to(r: float, z: float, radius: float)
-            + {abstract} angular_move_to(angle: float)
-            + {abstract} vertical_move_to(z: float)
-            + {abstract} rotate_ccw(amount: float)
-            + {abstract} rotate_cw(amount: float)
-            + {abstract} move_out(amount: float)
-            + {abstract} move_in(amount: float)
-            + {abstract} move_up(amount: float)
-            + {abstract} move_down(amount: float)
-            + {abstract} get_position(): CylindricalPosition
-            + {abstract} set_as_zero()
-            + {abstract} shutdown()
-        }
-
         class Scanner {
-            - _planar_mover: PlanarMover
-            - _angular_mover: IRotator
+            - _grbl_controller: IGrblController
             - _cylindrical_position: CylindricalPosition
+            - _feed_rate: float
+            + radial_move_to(r)
+            + planar_move_to(r, z)
+            + cw_arc_move_to(r, z, radius)
+            + ccw_arc_move_to(r, z, radius)
+            + angular_move_to(angle)
+            + vertical_move_to(z)
+            + get_position(): CylindricalPosition
+            + set_as_zero()
+            + shutdown()
+            + home()
         }
 
         class ScannerFactory {
             {static} + create(config_file: str): Scanner
-        }
-
-        class PlanarMover {
-            - _grbl_controller: IGrblController
-            - _feed_rate: float
-            + move_to_rz(r, z)
-            + move_to_vertical(z)
-            + move_to_radial(r)
-            + cw_arc_move_to(r, z, radius)
-            + ccw_arc_move_to(r, z, radius)
-            + shutdown()
-        }
-
-        class ControllerFactory {
-            {static} + create(section: str, config_file: str): tuple[PlanarMover, IRotator]
         }
 
         interface IMotionManager {
@@ -69,48 +46,19 @@ package "nfs" {
         }
 
         class MotionManagerFactory {
-            {static} + create(config_file: str, scanner): IMotionManager
+            {static} + create(config_file: str, section: str, scanner: Scanner): IMotionManager
         }
 
-        class CylindricalMeasurementMotionManager {
-            - _scanner: Scanner
-            - _measurement_points: MeasurementPoints
-        }
-
-        class SphericalMeasurementMotionManager {
-            - _scanner: Scanner
-            - _measurement_points: MeasurementPoints
-        }
-    }
-
-    package "rotator" {
-        interface IRotator {
-            + {abstract} move_to(angle)
-            + {abstract} set_as_zero()
-            + {abstract} shutdown()
-        }
-
-        class RotatorFactory {
-            {static} + create(section: str, config_file: str): IRotator
-        }
-
-        class GrblRotator {
-            - _grbl_controller: IGrblController
-            - _axis: str
-        }
-
-        class TicRotator {
-            - _tic: Any
-            - _steps_per_degree: float
-        }
-
-        class RotatorMock
+        class CylindricalMeasurementMotionManager
+        class SphericalMeasurementMotionManager
     }
 
     package "grbl_controller" {
         interface IGrblController {
             + {abstract} send(message)
             + {abstract} send_and_wait_for_move_ready(message)
+            + {abstract} killalarm()
+            + {abstract} softreset()
             + {abstract} shutdown()
         }
 
@@ -121,7 +69,17 @@ package "nfs" {
         class Arduino
         class ESP32Duino
         class GrblControllerMock
-        class GrblFileWriter
+
+        class GrblStreamerClientConnection {
+            - _grbl_streamer: GrblStreamer
+            - _event_handler: EventHandler
+            + send(message)
+            + receive(): str
+        }
+
+        class EventHandler {
+            + on_grbl_event(event, *data)
+        }
     }
 
     package "datatypes" {
@@ -132,7 +90,6 @@ package "nfs" {
             + r(): float
             + t(): float
             + z(): float
-            + length(): float
         }
     }
 
@@ -140,59 +97,66 @@ package "nfs" {
         interface IAudio {
              + {abstract} measure_ir(position: CylindricalPosition)
         }
-        class Audio
+        class Audio {
+            - _sweep: Sweep
+        }
         class AudioMock
         class AudioFactory {
-            {static} + create(config_file: str): IAudio
+            {static} + create(config_file: str, section: str): IAudio
+        }
+
+        interface ISweep {
+            + {abstract} generate(): Sweep
+        }
+        class Sweep {
+            + sweep: pf.Signal
+            + minimum_frequency: float
+            + maximum_frequency: float
+        }
+        class ExponentialSweep
+        class WavSweep
+        class SweepFactory {
+            {static} + create(config_file: str): ISweep
         }
     }
 
     package "measurement_points" {
-         class MeasurementPoints
+         class SphericalMeasurementPointsArcsRandom {
+             + next(): CylindricalPosition
+             + reset()
+             + ready(): bool
+         }
     }
-
 }
 
-IScanner <|.. Scanner
-Scanner --> PlanarMover
 NearFieldScanner --> IAudio
 NearFieldScanner --> IMotionManager
+NearFieldScanner --> Scanner
 NearFieldScannerFactory ..> NearFieldScanner
 
-Scanner --> PlanarMover
-Scanner --> IRotator
+Scanner --> IGrblController
 ScannerFactory ..> Scanner
-ScannerFactory ..> ControllerFactory
-
-ControllerFactory ..> PlanarMover
-ControllerFactory ..> IRotator
-ControllerFactory ..> GrblControllerFactory
-
-PlanarMover --> IGrblController
-
-IRotator <|.. GrblRotator
-IRotator <|.. TicRotator
-IRotator <|.. RotatorMock
-RotatorFactory ..> IRotator
-
-GrblRotator --> IGrblController
 
 IGrblController <|.. Arduino
 IGrblController <|.. ESP32Duino
 IGrblController <|.. GrblControllerMock
-IGrblController <|.. GrblFileWriter
+ESP32Duino --> GrblStreamerClientConnection
+GrblStreamerClientConnection --> EventHandler
 GrblControllerFactory ..> IGrblController
 
 IMotionManager <|.. CylindricalMeasurementMotionManager
 IMotionManager <|.. SphericalMeasurementMotionManager
 MotionManagerFactory ..> IMotionManager
-CylindricalMeasurementMotionManager --> Scanner
-CylindricalMeasurementMotionManager --> MeasurementPoints
-SphericalMeasurementMotionManager --> Scanner
-SphericalMeasurementMotionManager --> MeasurementPoints
 
 IAudio <|.. Audio
 IAudio <|.. AudioMock
 AudioFactory ..> IAudio
+AudioFactory ..> SweepFactory
+Audio --> Sweep
+
+ISweep <|.. ExponentialSweep
+ISweep <|.. WavSweep
+ISweep ..> Sweep : generates
+SweepFactory ..> ISweep
 
 @enduml

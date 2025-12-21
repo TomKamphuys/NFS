@@ -25,6 +25,8 @@ be calculated from the measurement point alone.
 For cylindrical surface we need both the radius and height is needed. Somehow we need to know whether we are on the side or on the top/bottom cap.
 We could introduce a motion planner. For the spherical measurement points we could use a simple arc motion.
 
+endstop -> soft reset -> clear alarm -> home
+
 
 
 Downward motion:
