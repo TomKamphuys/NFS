@@ -7,7 +7,7 @@ name = "nfs"
 version = "0.2.0"
 description = "Near Field Scanner utilities and CLI"
 readme = "README.md"
-requires-python = ">=3.13.5"
+requires-python = "==3.13.5"
 license = { text = "Proprietary" }
 authors = [{ name = "Your Name" }]
 keywords = ["near-field", "scanner", "measurement"]
