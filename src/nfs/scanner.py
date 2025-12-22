@@ -17,7 +17,7 @@ class Scanner:
         self._stool_reference = None
         # self._secondary_reference = None
         self._height_offset = None
-        self._cylindrical_position = None
+        self._cylindrical_position = CylindricalPosition(*self.ZERO_POSITION)
         self._feed_rate = feed_rate
 
     def _initialize(self) -> None:
@@ -103,7 +103,8 @@ class Scanner:
         if self.is_calibrated():
             wcs_zero_in_mcs = self._stool_reference
             wcs_zero_in_mcs.set_z(wcs_zero_in_mcs.z() - self._height_offset)
-            self._set_as(self._cylindrical_position - wcs_zero_in_mcs)
+            new_current_position = self._cylindrical_position - wcs_zero_in_mcs
+            self._set_as(new_current_position)
             logger.info('WCS set')
         else:
             logger.warning('Scanner not calibrated!')

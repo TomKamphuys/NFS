@@ -4,7 +4,7 @@ import pytest
 from src.nfs.audio import IAudio
 from src.nfs.nfs import NearFieldScannerFactory
 from src.nfs.scanner import Scanner
-from src.nfs.scanner import SphericalMeasurementMotionManager
+from src.nfs.motion_manager import SphericalMeasurementMotionManager
 
 
 @pytest.fixture
