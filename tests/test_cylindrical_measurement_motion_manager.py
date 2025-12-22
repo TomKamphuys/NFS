@@ -1,6 +1,6 @@
 from unittest.mock import Mock, call
-from src.nfs.datatypes import CylindricalPosition
-from src.nfs.motion_manager import CylindricalMeasurementMotionManager
+from nfs.datatypes import CylindricalPosition
+from nfs.motion_manager import CylindricalMeasurementMotionManager
 
 def test_move_to_safe_starting_radius():
     scanner = Mock()

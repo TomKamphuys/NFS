@@ -2,8 +2,8 @@ from unittest.mock import Mock, call
 
 from numpy.ma.testutils import assert_equal
 
-from src.nfs.datatypes import CylindricalPosition
-from src.nfs.scanner import Scanner
+from nfs.datatypes import CylindricalPosition
+from nfs.scanner import Scanner
 
 
 def test_radial_move_to():

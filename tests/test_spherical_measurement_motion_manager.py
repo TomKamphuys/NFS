@@ -1,7 +1,7 @@
 from unittest.mock import Mock
 
-from src.nfs.datatypes import CylindricalPosition
-from src.nfs.motion_manager import SphericalMeasurementMotionManager
+from nfs.datatypes import CylindricalPosition
+from nfs.motion_manager import SphericalMeasurementMotionManager
 
 
 def test_move_to_safe_starting_position():

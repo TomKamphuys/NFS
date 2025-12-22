@@ -1,5 +1,5 @@
 import pytest
-from src.nfs.datatypes import CylindricalPosition
+from nfs.datatypes import CylindricalPosition
 
 
 def test_cylindrical_position_initialization():

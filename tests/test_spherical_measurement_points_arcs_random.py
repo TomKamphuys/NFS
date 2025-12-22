@@ -1,5 +1,5 @@
 import pytest
-from src.nfs.datatypes import CylindricalPosition
+from nfs.datatypes import CylindricalPosition
 from nfs.plugins.spherical_measurement_points_arcs_random import SphericalMeasurementPointsArcsRandom
 
 
