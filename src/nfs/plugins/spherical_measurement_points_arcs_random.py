@@ -45,12 +45,16 @@ class SphericalMeasurementPointsArcsRandom:
     def __init__(self,
                  nr_of_points: int,
                  wall_spacing: float,
-                 radius: float) -> None:
+                 radius: float,
+                 homing_gap,
+                 pole_gap) -> None:
 
         self._ready = False
         self._radius = float(radius)
         self._wall_spacing = float(wall_spacing)
         self._nr_of_points = int(nr_of_points)
+        self._homing_gap = float(homing_gap)
+        self._pole_gap = float(pole_gap)
 
         self._generate_evenly_spread_points_on_unit_sphere()
 
@@ -63,6 +67,7 @@ class SphericalMeasurementPointsArcsRandom:
         r_cyl, theta_cyl, z_cyl = self._convert_to_sorted_cylindrical_coordinates(x, y, z)
 
         self._remove_points_inside_speaker_stand(r_cyl, theta_cyl, z_cyl)
+        self._remove_points_inside_homing_area(self._r_cyl, self._theta_cyl, self._z_cyl)
 
         self._actual_nr_of_points = self._r_cyl.size
         self._current_index = 0
@@ -77,9 +82,16 @@ class SphericalMeasurementPointsArcsRandom:
         z_cyl = z[sorted_indices]
         return r_cyl, theta_cyl, z_cyl
 
-    def _remove_points_inside_speaker_stand(self, r_cyl, theta_cyl, z_cyl):
+    def _remove_points_inside_speaker_stand(self, r_cyl, theta_cyl, z_cyl) -> None:
         # everything in mm and degrees
-        keep_indices = (r_cyl > 30.0)  # diameter central pole is 50mm
+        keep_indices = (r_cyl > (self._pole_gap/2.0))
+        self._r_cyl = r_cyl[keep_indices]
+        self._theta_cyl = theta_cyl[keep_indices]
+        self._z_cyl = z_cyl[keep_indices]
+
+    def _remove_points_inside_homing_area(self, r_cyl, theta_cyl, z_cyl) -> None:
+        # everything in mm and degrees
+        keep_indices = (theta_cyl < 180.0-self._homing_gap/2) | (theta_cyl > -180.0 + self._homing_gap/2)
         self._r_cyl = r_cyl[keep_indices]
         self._theta_cyl = theta_cyl[keep_indices]
         self._z_cyl = z_cyl[keep_indices]
