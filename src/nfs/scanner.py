@@ -10,44 +10,26 @@ class Scanner:
     Controls the movement of a scanner in cylindrical coordinates (radial, angular, vertical).
     Combines planar and angular movement capabilities and manages scanner's position.
     """
-    ZERO_POSITION = (0, 0, 0)  # Constant for zeroed coordinates (r, theta, z)
-
     def __init__(self, grbl_controller: IGrblController, feed_rate):
         self._grbl_controller = grbl_controller
-        self._stool_reference = None
-        # self._secondary_reference = None
-        self._height_offset = None
-        self._cylindrical_position = CylindricalPosition(*self.ZERO_POSITION)
         self._feed_rate = feed_rate
-
-    def _initialize(self) -> None:
-        self._stool_reference = None
-        # self._secondary_reference = None
-        self._height_offset = None
-        self._cylindrical_position = CylindricalPosition(*self.ZERO_POSITION)
-        self.set_as_zero()
 
     def radial_move_to(self, r: float) -> None:
         """Move to the specified radial position."""
         if self.get_position().r() != r:
             self._grbl_controller.send_and_wait_for_move_ready(f'G0 Y{r:.4f}')
 
-        self._update_position(r=r)
-
     def planar_move_to(self, r: float, z: float):
         """Move to a specified planar position (radial and vertical)."""
         self._grbl_controller.send_and_wait_for_move_ready(f'G0 X{z:.4f} Y{r:.4f}')
-        self._update_position(r=r, z=z)
 
     def cw_arc_move_to(self, r: float, z: float, radius: float) -> None:
         """Move in a clockwise arc to the specified radial and vertical position."""
         self._grbl_controller.send_and_wait_for_move_ready(f'G02 X{z:.4f} Y{r:.4f} R{radius:.4f} F{self._feed_rate}')
-        self._update_position(r=r, z=z)
 
     def ccw_arc_move_to(self, r: float, z: float, radius: float) -> None:
         """Move in a counter-clockwise arc to the specified radial and vertical position."""
         self._grbl_controller.send_and_wait_for_move_ready(f'G03 X{z:.4f} Y{r:.4f} R{radius:.4f} F{self._feed_rate}')
-        self._update_position(r=r, z=z)
 
     def angular_move_to(self, angle: float) -> None:
         """Rotate to a specified angular position."""
@@ -55,17 +37,14 @@ class Scanner:
             logger.trace(f'Sending move-to command for {angle:.1f}°')
             self._grbl_controller.send_and_wait_for_move_ready(f'G0 Z{angle:.1f}')
 
-        self._update_position(t=angle)
-
     def vertical_move_to(self, z: float) -> None:
         """Move to a specified vertical position."""
         if self.get_position().z() != z:
             self._grbl_controller.send_and_wait_for_move_ready(f'G0 X{z:.4f}')
-        self._update_position(z=z)
 
     def rotate_ccw(self, amount: float) -> None:
         """Rotate counterclockwise by a specified amount."""
-        self.angular_move_to(self._cylindrical_position.t() + amount)
+        self.angular_move_to(self.get_position().t() + amount)
 
     def rotate_cw(self, amount: float) -> None:
         """Rotate clockwise by a specified amount."""
@@ -73,7 +52,7 @@ class Scanner:
 
     def move_out(self, amount: float) -> None:
         """Increase radial distance by a specified amount."""
-        self.radial_move_to(self._cylindrical_position.r() + amount)
+        self.radial_move_to(self.get_position().r() + amount)
 
     def move_in(self, amount: float) -> None:
         """Decrease radial distance by a specified amount."""
@@ -81,7 +60,7 @@ class Scanner:
 
     def move_up(self, amount: float) -> None:
         """Increase the vertical position by a specified amount."""
-        self.vertical_move_to(self._cylindrical_position.z() + amount)
+        self.vertical_move_to(self.get_position().z() + amount)
 
     def move_down(self, amount: float) -> None:
         """Decrease the vertical position by a specified amount."""
@@ -89,47 +68,45 @@ class Scanner:
 
     def get_position(self) -> CylindricalPosition:
         """Return the current cylindrical position."""
-        return self._cylindrical_position
+        return self._grbl_controller.get_position()
 
     def set_as_zero(self) -> None:
-        """Reset scanner Work Coordinate System."""
-        self._set_as(CylindricalPosition(*self.ZERO_POSITION))
+        """Reset scanner Work Coordinate System (Persistent)."""
+        # G10 L20 P2 sets the CURRENT position as the zero point for G55 (P2).
+        # Unlike G92, this is saved to EEPROM and survives restarts.
+        self._grbl_controller.send(f'G10 L20 P2 X0 Y0 Z0')
 
-    def is_calibrated(self) -> bool:
-        """Check if all zero positions and offsets have been set."""
-        return all(v is not None for v in [self._stool_reference, self._height_offset])
+    def set_speaker_center_above_stool(self, height: float) -> None:
+        """
+        Sets G55 to be exactly 'height' above G54.
+        Ensures Y (radial) and Z (angular) are identical to G54.
+        """
+        # 1. Force switch to G55 to ensure we read reference coordinates
+        self._grbl_controller.send('G55')
 
-    def set_working_coordinate_system(self) -> None:
-        if self.is_calibrated():
-            wcs_zero_in_mcs = self._stool_reference
-            wcs_zero_in_mcs.set_z(wcs_zero_in_mcs.z() - self._height_offset)
-            new_current_position = self._cylindrical_position - wcs_zero_in_mcs
-            self._set_as(new_current_position)
-            logger.info('WCS set')
-        else:
-            logger.warning('Scanner not calibrated!')
+        # 2. Sync and get current position in G54
+        self._grbl_controller.send('G4 P0.1')
+        current_pos = self.get_position()
 
-    def _set_as(self, position: CylindricalPosition) -> None:
-        """Reset scanner Work Coordinate System."""
-        x = position.z()
-        y = position.r()
-        z = position.t()
-        logger.warning(f'Set as: G92 X{x} Y{y} Z{z}')
-        self._grbl_controller.send(f'G92 X{x} Y{y} Z{z}')
-        self._grbl_controller.send('$10=0')  # TODO MPOT Why is this needed? This sets the reporting format...
-        self._update_position(y, z, x)
+        # Mapping: r->Y, t->Z, z->X (based on scanner.py move methods)
+        g55_r = current_pos.r()  # Y axis
+        g55_t = current_pos.t()  # Z axis
+        g55_z = current_pos.z()  # X axis
 
-    def set_stool_reference(self) -> None:
-        self._stool_reference = self._cylindrical_position
+        # 3. Calculate G54 values for the same physical point.
+        # To shift the G54 origin UP, the coordinate value in G54
+        # must be 'height' smaller than in G55.
+        g54_x_val = g55_z - height
+        g54_y_val = g55_r
+        g54_z_val = g55_t
 
-    # def set_secondary_reference(self) -> None:
-    #     if self._stool_reference is None:
-    #         logger.warning('No stool reference set! Cannot set secondary reference!')
-    #         return
-    #     self._secondary_reference = self._cylindrical_position
+        # 4. Use G10 L20 P1 to align G54 to G55 with the vertical offset
+        self._grbl_controller.send(f'G10 L20 P1 X{g54_x_val:.4f} Y{g54_y_val:.4f} Z{g54_z_val:.4f}')
 
-    def set_height_offset(self, height_offset: float) -> None:
-        self._height_offset = height_offset # positive upwards
+        # 5. Be sure to go to G54
+        self._grbl_controller.send('G54')
+
+        logger.info(f"G54 aligned to G55 with +{height} vertical offset")
 
     def shutdown(self) -> None:
         """Shutdown the scanner's movers."""
@@ -137,23 +114,12 @@ class Scanner:
 
     def home(self) -> None:
         self._grbl_controller.send('$H')
-        self._initialize()
-        self.rotate_cw(180.0)
 
     def clear_alarm(self) -> None:
         self._grbl_controller.killalarm()
 
     def softreset(self) -> None:
-        self._grbl_controller.softreset();
-
-    def _update_position(self, r: float = None, t: float = None, z: float = None) -> None:
-        """Update the specified cylindrical position components."""
-        if r is not None:
-            self._cylindrical_position.set_r(r)
-        if t is not None:
-            self._cylindrical_position.set_t(t)
-        if z is not None:
-            self._cylindrical_position.set_z(z)
+        self._grbl_controller.softreset()
 
 
 class ScannerFactory:
