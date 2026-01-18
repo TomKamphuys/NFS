@@ -46,8 +46,8 @@ class SphericalMeasurementPointsArcsRandom:
                  nr_of_points: int,
                  wall_spacing: float,
                  radius: float,
-                 homing_gap,
-                 pole_gap) -> None:
+                 homing_gap: float,
+                 pole_gap: float) -> None:
 
         self._ready = False
         self._radius = float(radius)
@@ -91,7 +91,7 @@ class SphericalMeasurementPointsArcsRandom:
 
     def _remove_points_inside_homing_area(self, r_cyl, theta_cyl, z_cyl) -> None:
         # everything in mm and degrees
-        keep_indices = (theta_cyl < 180.0-self._homing_gap/2) | (theta_cyl > -180.0 + self._homing_gap/2)
+        keep_indices = (theta_cyl < 180.0-self._homing_gap/2) & (theta_cyl > -180.0 + self._homing_gap/2)
         self._r_cyl = r_cyl[keep_indices]
         self._theta_cyl = theta_cyl[keep_indices]
         self._z_cyl = z_cyl[keep_indices]

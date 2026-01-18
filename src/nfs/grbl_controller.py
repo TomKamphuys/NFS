@@ -2,6 +2,7 @@ import configparser
 import sys
 import time
 from abc import ABC, abstractmethod
+from nfs.datatypes import CylindricalPosition
 from grbl_streamer import GrblStreamer  # type: ignore
 from loguru import logger
 
@@ -37,6 +38,11 @@ class IGrblController(ABC):
     def softreset(self) -> None:
         pass
 
+    @abstractmethod
+    def get_position(self) -> CylindricalPosition:
+        pass
+
+
 class GrblControllerMock(IGrblController):
     """
     Mock implementation of the GrblController interface.
@@ -62,10 +68,15 @@ class GrblControllerMock(IGrblController):
     def softreset(self) -> None:
         logger.trace(f'Mocking softreset')
 
+    def get_position(self) -> CylindricalPosition:
+        return CylindricalPosition(0.0, 0.0, 0.0)
+
 
 class EventHandler:
     def __init__(self):
         self._received_message = ''
+        self._current_position = CylindricalPosition(0.0, 0.0, 0.0)
+        self._state = 'Idle'
 
     def get_received_message(self):
         return self._received_message
@@ -73,10 +84,26 @@ class EventHandler:
     def set_received_message(self, value):
         self._received_message = value
 
+    def get_current_position(self) -> CylindricalPosition:
+        return self._current_position
+
+    def get_state(self) -> str:
+        return self._state
+
     def on_grbl_event(self, event, *data) -> None:
         if event == "on_rx_buffer_percent":
             self._received_message = 'ok'
             logger.trace("set OK", flush=True)
+        if event == "on_stateupdate":
+            # data[0]: mode ('Idle', 'Run', etc.)
+            # data[1]: machine position tuple (m_x, m_y, m_z)
+            # data[2]: working position tuple (w_x, w_y, w_z)
+            if len(data) >= 3:
+                self._state = data[0]
+                if isinstance(data[2], tuple):
+                    wpos = data[2]
+                    # Mapping the tuple values to CylindricalPosition (r, t, z)
+                    self._current_position = CylindricalPosition(wpos[1], wpos[2], wpos[0])
         if event == 'on_error':
             args = []
             for d in data:
@@ -90,7 +117,6 @@ class EventHandler:
         for d in data:
             args.append(str(d))
         logger.trace("MY CALLBACK: event={} data={}".format(event.ljust(30), ", ".join(args)))
-
 
 
 class GrblControllerFactory:
@@ -191,6 +217,12 @@ class GrblStreamerClientConnection:
         self._event_handler.set_received_message('')
         return message
 
+    def get_position(self) -> CylindricalPosition:
+        return self._event_handler.get_current_position()
+
+    def get_state(self) -> str:
+        return self._event_handler.get_state()
+
     def close(self) -> None:
         self._grbl_streamer.disconnect()
 
@@ -251,15 +283,30 @@ class ESP32Duino(IGrblController):
 
     def send_and_wait_for_move_ready(self, message: str) -> None:
         """
-        Sends a message, waits for acknowledgment, sends a signal, and
-        waits for idle.
-
-        :param message: The message to be sent.
-        :type message: Str
-        :return: None
+        Sends a message, waits for acknowledgment (sync point), 
+        and then ensures we have a valid position.
         """
         self.send(message)
         self.send('G04 P0')
+        
+        # During arcs, status reports might be blocked.
+        # Since 'G4 P0' just returned 'ok', we know we are physically at the target.
+        # We wait a brief moment for the 'Idle' report to catch up if it's lagging.
+        self._wait_for_idle_state()
+
+    def _wait_for_idle_state(self) -> None:
+        """
+        Wait until the background event handler confirms the state is 'Idle'.
+        If no update arrives (common in arcs), we force a status poll.
+        """
+        # Increase timeout for long arc moves
+        timeout = time.time() + 5.0 
+        while self._connection.get_state() != 'Idle' and time.time() < timeout:
+            # If we're not getting updates, sending a '?' can sometimes 
+            # nudge GRBL to send a status report.
+            if int(time.time() * 10) % 5 == 0: # Every 0.5s
+                self._send_immediate('?')
+            time.sleep(0.05)
 
     def killalarm(self) -> None:
         logger.trace(f'Sending killalarm GRBL device')
@@ -268,6 +315,9 @@ class ESP32Duino(IGrblController):
     def softreset(self) -> None:
         logger.trace(f'Sending softreset GRBL device')
         self._connection.softreset()
+
+    def get_position(self) -> CylindricalPosition:
+        return self._connection.get_position()
 
     def _wait_for_ack(self) -> None:
         """Wait until an 'ok' acknowledgment is received from the hardware."""
