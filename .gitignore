@@ -25,3 +25,4 @@ htmlcov/
 /Recordings/
 /tests/Recordings/
 /measurement_positions.txt
+tests/measurement_positions.txt
