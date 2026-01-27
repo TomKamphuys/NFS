@@ -1,6 +1,27 @@
+# IDE
 .idea/
-__pycache__
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+
+# Virtual environments
+.venv/
+
+# Build / packaging
+dist/
+build/
+*.egg-info/
+
+# Test / tooling caches
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Logs
 *.log
-/tests/Recordings
-/Recordings
+
+# Project-generated data
+/Recordings/
+/tests/Recordings/
 /measurement_positions.txt

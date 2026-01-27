@@ -15,14 +15,12 @@ class Scanner:
     def __init__(self, grbl_controller: IGrblController, feed_rate):
         self._grbl_controller = grbl_controller
         self._stool_reference = None
-        # self._secondary_reference = None
         self._height_offset = None
         self._cylindrical_position = CylindricalPosition(*self.ZERO_POSITION)
         self._feed_rate = feed_rate
 
     def _initialize(self) -> None:
         self._stool_reference = None
-        # self._secondary_reference = None
         self._height_offset = None
         self._cylindrical_position = CylindricalPosition(*self.ZERO_POSITION)
         self.set_as_zero()
@@ -121,12 +119,6 @@ class Scanner:
 
     def set_stool_reference(self) -> None:
         self._stool_reference = self._cylindrical_position
-
-    # def set_secondary_reference(self) -> None:
-    #     if self._stool_reference is None:
-    #         logger.warning('No stool reference set! Cannot set secondary reference!')
-    #         return
-    #     self._secondary_reference = self._cylindrical_position
 
     def set_height_offset(self, height_offset: float) -> None:
         self._height_offset = height_offset # positive upwards
