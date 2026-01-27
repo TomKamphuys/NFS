@@ -1,7 +1,7 @@
 import configparser
 from loguru import logger
 
-from .datatypes import CylindricalPosition
+from .datatypes import CylindricalPosition, GrblMachineState
 from .grbl_controller import GrblControllerFactory, IGrblController
 
 
@@ -69,6 +69,23 @@ class Scanner:
     def get_position(self) -> CylindricalPosition:
         """Return the current cylindrical position."""
         return self._grbl_controller.get_position()
+
+    def get_state(self) -> GrblMachineState:
+        """Return the current normalized GRBL state (Idle/Run/Alarm/...)."""
+        return self._grbl_controller.get_state()
+
+    def get_state_raw(self) -> str:
+        """Return the raw mode string last reported by GRBL/FluidNC (e.g. 'Hold:0')."""
+        return self._grbl_controller.get_state_raw()
+
+    def is_idle(self) -> bool:
+        return self.get_state() == GrblMachineState.IDLE
+
+    def is_running(self) -> bool:
+        return self.get_state() == GrblMachineState.RUN
+
+    def is_alarm(self) -> bool:
+        return self.get_state() == GrblMachineState.ALARM
 
     def set_as_zero(self) -> None:
         """Reset scanner Work Coordinate System (Persistent)."""

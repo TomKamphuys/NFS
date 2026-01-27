@@ -2,9 +2,11 @@ import configparser
 import sys
 import time
 from abc import ABC, abstractmethod
-from nfs.datatypes import CylindricalPosition
+
 from grbl_streamer import GrblStreamer  # type: ignore
 from loguru import logger
+
+from nfs.datatypes import CylindricalPosition, GrblMachineState
 
 
 class IGrblController(ABC):
@@ -42,6 +44,14 @@ class IGrblController(ABC):
     def get_position(self) -> CylindricalPosition:
         pass
 
+    @abstractmethod
+    def get_state(self) -> GrblMachineState:
+        pass
+
+    @abstractmethod
+    def get_state_raw(self) -> str:
+        pass
+
 
 class GrblControllerMock(IGrblController):
     """
@@ -71,6 +81,12 @@ class GrblControllerMock(IGrblController):
     def get_position(self) -> CylindricalPosition:
         return CylindricalPosition(0.0, 0.0, 0.0)
 
+    def get_state(self) -> GrblMachineState:
+        return GrblMachineState.IDLE
+
+    def get_state_raw(self) -> str:
+        return "Idle"
+
 
 class EventHandler:
     def __init__(self):
@@ -87,8 +103,11 @@ class EventHandler:
     def get_current_position(self) -> CylindricalPosition:
         return self._current_position
 
-    def get_state(self) -> str:
+    def get_state(self) -> GrblMachineState:
         return self._state
+
+    def get_state_raw(self) -> str:
+        return self._state_raw
 
     def on_grbl_event(self, event, *data) -> None:
         if event == "on_rx_buffer_percent":
@@ -99,20 +118,27 @@ class EventHandler:
             # data[1]: machine position tuple (m_x, m_y, m_z)
             # data[2]: working position tuple (w_x, w_y, w_z)
             if len(data) >= 3:
-                self._state = data[0]
+                self._state_raw = str(data[0])
+                self._state = GrblMachineState.from_grbl_mode(data[0])
+
                 if isinstance(data[2], tuple):
                     wpos = data[2]
                     # Mapping the tuple values to CylindricalPosition (r, t, z)
                     self._current_position = CylindricalPosition(wpos[1], wpos[2], wpos[0])
+
         if event == 'on_error':
             args = []
             for d in data:
                 args.append(str(d))
             logger.error("ERROR: event={} data={}".format(event.ljust(30), ", ".join(args)))
             raise Exception("ERROR: event={} data={}".format(event.ljust(30), ", ".join(args)))
+
         if event == 'on_alarm':
             self._received_message = 'ok'
+            self._state_raw = "Alarm"
+            self._state = GrblMachineState.ALARM
             logger.error("ERROR: Alarm!", flush=True)
+
         args = []
         for d in data:
             args.append(str(d))
@@ -300,11 +326,11 @@ class ESP32Duino(IGrblController):
         If no update arrives (common in arcs), we force a status poll.
         """
         # Increase timeout for long arc moves
-        timeout = time.time() + 5.0 
-        while self._connection.get_state() != 'Idle' and time.time() < timeout:
-            # If we're not getting updates, sending a '?' can sometimes 
+        timeout = time.time() + 5.0
+        while self._connection.get_state() != GrblMachineState.IDLE and time.time() < timeout:
+            # If we're not getting updates, sending a '?' can sometimes
             # nudge GRBL to send a status report.
-            if int(time.time() * 10) % 5 == 0: # Every 0.5s
+            if int(time.time() * 10) % 5 == 0:  # Every 0.5s
                 self._send_immediate('?')
             time.sleep(0.05)
 
@@ -318,6 +344,12 @@ class ESP32Duino(IGrblController):
 
     def get_position(self) -> CylindricalPosition:
         return self._connection.get_position()
+
+    def get_state(self) -> GrblMachineState:
+        return self._connection.get_state()
+
+    def get_state_raw(self) -> str:
+        return self._connection.get_state_raw()
 
     def _wait_for_ack(self) -> None:
         """Wait until an 'ok' acknowledgment is received from the hardware."""

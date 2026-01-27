@@ -1,6 +1,49 @@
 import math
+from enum import Enum
 
 import numpy as np
+
+
+class GrblMachineState(str, Enum):
+    IDLE = "idle"
+    RUN = "run"
+    ALARM = "alarm"
+    HOLD = "hold"
+    JOG = "jog"
+    HOME = "home"
+    CHECK = "check"
+    DOOR = "door"
+    SLEEP = "sleep"
+    UNKNOWN = "unknown"
+
+    @classmethod
+    def from_grbl_mode(cls, mode: object) -> "GrblMachineState":
+        """
+        Convert a GRBL/FluidNC mode string into a normalized enum.
+        Examples: 'Idle', 'Run', 'Alarm', 'Hold:0', 'Door:1', etc.
+        """
+        if mode is None:
+            return cls.UNKNOWN
+
+        s = str(mode).strip()
+        if not s:
+            return cls.UNKNOWN
+
+        base = s.split(":", 1)[0].strip().lower()
+
+        mapping = {
+            "idle": cls.IDLE,
+            "run": cls.RUN,
+            "alarm": cls.ALARM,
+            "hold": cls.HOLD,
+            "jog": cls.JOG,
+            "home": cls.HOME,
+            "homing": cls.HOME,  # some firmwares use "Homing"
+            "check": cls.CHECK,
+            "door": cls.DOOR,
+            "sleep": cls.SLEEP,
+        }
+        return mapping.get(base, cls.UNKNOWN)
 
 
 class GrblConfig:
