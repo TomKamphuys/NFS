@@ -112,7 +112,7 @@ class EventHandler:
 
     def get_state(self) -> GrblMachineState:
         with self._state_lock:
-            return GrblMachineState.from_grbl_mode(self._state)
+            return self._state
 
     def get_state_seq(self) -> int:
         """Monotonic counter incremented on each new state update."""
@@ -353,7 +353,9 @@ class ESP32Duino(IGrblController):
                 continue
 
             # Now the state is "fresh enough" to check.
-            if self._connection.get_state() == GrblMachineState.IDLE:
+            state = self._connection.get_state()
+            logger.trace(f'Idle wait: seq={self._connection.get_state_seq()} state={state}')
+            if state == GrblMachineState.IDLE:
                 return
 
             # Not idle yet; keep nudging status reports occasionally.
@@ -362,6 +364,8 @@ class ESP32Duino(IGrblController):
                 self._send_immediate('?')
 
             time.sleep(0.05)
+
+        logger.warn('Idle wait: timed out without IDLE state')
 
     def killalarm(self) -> None:
         logger.trace(f'Sending killalarm GRBL device')
