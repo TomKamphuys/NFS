@@ -2,6 +2,7 @@ import configparser
 import sys
 import time
 from abc import ABC, abstractmethod
+from threading import Lock
 
 from grbl_streamer import GrblStreamer  # type: ignore
 from loguru import logger
@@ -92,7 +93,13 @@ class EventHandler:
     def __init__(self):
         self._received_message = ''
         self._current_position = CylindricalPosition(0.0, 0.0, 0.0)
-        self._state = 'Idle'
+
+        self._state: GrblMachineState = GrblMachineState.IDLE
+        self._state_raw: str = "Idle"
+
+        # Track freshness of state reports
+        self._state_seq: int = 0
+        self._state_lock = Lock()
 
     def get_received_message(self):
         return self._received_message
@@ -104,26 +111,27 @@ class EventHandler:
         return self._current_position
 
     def get_state(self) -> GrblMachineState:
-        return self._state
+        with self._state_lock:
+            return GrblMachineState.from_grbl_mode(self._state)
 
-    def get_state_raw(self) -> str:
-        return self._state_raw
+    def get_state_seq(self) -> int:
+        """Monotonic counter incremented on each new state update."""
+        with self._state_lock:
+            return self._state_seq
 
     def on_grbl_event(self, event, *data) -> None:
         if event == "on_rx_buffer_percent":
             self._received_message = 'ok'
             logger.trace("set OK", flush=True)
         if event == "on_stateupdate":
-            # data[0]: mode ('Idle', 'Run', etc.)
-            # data[1]: machine position tuple (m_x, m_y, m_z)
-            # data[2]: working position tuple (w_x, w_y, w_z)
             if len(data) >= 3:
-                self._state_raw = str(data[0])
-                self._state = GrblMachineState.from_grbl_mode(data[0])
+                with self._state_lock:
+                    self._state_raw = str(data[0])
+                    self._state = GrblMachineState.from_grbl_mode(data[0])
+                    self._state_seq += 1
 
                 if isinstance(data[2], tuple):
                     wpos = data[2]
-                    # Mapping the tuple values to CylindricalPosition (r, t, z)
                     self._current_position = CylindricalPosition(wpos[1], wpos[2], wpos[0])
 
         if event == 'on_error':
@@ -135,8 +143,10 @@ class EventHandler:
 
         if event == 'on_alarm':
             self._received_message = 'ok'
-            self._state_raw = "Alarm"
-            self._state = GrblMachineState.ALARM
+            with self._state_lock:
+                self._state_raw = "Alarm"
+                self._state = GrblMachineState.ALARM
+                self._state_seq += 1
             logger.error("ERROR: Alarm!", flush=True)
 
         args = []
@@ -184,6 +194,7 @@ class GrblControllerFactory:
             time.sleep(3)
             grbl_streamer.poll_start()
             grbl_streamer.incremental_streaming = True
+            grbl_streamer.send_immediately("$10=2")  # Force the report format to match what we expect.
 
             set_config = config_parser.getboolean(section, 'set_config')
             if set_config:
@@ -246,8 +257,11 @@ class GrblStreamerClientConnection:
     def get_position(self) -> CylindricalPosition:
         return self._event_handler.get_current_position()
 
-    def get_state(self) -> str:
+    def get_state(self) -> GrblMachineState:
         return self._event_handler.get_state()
+
+    def get_state_seq(self) -> int:
+        return self._event_handler.get_state_seq()
 
     def close(self) -> None:
         self._grbl_streamer.disconnect()
@@ -322,16 +336,31 @@ class ESP32Duino(IGrblController):
 
     def _wait_for_idle_state(self) -> None:
         """
-        Wait until the background event handler confirms the state is 'Idle'.
-        If no update arrives (common in arcs), we force a status poll.
+        Wait until we observe a *fresh* state report and it says IDLE.
+        If no update arrives (common during some motions), we force status polls.
         """
-        # Increase timeout for long arc moves
         timeout = time.time() + 5.0
-        while self._connection.get_state() != GrblMachineState.IDLE and time.time() < timeout:
-            # If we're not getting updates, sending a '?' can sometimes
-            # nudge GRBL to send a status report.
+
+        # Ensure we don't trust a stale cached value:
+        # capture the last-seen update counter, then force a poll.
+        last_seq = self._connection.get_state_seq()
+        self._send_immediate('?')
+
+        while time.time() < timeout:
+            # Wait until we have seen at least one NEW state update since we started waiting.
+            if self._connection.get_state_seq() == last_seq:
+                time.sleep(0.02)
+                continue
+
+            # Now the state is "fresh enough" to check.
+            if self._connection.get_state() == GrblMachineState.IDLE:
+                return
+
+            # Not idle yet; keep nudging status reports occasionally.
             if int(time.time() * 10) % 5 == 0:  # Every 0.5s
+                last_seq = self._connection.get_state_seq()
                 self._send_immediate('?')
+
             time.sleep(0.05)
 
     def killalarm(self) -> None:

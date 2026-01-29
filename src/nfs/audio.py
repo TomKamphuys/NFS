@@ -2,6 +2,7 @@ import configparser
 import math
 import os
 from abc import ABC, abstractmethod
+from typing import Union
 
 import numpy as np
 import pyfar as pf  # type: ignore
@@ -9,6 +10,7 @@ import sounddevice as sd  # type: ignore
 from loguru import logger
 
 from .datatypes import CylindricalPosition
+
 
 class Sweep:
     def __init__(self, sweep: pf.Signal, minimum_frequency, maximum_frequency):
@@ -86,26 +88,11 @@ class Audio(IAudio):
     """
     Handles audio-related operations including impulse response measurement
     using an exponential sweep signal.
-
-    This class provides functionality to measure and process impulse responses
-    for a specified cylindrical position. It is initialized with audio settings
-    like sample rate, frequency range, and duration, and sets the default audio
-    device for recording.
-
-    :ivar _sample_rate: Sampling rate for audio processing.
-    :type _sample_rate: int
-    :ivar _minimum_frequency: Minimum frequency for exponential sweep.
-    :type _minimum_frequency: float
-    :ivar _maximum_frequency: Maximum frequency for exponential sweep.
-    :type _maximum_frequency: float
-    :ivar _duration: Duration of the sweep signal in seconds.
-    :type _duration: int
-    :ivar _padding_time: Padding time applied before and after the sweep signal.
-    :type _padding_time: float
     """
     def __init__(self,
-                 device_id,
+                 device_id: Union[int, tuple[int, int]],
                  sweep: pf.Signal):
+        # sounddevice accepts either an int or a (input, output) pair
         sd.default.device = device_id
         self._sweep = sweep
 
@@ -161,13 +148,26 @@ class AudioFactory:
     """
     Factory class responsible for creating instances of Audio or AudioMock
     based on configuration settings.
-
-    This class provides a static method that parses a configuration file
-    to dynamically decide which type of Audio-related object should be
-    instantiated and returned. The configuration file must define
-    specific parameters under a designated section for the factory method
-    to operate correctly.
     """
+
+    @staticmethod
+    def _parse_device_id(raw: str) -> Union[int, tuple[int, int]]:
+        """
+        Accepts:
+          - "7" -> 7
+          - "12,7" (or "12, 7") -> (12, 7)  (input_id, output_id)
+        """
+        s = raw.strip()
+        if "," not in s:
+            return int(s)
+
+        parts = [p.strip() for p in s.split(",") if p.strip() != ""]
+        if len(parts) != 2:
+            raise ValueError(
+                f"device_id must be a single integer or two integers separated by a comma, got: {raw!r}"
+            )
+        return (int(parts[0]), int(parts[1]))
+
     @staticmethod
     def create(config_file: str, section: str) -> IAudio:
         """
@@ -183,7 +183,9 @@ class AudioFactory:
         if mock:
             return AudioMock()
 
-        device_id = config_parser.getint(section, 'device_id')
+        device_raw = config_parser.get(section, 'device_id')
+        device_id = AudioFactory._parse_device_id(device_raw)
+
         sweep_generator = SweepFactory.create(config_file)
         sweep = sweep_generator.generate()
         return Audio(device_id, sweep)
