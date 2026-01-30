@@ -365,7 +365,7 @@ class ESP32Duino(IGrblController):
 
             time.sleep(0.05)
 
-        logger.warn('Idle wait: timed out without IDLE state')
+        logger.warning('Idle wait: timed out without IDLE state')
 
     def killalarm(self) -> None:
         logger.trace(f'Sending killalarm GRBL device')

@@ -130,7 +130,7 @@ class Scanner:
         self._grbl_controller.shutdown()
 
     def home(self) -> None:
-        self._grbl_controller.send('$H')
+        self._grbl_controller.send_and_wait_for_move_ready('$H')
 
     def clear_alarm(self) -> None:
         self._grbl_controller.killalarm()
