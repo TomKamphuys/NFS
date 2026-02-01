@@ -42,6 +42,10 @@ class IGrblController(ABC):
         pass
 
     @abstractmethod
+    def hold(self) -> None:
+        pass
+
+    @abstractmethod
     def get_position(self) -> CylindricalPosition:
         pass
 
@@ -51,6 +55,9 @@ class IGrblController(ABC):
 
     @abstractmethod
     def get_state_raw(self) -> str:
+        pass
+
+    def force_position_update(self):
         pass
 
 
@@ -79,6 +86,9 @@ class GrblControllerMock(IGrblController):
     def softreset(self) -> None:
         logger.trace(f'Mocking softreset')
 
+    def hold(self) -> None:
+        logger.trace(f'Mocking hold')
+
     def get_position(self) -> CylindricalPosition:
         return CylindricalPosition(0.0, 0.0, 0.0)
 
@@ -87,6 +97,10 @@ class GrblControllerMock(IGrblController):
 
     def get_state_raw(self) -> str:
         return "Idle"
+
+    def force_position_update(self):
+        logger.trace(f'Mocking force position update')
+        pass
 
 
 class EventHandler:
@@ -245,6 +259,10 @@ class GrblStreamerClientConnection:
         logger.trace(f'GrblStreamerClientConnection: Sending message: softreset', flush=True)
         self._grbl_streamer.softreset()
 
+    def hold(self) -> None:
+        logger.trace(f'GrblStreamerClientConnection: Sending message: hold', flush=True)
+        self._grbl_streamer.hold()
+
     def send(self, message: str) -> None:
         logger.trace(f'GrblStreamerClientConnection: Sending message: {message}', flush=True)
         self._grbl_streamer.send_immediately(message)
@@ -334,6 +352,13 @@ class ESP32Duino(IGrblController):
         # We wait a brief moment for the 'Idle' report to catch up if it's lagging.
         self._wait_for_idle_state()
 
+    def force_position_update(self) -> None:
+        """
+        Forces a position update by sending a '?' command and waiting for a response.
+        """
+        self._send_immediate('?')
+        self._wait_for_idle_state()
+
     def _wait_for_idle_state(self) -> None:
         """
         Wait until we observe a *fresh* state report and it says IDLE.
@@ -374,6 +399,10 @@ class ESP32Duino(IGrblController):
     def softreset(self) -> None:
         logger.trace(f'Sending softreset GRBL device')
         self._connection.softreset()
+
+    def hold(self) -> None:
+        logger.trace(f'Sending hold GRBL device')
+        self._connection.hold()
 
     def get_position(self) -> CylindricalPosition:
         return self._connection.get_position()
