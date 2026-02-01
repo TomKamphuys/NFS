@@ -91,7 +91,8 @@ class Scanner:
         """Reset scanner Work Coordinate System (Persistent)."""
         # G10 L20 P2 sets the CURRENT position as the zero point for G55 (P2).
         # Unlike G92, this is saved to EEPROM and survives restarts.
-        self._grbl_controller.send(f'G10 L20 P2 X0 Y0 Z0')
+        self._grbl_controller.send(f'G10 L20 P2 X0 Y0 Z0')  # G55
+        self._grbl_controller.send(f'G10 L20 P1 X0 Y0 Z0')  # G54
         self.angular_move_to(0.0)  # dummy move to force update of internal position
 
     def set_speaker_center_above_stool(self, height: float) -> None:
