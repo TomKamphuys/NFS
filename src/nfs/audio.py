@@ -91,7 +91,7 @@ class Audio(IAudio):
     """
     def __init__(self,
                  device_id: Union[int, tuple[int, int]],
-                 sweep: pf.Signal):
+                 sweep: Sweep):
         # sounddevice accepts either an int or a (input, output) pair
         sd.default.device = device_id
         self._sweep = sweep
@@ -114,7 +114,7 @@ class Audio(IAudio):
         x_reference = pf.Signal(recording[:, 1].T, sampling_rate)
 
         x_inverted = pf.dsp.regularized_spectrum_inversion(x_reference,
-                                                           (self._sweep.minimum_frequency, self.sweep.maximum_frequency))
+                                                           (self._sweep.minimum_frequency, self._sweep.maximum_frequency))
         h = y * x_inverted
 
         # apply high-pass to reject out-of-band noise
@@ -125,7 +125,7 @@ class Audio(IAudio):
 
         pf.io.write_audio(
             h_processed,
-            os.path.join('../../Recordings', f'{position}.wav'),
+            os.path.join('./Recordings', f'{position}.wav'),
             'DOUBLE')
 
 
