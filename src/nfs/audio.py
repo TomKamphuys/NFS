@@ -123,9 +123,11 @@ class Audio(IAudio):
         # window to reduce impulse response length
         h_processed = pf.dsp.time_window(h_processed, [0, 0.1], window='boxcar', unit='s', crop='window')
 
+        filename = f'({position.r():.1f}, {position.phi():.1f}, {position.z():.1f}).wav'
+
         pf.io.write_audio(
             h_processed,
-            os.path.join('./Recordings', f'{position}.wav'),
+            os.path.join('./Recordings', filename),
             'DOUBLE')
 
 
