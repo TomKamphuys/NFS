@@ -1,13 +1,16 @@
 import csv
 
 from nfs.datatypes import CylindricalPosition
-import numpy as np
 
 
 class FileMeasurementPoints:
     """Base class for file measurement points plugins."""
 
-    def __init__(self, filename: str):
+    def __init__(self, filename: str,
+                 homing_gap: float,
+                 pole_gap: float):
+        self._homing_gap = float(homing_gap)
+        self._pole_gap = float(pole_gap)
         self._points: list[CylindricalPosition] = []
         self._current_index = 0
         self._ready = False
@@ -22,7 +25,10 @@ class FileMeasurementPoints:
             r_xy_mm = float(row.get("r_xy_mm"))  # Radial distance in XY plane (mm)
             phi_deg = float(row.get("phi_deg"))  # Azimuth angle (degrees)
             z_mm = float(row.get("z_mm"))  # Height position (mm)
-            self._points.append(CylindricalPosition(r_xy_mm*0.9, (phi_deg-180)*0.9, (z_mm-400)/1.5)) # TODO MPOT some magic to limit the motion to stay clear of end stops
+            if self._remove_point_inside_homing_area(phi_deg) or self._remove_point_inside_speaker_stand(r_xy_mm):
+                continue
+            print(f"Point {idx}: ({r_xy_mm:.2f}, {phi_deg:.2f}, {z_mm:.2f})")
+            self._points.append(CylindricalPosition(r_xy_mm, phi_deg, z_mm))
 
     def next(self) -> CylindricalPosition:
         if self._current_index < len(self._points):
@@ -39,6 +45,14 @@ class FileMeasurementPoints:
 
     def need_to_do_evasive_move(self) -> bool: # TODO MPOT I dont think this is used
         return False
+
+    def _remove_point_inside_speaker_stand(self, r_cyl) -> bool:
+        # everything in mm and degrees
+        return r_cyl > (self._pole_gap / 2.0)
+
+    def _remove_point_inside_homing_area(self, theta_cyl) -> bool:
+        # everything in mm and degrees
+        return (theta_cyl < 180.0-self._homing_gap/2) & (theta_cyl > -180.0 + self._homing_gap/2)
 
 def register(factory) -> None:
     factory.register("FileMeasurementPoints", FileMeasurementPoints)
