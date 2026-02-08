@@ -104,14 +104,32 @@ class Audio(IAudio):
         logger.info(f'IR measurement for position {position}')
         sampling_rate = self._sweep.sweep.sampling_rate
 
+        sweep_time = self._sweep.sweep.time.T
+        sweep_length = sweep_time.shape[0]
+        sweep_repetitions = 5
+
+        pause_seconds = 0.0
+        pause_samples = int(round(pause_seconds * sampling_rate))
+        pause_stereo = np.zeros((pause_samples, 2), dtype=sweep_time.dtype)
+
+        play_signal = np.concatenate((sweep_time, sweep_time), axis=1)
+        play_with_pause = np.concatenate((play_signal, pause_stereo), axis=0)
+        play_signal = np.tile(play_with_pause, (sweep_repetitions, 1))
+
         recording = sd.playrec(
-            np.concatenate((self._sweep.sweep.time.T, self._sweep.sweep.time.T), axis=1),
+            play_signal,
             sampling_rate,
             channels=2,
             blocking=True)
 
-        y = pf.Signal(recording[:, 0].T, sampling_rate)
-        x_reference = pf.Signal(recording[:, 1].T, sampling_rate)
+        # Split into 5 sweeps (skip pauses) and average the last 4
+        block_length = sweep_length + pause_samples
+        blocks = recording.reshape(sweep_repetitions, block_length, 2)
+        sweeps = blocks[:, :sweep_length, :]
+        averaged = sweeps[1:, :, :].mean(axis=0)
+
+        y = pf.Signal(averaged[:, 0].T, sampling_rate)
+        x_reference = pf.Signal(averaged[:, 1].T, sampling_rate)
 
         x_inverted = pf.dsp.regularized_spectrum_inversion(x_reference,
                                                            (self._sweep.minimum_frequency, self._sweep.maximum_frequency))
