@@ -113,7 +113,7 @@ class CylindricalMeasurementMotionManager(IMotionManager):
             logger.debug('No planar move needed.')
             return
 
-        safe_radius = 250.0  # TODO MPOT
+        safe_radius = 87.0  # TODO MPOT
 
         # Strategy:
         # 1. If Z needs to change, we MUST be at safe_radius first.
@@ -130,9 +130,10 @@ class CylindricalMeasurementMotionManager(IMotionManager):
             logger.debug(f'Moving Z at safe radius: Z->{target_z:.1f}')
             self._scanner.vertical_move_to(target_z)
 
-            # Step 3: Move to Target Radius if different from Safe Radius
-            if abs(target_r - safe_radius) > self.TOLERANCE:
-                logger.debug(f'Moving in to radius: R->{target_r:.1f}')
+            # Step 3: Move to Target Radius if not already there
+            current_r = self._scanner.get_position().r()
+            if abs(target_r - current_r) > self.TOLERANCE:
+                logger.debug(f'Moving to target radius: R->{target_r:.1f}')
                 self._scanner.radial_move_to(target_r)
 
         else:
