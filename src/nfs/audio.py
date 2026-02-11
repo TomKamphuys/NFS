@@ -91,10 +91,14 @@ class Audio(IAudio):
     """
     def __init__(self,
                  device_id: Union[int, tuple[int, int]],
-                 sweep: Sweep):
+                 sweep: Sweep,
+                 pre_sweeps: int,
+                 measurement_sweeps: int):
         # sounddevice accepts either an int or a (input, output) pair
         sd.default.device = device_id
         self._sweep = sweep
+        self._pre_sweeps = pre_sweeps
+        self._measurement_sweeps = measurement_sweeps
 
     def measure_ir(self, position: CylindricalPosition) -> None:
         """
@@ -106,7 +110,7 @@ class Audio(IAudio):
 
         sweep_time = self._sweep.sweep.time.T
         sweep_length = sweep_time.shape[0]
-        sweep_repetitions = 5
+        sweep_repetitions = self._pre_sweeps + self._measurement_sweeps
 
         pause_seconds = 0.0
         pause_samples = int(round(pause_seconds * sampling_rate))
@@ -122,11 +126,10 @@ class Audio(IAudio):
             channels=2,
             blocking=True)
 
-        # Split into 5 sweeps (skip pauses) and average the last 4
         block_length = sweep_length + pause_samples
         blocks = recording.reshape(sweep_repetitions, block_length, 2)
         sweeps = blocks[:, :sweep_length, :]
-        averaged = sweeps[1:, :, :].mean(axis=0)
+        averaged = sweeps[self._pre_sweeps:, :, :].mean(axis=0)
 
         y = pf.Signal(averaged[:, 0].T, sampling_rate)
         x_reference = pf.Signal(averaged[:, 1].T, sampling_rate)
@@ -208,4 +211,6 @@ class AudioFactory:
 
         sweep_generator = SweepFactory.create(config_file)
         sweep = sweep_generator.generate()
-        return Audio(device_id, sweep)
+        pre_sweeps = config_parser.getint(section, 'pre_sweeps')
+        measurement_sweeps = config_parser.getint(section, 'measurement_sweeps')
+        return Audio(device_id, sweep, pre_sweeps, measurement_sweeps)

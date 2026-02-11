@@ -43,14 +43,14 @@ class IMotionManager(ABC):
 class CylindricalMeasurementMotionManager(IMotionManager):
     TOLERANCE = 0.1
 
-    def __init__(self, scanner: Scanner, measurement_points: MeasurementPoints):
+    def __init__(self, scanner: Scanner, measurement_points: MeasurementPoints, safe_radius: float):
         self._scanner = scanner
         self._measurement_points = measurement_points
+        self._safe_radius = safe_radius
 
     def move_to_safe_starting_radius(self) -> None:
-        radius = 300  # self._measurement_points.get_radius() TODO MPOT
-        logger.info(f'Performing a first move to a safe radius: {radius:.1f}mm')
-        self._scanner.planar_move_to(radius, 0.0)
+        logger.info(f'Performing a first move to a safe radius: {self._safe_radius:.1f}mm')
+        self._scanner.planar_move_to(self._safe_radius, 0.0)
 
     def next(self) -> CylindricalPosition:
         position = self._measurement_points.next()
@@ -113,8 +113,6 @@ class CylindricalMeasurementMotionManager(IMotionManager):
             logger.debug('No planar move needed.')
             return
 
-        safe_radius = 87.0  # TODO MPOT
-
         # Strategy:
         # 1. If Z needs to change, we MUST be at safe_radius first.
         # 2. Then change Z.
@@ -122,9 +120,9 @@ class CylindricalMeasurementMotionManager(IMotionManager):
 
         if z_diff > self.TOLERANCE:
             # Step 1: Move to Safe Radius if not already there
-            if current_position.r() < safe_radius - self.TOLERANCE:
-                logger.debug(f'Moving out to safe radius: R->{safe_radius:.1f}')
-                self._scanner.radial_move_to(safe_radius)
+            if current_position.r() < self._safe_radius - self.TOLERANCE:
+                logger.debug(f'Moving out to safe radius: R->{self._safe_radius:.1f}')
+                self._scanner.radial_move_to(self._safe_radius)
 
             # Step 2: Move Z
             logger.debug(f'Moving Z at safe radius: Z->{target_z:.1f}')
@@ -334,7 +332,8 @@ class MotionManagerFactory:
 
         motion_manager_type = config_parser.get(section, 'type')
         if motion_manager_type == 'CylindricalMeasurementMotionManager':
-            return CylindricalMeasurementMotionManager(scanner, measurement_points)
+            safe_radius = config_parser.getfloat(section, 'safe_radius')
+            return CylindricalMeasurementMotionManager(scanner, measurement_points, safe_radius)
         elif motion_manager_type == 'SphericalMeasurementMotionManager':
             return SphericalMeasurementMotionManager(scanner, measurement_points)
         else:
