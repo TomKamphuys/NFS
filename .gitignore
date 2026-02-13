@@ -22,7 +22,11 @@ htmlcov/
 *.log
 
 # Project-generated data
-/Recordings/
-/tests/Recordings/
+/RawRecordings/*
+!/RawRecordings/.gitkeep
+/Recordings/*
+!/Recordings/.gitkeep
+/tests/Recordings/*
+!/tests/Recordings/.gitkeep
 /measurement_positions.txt
 tests/measurement_positions.txt

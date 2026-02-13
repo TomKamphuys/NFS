@@ -93,12 +93,14 @@ class Audio(IAudio):
                  device_id: Union[int, tuple[int, int]],
                  sweep: Sweep,
                  pre_sweeps: int,
-                 measurement_sweeps: int):
+                 measurement_sweeps: int,
+                 save_raw_measurement: bool):
         # sounddevice accepts either an int or a (input, output) pair
         sd.default.device = device_id
         self._sweep = sweep
         self._pre_sweeps = pre_sweeps
         self._measurement_sweeps = measurement_sweeps
+        self._save_raw_measurement = save_raw_measurement
 
     def measure_ir(self, position: CylindricalPosition) -> None:
         """
@@ -126,6 +128,16 @@ class Audio(IAudio):
             channels=2,
             blocking=True)
 
+        filename = f'({position.r():.1f}, {position.t():.1f}, {position.z():.1f}).wav'
+
+        if self._save_raw_measurement:
+            recording_signal = pf.Signal(recording.T, sampling_rate)
+            pf.io.write_audio(
+                recording_signal,
+                os.path.join('./RawRecordings', filename),
+                'DOUBLE'
+            )
+
         block_length = sweep_length + pause_samples
         blocks = recording.reshape(sweep_repetitions, block_length, 2)
         sweeps = blocks[:, :sweep_length, :]
@@ -143,8 +155,6 @@ class Audio(IAudio):
 
         # window to reduce impulse response length
         h_processed = pf.dsp.time_window(h_processed, [0, 0.1], window='boxcar', unit='s', crop='window')
-
-        filename = f'({position.r():.1f}, {position.t():.1f}, {position.z():.1f}).wav'
 
         pf.io.write_audio(
             h_processed,
@@ -213,4 +223,5 @@ class AudioFactory:
         sweep = sweep_generator.generate()
         pre_sweeps = config_parser.getint(section, 'pre_sweeps')
         measurement_sweeps = config_parser.getint(section, 'measurement_sweeps')
-        return Audio(device_id, sweep, pre_sweeps, measurement_sweeps)
+        save_raw_measurement = config_parser.getboolean(section, 'save_raw_measurement')
+        return Audio(device_id, sweep, pre_sweeps, measurement_sweeps, save_raw_measurement)
