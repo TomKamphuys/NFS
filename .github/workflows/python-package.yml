@@ -21,9 +21,14 @@ jobs:
       uses: astral-sh/setup-uv@v7
       with:
         enable-cache: true
+
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libportaudio2 libasound2-dev    
        
     - name: Install the project
       run: uv sync --locked --all-extras --dev
-        
+             
     - name: Test with pytest
-      run: uv tun pytest test
+      run: uv run pytest tests

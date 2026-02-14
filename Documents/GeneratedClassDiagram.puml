@@ -1,0 +1,162 @@
+@startuml
+
+package "nfs" {
+
+    class NearFieldScanner {
+        - _scanner: Scanner
+        - _audio: IAudio
+        - _measurement_motion_manager: IMotionManager
+        - _position_log_file: str
+        + take_single_measurement()
+        + take_measurement_set()
+        + shutdown()
+    }
+
+    class NearFieldScannerFactory {
+        {static} + create(scanner: Scanner, config_file: str): NearFieldScanner
+    }
+
+    package "scanner" {
+        class Scanner {
+            - _grbl_controller: IGrblController
+            - _cylindrical_position: CylindricalPosition
+            - _feed_rate: float
+            + radial_move_to(r)
+            + planar_move_to(r, z)
+            + cw_arc_move_to(r, z, radius)
+            + ccw_arc_move_to(r, z, radius)
+            + angular_move_to(angle)
+            + vertical_move_to(z)
+            + get_position(): CylindricalPosition
+            + set_as_zero()
+            + shutdown()
+            + home()
+        }
+
+        class ScannerFactory {
+            {static} + create(config_file: str): Scanner
+        }
+
+        interface IMotionManager {
+            + {abstract} move_to_safe_starting_radius()
+            + {abstract} next(): CylindricalPosition
+            + {abstract} ready(): bool
+            + {abstract} reset()
+            + {abstract} shutdown()
+        }
+
+        class MotionManagerFactory {
+            {static} + create(config_file: str, section: str, scanner: Scanner): IMotionManager
+        }
+
+        class CylindricalMeasurementMotionManager
+        class SphericalMeasurementMotionManager
+    }
+
+    package "grbl_controller" {
+        interface IGrblController {
+            + {abstract} send(message)
+            + {abstract} send_and_wait_for_move_ready(message)
+            + {abstract} killalarm()
+            + {abstract} softreset()
+            + {abstract} shutdown()
+        }
+
+        class GrblControllerFactory {
+            {static} + create(section: str, config_file: str): IGrblController
+        }
+
+        class Arduino
+        class ESP32Duino
+        class GrblControllerMock
+
+        class GrblStreamerClientConnection {
+            - _grbl_streamer: GrblStreamer
+            - _event_handler: EventHandler
+            + send(message)
+            + receive(): str
+        }
+
+        class EventHandler {
+            + on_grbl_event(event, *data)
+        }
+    }
+
+    package "datatypes" {
+        class CylindricalPosition {
+            - _r: float
+            - _t: float
+            - _z: float
+            + r(): float
+            + t(): float
+            + z(): float
+        }
+    }
+
+    package "audio" {
+        interface IAudio {
+             + {abstract} measure_ir(position: CylindricalPosition)
+        }
+        class Audio {
+            - _sweep: Sweep
+        }
+        class AudioMock
+        class AudioFactory {
+            {static} + create(config_file: str, section: str): IAudio
+        }
+
+        interface ISweep {
+            + {abstract} generate(): Sweep
+        }
+        class Sweep {
+            + sweep: pf.Signal
+            + minimum_frequency: float
+            + maximum_frequency: float
+        }
+        class ExponentialSweep
+        class WavSweep
+        class SweepFactory {
+            {static} + create(config_file: str): ISweep
+        }
+    }
+
+    package "measurement_points" {
+         class SphericalMeasurementPointsArcsRandom {
+             + next(): CylindricalPosition
+             + reset()
+             + ready(): bool
+         }
+    }
+}
+
+NearFieldScanner --> IAudio
+NearFieldScanner --> IMotionManager
+NearFieldScanner --> Scanner
+NearFieldScannerFactory ..> NearFieldScanner
+
+Scanner --> IGrblController
+ScannerFactory ..> Scanner
+
+IGrblController <|.. Arduino
+IGrblController <|.. ESP32Duino
+IGrblController <|.. GrblControllerMock
+ESP32Duino --> GrblStreamerClientConnection
+GrblStreamerClientConnection --> EventHandler
+GrblControllerFactory ..> IGrblController
+
+IMotionManager <|.. CylindricalMeasurementMotionManager
+IMotionManager <|.. SphericalMeasurementMotionManager
+MotionManagerFactory ..> IMotionManager
+
+IAudio <|.. Audio
+IAudio <|.. AudioMock
+AudioFactory ..> IAudio
+AudioFactory ..> SweepFactory
+Audio --> Sweep
+
+ISweep <|.. ExponentialSweep
+ISweep <|.. WavSweep
+ISweep ..> Sweep : generates
+SweepFactory ..> ISweep
+
+@enduml

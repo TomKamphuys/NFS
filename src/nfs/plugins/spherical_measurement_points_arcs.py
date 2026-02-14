@@ -1,0 +1,130 @@
+import numpy as np
+from loguru import logger
+
+from nfs.datatypes import CylindricalPosition
+
+logger.add('scanner.log', mode='w', level="TRACE")
+
+
+class SphericalMeasurementPointsArcs:
+    """
+    Handles the computation of spherical measurement points and their conversion to
+    cylindrical coordinates for a specified spherical surface. This class calculates
+    point positions on a spherical grid, including an inner wall, and processes these
+    points into cylindrical coordinates for specific applications in measurement
+    or analysis systems. Points below a certain radius are filtered out.
+
+    :ivar _ready: Indicates whether the iteration through points is complete.
+    :type _ready: bool
+    :ivar _radius: Radius of the sphere in millimeters.
+    :type _radius: float
+    :ivar _wall_spacing: Distance between the inner and outer spherical surfaces in millimeters.
+    :type _wall_spacing: float
+    :ivar _nr_of_points: Total number of points on the spherical grid.
+    :type _nr_of_points: int
+    :ivar _thetas: Collection of theta angles of the spherical grid points.
+    :type _thetas: numpy.ndarray
+    :ivar _phis: Collection of phi angles of the spherical grid points.
+    :type _phis: numpy.ndarray
+    :ivar _r_cyl: Radial cylindrical coordinates of the valid points.
+    :type _r_cyl: numpy.ndarray
+    :ivar _theta_cyl: Angular cylindrical coordinates of the valid points.
+    :type _theta_cyl: numpy.ndarray
+    :ivar _z_cyl: Axial cylindrical coordinates of the valid points.
+    :type _z_cyl: numpy.ndarray
+    :ivar _actual_nr_of_points: Total number of valid points after filtering.
+    :type _actual_nr_of_points: int
+    :ivar _current_index: Current index of the cylindrical point being iterated.
+    :type _current_index: int
+    """
+    def __init__(self,
+                 nr_of_points,
+                 wall_spacing,
+                 radius):
+        self._ready = False
+        self._radius = float(radius)
+        self._wall_spacing = float(wall_spacing)
+        self._nr_of_points = int(nr_of_points)
+
+        n = self._nr_of_points / 2
+        a = 4 * np.pi / n  # r ^ 2 = 1, 'a' is the surface area around a single point
+        d = np.sqrt(a)  # this is the length of the (assumed) square area
+        m_theta = round(np.pi / d)  # this is the amount of circles
+        d_theta = np.pi / m_theta  # length resulting in an integer number of circles
+        d_phi = a / d_theta  # other side of square (which has become a rectangle)
+
+        self._thetas = np.empty((0, 0))
+        self._phis = np.empty((0, 0))
+
+        for m in range(m_theta):
+            theta = np.pi * (m + 0.5) / m_theta  # theta of the circle
+            m_phi = round(2 * np.pi * np.sin(theta) / d_phi)  # number of points on circle
+
+            for n in range(m_phi):
+                phi = 2 * np.pi * n / m_phi  # phi for every point
+                self._thetas = np.append(self._thetas, theta)
+                self._phis = np.append(self._phis, phi)
+
+        x = self._radius * np.sin(self._thetas) * np.cos(self._phis)
+        y = self._radius * np.sin(self._thetas) * np.sin(self._phis)
+        z = self._radius * np.cos(self._thetas)
+
+        inner_radius = self._radius - self._wall_spacing
+
+        x_inner = inner_radius * np.sin(self._thetas) * np.cos(self._phis)
+        y_inner = inner_radius * np.sin(self._thetas) * np.sin(self._phis)
+        z_inner = inner_radius * np.cos(self._thetas)
+
+        x = np.append(x, x_inner)
+        y = np.append(y, y_inner)
+        z = np.append(z, z_inner)
+
+        r_temp = np.sqrt(x ** 2 + y ** 2)
+        theta_cyl_temp = np.arctan2(x, y) / np.pi * 180
+
+        # r_temp = np.around(r_temp, 2)
+        theta_cyl_temp = np.around(theta_cyl_temp, 0)
+        # z = np.around(z, 2)
+
+        sorted_indices = np.argsort(theta_cyl_temp * 100000 + z)
+
+        r_cyl = r_temp[sorted_indices]
+        theta_cyl = theta_cyl_temp[sorted_indices]
+        z_cyl = z[sorted_indices]
+
+        # everything in mm and degrees
+        keep_indices = (r_cyl > 30.0)  # diameter central pole is 50mm
+        self._r_cyl = r_cyl[keep_indices]
+        self._theta_cyl = theta_cyl[keep_indices]
+        self._z_cyl = z_cyl[keep_indices]
+
+        self._actual_nr_of_points = self._r_cyl.size
+        self._current_index = 0
+
+    def get_radius(self) -> float:
+        return self._radius
+
+    def next(self) -> CylindricalPosition:
+        i = self._current_index
+        logger.info(f'Point {i} of {self._actual_nr_of_points}')
+
+        r = self._r_cyl[i]
+        theta = self._theta_cyl[i]
+        z = self._z_cyl[i]
+
+        self._current_index += 1
+
+        if self._current_index == self._actual_nr_of_points:
+            self._ready = True
+
+        return CylindricalPosition(r, theta, z)
+
+    def reset(self) -> None:
+        self._current_index = 0
+
+    def ready(self) -> bool:
+        return self._ready
+
+
+def register(factory) -> None:
+    factory.register("SphericalMeasurementPointsArcs", SphericalMeasurementPointsArcs)

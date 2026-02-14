@@ -1,0 +1,54 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nfs"
+version = "0.2.0"
+description = "Near Field Scanner utilities and CLI"
+readme = "README.md"
+requires-python = "==3.13.5"
+license = { text = "Proprietary" }
+authors = [{ name = "Your Name" }]
+keywords = ["near-field", "scanner", "measurement"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.13",
+  "License :: Other/Proprietary License",
+  "Operating System :: OS Independent"
+]
+
+dependencies = [
+  "numpy",
+  "scipy",
+  "matplotlib",
+  "loguru",
+  "grbl-streamer>=2.0.2",
+  "pyfar>=0.7.3",
+  "sounddevice>=0.5.3",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "pylint", "mypy"]
+
+[project.scripts]
+nfs-app = "nfs.nfs_app:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["nfs*"]
+exclude = ["tests*"]
+
+[tool.setuptools.package-data]
+nfs = ["config.ini"]
+
+[tool.setuptools.exclude-package-data]
+"*" = ["*.log", "*.gcode"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
