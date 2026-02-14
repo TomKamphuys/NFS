@@ -43,9 +43,14 @@ TODO
 ### Installation
 
 Clone the repository
-git clone https://github.com/<your-username>/NFS.git cd NFS
+```
+git clone https://github.com/<your-username>/NFS.git
+cd NFS
+```
 Install dependencies (including dev tools)
+```
 uv sync --all-groups
+```
 
 
 ### Configuration
@@ -64,15 +69,18 @@ Edit `config.ini` to match your hardware setup. Key sections:
 ### Running
 
 Run the application
+```
 uv run nfs-app
+```
 
 
 ---
 
 ## 🧪 Testing
 
-bash uv run pytest
-
+```
+uv run pytest
+```
 
 ---
 
