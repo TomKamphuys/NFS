@@ -94,13 +94,20 @@ class Audio(IAudio):
                  sweep: Sweep,
                  pre_sweeps: int,
                  measurement_sweeps: int,
-                 save_raw_measurement: bool):
+                 save_raw_measurement: bool,
+                 output_level_db: float):
+        if output_level_db > 0.0:
+            raise ValueError(
+                f"output_level_db must be <= 0 (attenuation only), got {output_level_db}"
+            )
+
         # sounddevice accepts either an int or a (input, output) pair
         sd.default.device = device_id
         self._sweep = sweep
         self._pre_sweeps = pre_sweeps
         self._measurement_sweeps = measurement_sweeps
         self._save_raw_measurement = save_raw_measurement
+        self._output_gain = 10 ** (output_level_db / 20.0)
 
     def measure_ir(self, position: CylindricalPosition) -> None:
         """
@@ -121,6 +128,7 @@ class Audio(IAudio):
         play_signal = np.concatenate((sweep_time, sweep_time), axis=1)
         play_with_pause = np.concatenate((play_signal, pause_stereo), axis=0)
         play_signal = np.tile(play_with_pause, (sweep_repetitions, 1))
+        play_signal *= self._output_gain
 
         recording = sd.playrec(
             play_signal,
@@ -224,4 +232,5 @@ class AudioFactory:
         pre_sweeps = config_parser.getint(section, 'pre_sweeps')
         measurement_sweeps = config_parser.getint(section, 'measurement_sweeps')
         save_raw_measurement = config_parser.getboolean(section, 'save_raw_measurement')
-        return Audio(device_id, sweep, pre_sweeps, measurement_sweeps, save_raw_measurement)
+        output_level_db = config_parser.getfloat(section, 'output_level_db', fallback=0.0)
+        return Audio(device_id, sweep, pre_sweeps, measurement_sweeps, save_raw_measurement, output_level_db)
