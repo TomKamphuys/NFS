@@ -387,8 +387,10 @@ class Audio(IAudio):
             protect_order=self.protect_hpf_order, 
             protect_phase=self.protect_hpf_phase
         )
-        # Hardcoded: bw_hz=(500, 10000) per requirement
-        marker_single = _make_barker13_marker(self.fs, 100.0, (500.0, 10000.0), self.sweep_level_dbfs)
+        # Hardcoded: bw_hz=(500 Hz -> 15000 Hz). Duration 0.5 S (500 ms).
+        # Goal - push the fundamental frequency (13 chirps / duration 0.5 S = 26 Hz) well
+        # below the 500hz HPF, so only phase flipped transint edges remain for sharp alignemnet. 
+        marker_single = _make_barker13_marker(self.fs, 500.0, (500.0, 15000.0), self.sweep_level_dbfs)
 
         # 2. Construct Stream
         pre_samps_settle = int(round(self.pre_sil_ms  / 1000.0 * self.fs))
