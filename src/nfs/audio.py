@@ -296,7 +296,6 @@ class Audio(IAudio):
                  sweep_dur_s: float,
                  sweep_level_dbfs: float,
                  num_sweeps: int,
-                 marker_dur_ms: float,
                  pre_sil_ms: float,
                  post_sil_ms: float,
                  mic_tail_taper_ms: float,
@@ -323,7 +322,6 @@ class Audio(IAudio):
         self.sweep_dur_s = sweep_dur_s
         self.sweep_level_dbfs = sweep_level_dbfs
         self.num_sweeps = num_sweeps            # Number of sweeps to average
-        self.marker_dur_ms = marker_dur_ms
         self.pre_sil_ms = pre_sil_ms
         self.post_sil_ms = post_sil_ms
         self.mic_tail_taper_ms = mic_tail_taper_ms
@@ -390,7 +388,7 @@ class Audio(IAudio):
             protect_phase=self.protect_hpf_phase
         )
         # Hardcoded: bw_hz=(500, 10000) per requirement
-        marker_single = _make_barker13_marker(self.fs, self.marker_dur_ms, (500.0, 10000.0), self.sweep_level_dbfs)
+        marker_single = _make_barker13_marker(self.fs, 100.0, (500.0, 10000.0), self.sweep_level_dbfs)
 
         # 2. Construct Stream
         pre_samps_settle = int(round(self.pre_sil_ms  / 1000.0 * self.fs))
@@ -558,9 +556,9 @@ class Audio(IAudio):
         # --- Spectral Mask Generation ---
         freqs = np.fft.rfftfreq(Nfft, d=1.0/self.fs)
         
-        # LF Mask - Standard Butterworth @ 10Hz (Fixed per requirement)
+        # LF Mask - Standard Butterworth @ 5Hz (Fixed per requirement)
         safe_freqs = np.maximum(freqs, 1e-9) 
-        lf_mask = 1.0 / np.sqrt(1.0 + (10.0 / safe_freqs)**2)
+        lf_mask = 1.0 / np.sqrt(1.0 + (5.0 / safe_freqs)**2) # Change HPF frequency here <-
         lf_mask[0] = 0.0
             
         # HF Mask (Taper near Nyquist to avoid ringing)
@@ -719,7 +717,6 @@ class AudioFactory:
             sweep_level_dbfs=AudioFactory._get_required_config(config, sweep_section, 'SWEEP_LEVEL_DBFS', float),
             num_sweeps=AudioFactory._get_required_config(config, sweep_section, 'NUM_SWEEPS', int),
             
-            marker_dur_ms=AudioFactory._get_required_config(config, sweep_section, 'MARKER_DUR_MS', float),
             align_to_first_marker=AudioFactory._get_required_config(config, sweep_section, 'ALIGN_TO_FIRST_MARKER', bool),
             
             pre_sil_ms=AudioFactory._get_required_config(config, sweep_section, 'PRE_SIL_MS', float),
