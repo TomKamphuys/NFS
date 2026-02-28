@@ -1,0 +1,43 @@
+file_measurement_points.py
+---------------------------------
+
+27/02/26
+Bug in def ready:
+>= stops when current position count is equal to the total so does nothing on the final position. Changed to > only.
+
+27/02/26
+Bug in def _remove_point_inside_homing_area:
+& operator needs current angle to be both greater than +175 and less than -175 at the same time so always returns False. Changed to abs() function so the sign does not matter.
+
+audio.py
+--------------------------------
+
+27/02/26
+Refactor to follow Single Responsibility Principle (SRP).
+
+DSPUtils - A utility class containing pure mathematical functions such as Hann windowing, dB-to-linear conversion, and cross-correlation.
+
+MarkerGenerator - Responsible for creating the Barker-13 sequence used to synchronize the timing of the recordings.
+
+SweepGenerator - Handles the creation of the sweep signal and its corresponding inverse filter.
+
+HarmonicInjector - A testing class that adds H2 or H3 harmonic distortion to the sweep signal to verify Farina distortion separation capability.
+
+ProtectionFilter - Applies a high-pass filter (either Minimum or Linear Phase) to the playback signal to protect speaker drivers from damage.
+
+AlignmentEngine - Manages temporal alignment of multiple sweeps by detecting the Barker markers and performs averaging to reduce noise.
+
+DeconvolutionEngine - The core engine that performs deconvolution, applies spectral masking (DC and Nyquist minimum-phase filters), and separates the linear response from distortion.
+
+27/02/26
+Bug in audio_worker finally block:
+Thread crash on full measurement set completion. Attempted to access non-existent app.loop attribute. Changed to capture the active event loop with asyncio.get_running_loop() in the UI thread and passing it to the worker.
+
+28/02/26
+Added MockInterfaceAudio class, enabled by config.ini. Simulates an audio interface so the sweep and IR generation pipeline can be verified without hardware. Simulation includes - Driver latency of 20ms, FIR anti-aliasing LPF based on CS4272 DAC specs, FIR filter group delay of 12/FS, DC blocking HPF based on C 10uF / R 10K ~15Hz 1st order.
+
+28/02/26
+Added a block in _matched_filter_detect to calculate the peak to sidelobe ratio of the barker marker correlation and flag a logger.warning() when the value is below 2.5 indicating potential alignment issues.
+
+28/02/26
+Added alignment_debug.npz export when debug_saves is enabled. Includes raw loopback, reference Barker-13, cross-correlation results, and quality metrics Peak-to-Sidelobe Ratio and match percent. Enables analysis of barker marker alignment quality using util analyze_marker_alignment.py. Implemented originally to inspect blurring caused by hardware DC blocking capacitors on audio interfaces.
