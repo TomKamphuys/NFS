@@ -48,433 +48,313 @@ os.environ["SD_ENABLE_ASIO"] = "1"
 import sounddevice as sd
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  HELPER FUNCTIONS (Signal Generation & Formatting)
+#  UTILITIES
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _fmt_num_for_name(val):
-    """Formats a number for safe filenames (e.g., 4.5 -> '4p5')."""
-    if val is None: return "NA"
-    return str(val).replace(".", "p")
+class DSPUtils:
+    """Static utilities for pure mathematical operations."""
+    
+    @staticmethod
+    def fmt_num_for_name(val) -> str:
+        """Formats a number for safe filenames (e.g., 4.5 -> '4p5')."""
+        if val is None: return "NA"
+        return str(val).replace(".", "p")
 
-def _db_to_lin(db): 
-    """Converts dBFS to linear amplitude scale."""
-    return 10 ** (db / 20.0)
+    @staticmethod
+    def db_to_lin(db: float) -> float:
+        """Converts dBFS to linear amplitude scale."""
+        return 10 ** (db / 20.0)
 
-def _hann_fade(sig: np.ndarray, fade_ms: float, fs: int, side: str = "both") -> np.ndarray:
-    """
-    Applies a Hann window fade to the signal edges to prevent spectral leakage (clicks).
-    
-    Args:
-        side: 'in' (start), 'out' (end), or 'both'.
-    """
-    n_fade = int(round(fade_ms / 1000.0 * fs))
-    if n_fade <= 0 or n_fade >= len(sig): return sig
-    
-    # Generate ramp: 0 to 1 (half-cosine)
-    ramp = 0.5 * (1 - np.cos(np.pi * np.arange(n_fade) / (n_fade - 1)))
-    y = sig.copy()
-    
-    if side in ["both", "in"]:
-        y[:n_fade] *= ramp
-    
-    if side in ["both", "out"]:
-        # Fade out uses the reverse of the ramp
-        y[-n_fade:] *= ramp[::-1]
+    @staticmethod
+    def hann_fade(sig: np.ndarray, fade_ms: float, fs: int, side: str = "both") -> np.ndarray:
+        """
+        Applies a Hann window fade to the signal edges to prevent spectral leakage (clicks).
         
-    return y
-
-def _apply_protection_hpf(sig: np.ndarray, fs: int, freq_hz: float, order: int, phase_mode: str) -> np.ndarray:
-    """
-    Applies a High Pass Protection Filter to the signal to ensure driver safety.
-    
-    This filter is applied ONLY to the playback signal, not the inverse filter.
-    
-    Args:
-        freq_hz: Corner frequency (-3dB point).
-        order: Filter order (1 to 4).
-        phase_mode: 
-            'MIN' (Minimum Phase): Standard IIR Butterworth. Causal, introduces phase shift.
-            'LIN' (Linear/Zero Phase): Frequency Domain Synthesis. Non-causal, preserves 
-                                       phase alignment (constant group delay).
-    """
-    if freq_hz is None or freq_hz <= 0:
-        return sig
-
-    logger.info(f"► Applying Protection HPF: {freq_hz}Hz, Order={order}, Phase={phase_mode}")
-
-    if phase_mode == "MIN":
-        # Minimum Phase: Standard IIR Butterworth (SOS implementation for stability)
-        sos = scipy.signal.butter(order, freq_hz, btype='hp', fs=fs, output='sos')
-        return scipy.signal.sosfilt(sos, sig).astype(np.float32)
-
-    elif phase_mode == "LIN":
-        # Linear Phase: Frequency Domain Synthesis (Zero Phase)
-        # We construct the exact Butterworth Magnitude response and apply it without phase shift.
-        # This ensures the slope order is exactly as requested (e.g., 1st order = 6dB/oct).
-        # Note: Standard sosfiltfilt would double the effective order; this method does not.
+        Args:
+            side: 'in' (start), 'out' (end), or 'both'.
+        """
+        n_fade = int(round(fade_ms / 1000.0 * fs))
+        if n_fade <= 0 or n_fade >= len(sig): return sig
         
-        n = len(sig)
-        Nfft = int(2**np.ceil(np.log2(n + fs))) # Pad generously to avoid time-domain wrap-around artifacts
-        X = np.fft.rfft(sig, n=Nfft)
-        freqs = np.fft.rfftfreq(Nfft, d=1.0/fs)
+        # Generate ramp: 0 to 1 (half-cosine)
+        ramp = 0.5 * (1 - np.cos(np.pi * np.arange(n_fade) / (n_fade - 1)))
+        y = sig.copy()
         
-        safe_f = np.maximum(freqs, 1e-9)
+        if side in ["both", "in"]:
+            y[:n_fade] *= ramp
         
-        # Butterworth Magnitude: |H(f)| = 1 / sqrt(1 + (fc/f)^(2*N))
-        mag = 1.0 / np.sqrt(1.0 + (freq_hz / safe_f)**(2 * order))
-        mag[0] = 0.0 # Strict DC kill
-        
-        # Apply Magnitude Mask (Phase remains 0 for the filter -> Linear Phase overall)
-        X_filtered = X * mag
-        
-        y = np.fft.irfft(X_filtered, n=Nfft)
-        return y[:n].astype(np.float32)
-    
-    else:
-        logger.warning(f"Unknown phase mode '{phase_mode}', skipping protection filter.")
-        return sig
+        if side in ["both", "out"]:
+            # Fade out uses the reverse of the ramp
+            y[-n_fade:] *= ramp[::-1]
+            
+        return y
 
-def _make_exp_sweep(fs, T, f1=1.0, level_dbfs=-6.0, h2_db=None, h3_db=None,
-                    protect_hz=None, protect_order=2, protect_phase="MIN"):
-    """
-    Generates an Exponential Sine Sweep (ESS) and its CLEAN inverse filter.
-    
-    Implements the Farina Method:
-      1. Generates the fundamental sweep.
-      2. Optionally injects Harmonics (H2, H3) for testing distortion analysis.
-      3. Applies Protection HPF to the PLAYBACK signal only.
-      4. Generates a 'clean' Inverse Filter using Time Reversal of the fundamental.
-      
-    Returns:
-        s_play: The signal to send to the DAC (potentially filtered/distorted).
-        inv:    The ideal inverse filter for deconvolution.
-    """
-    f2 = fs * 0.5
-    n = int(round(T * fs))
-    t = np.arange(n) / fs
-    w1, w2 = 2 * np.pi * f1, 2 * np.pi * f2
-    L = T / np.log(w2 / w1)
-    
-    # 1. Fundamental (Clean) - Used for generating the Inverse Filter
-    phase = w1 * L * (np.exp(t / L) - 1.0)
-    s_fund = np.sin(phase).astype(np.float64)
-    
-    # 2. Composite (Playback) - Used for Excitation
-    s_composite = s_fund.copy()
-    
-    # --- HARMONIC INJECTION (TESTING) ---
-    # Adds artificial distortion to verify that the Farina separation logic works.
-    if h2_db is not None:
-        amp_h2 = _db_to_lin(h2_db)
-        logger.info(f"► INJECTING H2 @ {h2_db} dB")
-        s_composite += amp_h2 * np.sin(2 * phase)
+    @staticmethod
+    def rfft_xcorr(a: np.ndarray, b: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        """Fast Cross-Correlation via RFFT."""
+        # Calculate next power of 2 for optimal FFT performance and linear convolution
+        n = int(2 ** np.ceil(np.log2(len(a) + len(b) - 1)))
         
-    if h3_db is not None:
-        amp_h3 = _db_to_lin(h3_db)
-        logger.info(f"► INJECTING H3 @ {h3_db} dB")
-        s_composite += amp_h3 * np.sin(3 * phase)
-    # ------------------------------------
-    
-    # 3. Normalize Playback Signal
-    target_amp = _db_to_lin(level_dbfs)
-    max_val = np.max(np.abs(s_composite)) + 1e-12
-    s_play = (s_composite * (target_amp / max_val)).astype(np.float32)
-
-    # 4. Apply Protection Filter (Playback Only)
-    # This modifies what the speaker plays, but NOT the inverse filter. 
-    # The resulting IR will inherently show the rolloff of this filter.
-    if protect_hz is not None and protect_hz > 0:
-        s_play = _apply_protection_hpf(s_play, fs, protect_hz, protect_order, protect_phase)
+        # Transform signal 'a' and 'b' into the frequency domain
+        A = np.fft.rfft(a, n=n)
+        B = np.fft.rfft(b, n=n)
         
-        # Re-peak to ensure we hit the target DBFS in the passband.
-        # This prevents the HPF from essentially quieting the whole sweep if fundamental is low.
-        new_max = np.max(np.abs(s_play)) + 1e-12
-        s_play *= (target_amp / new_max)
+        # Multiply by complex conjugate to perform correlation, then return to time domain
+        x = np.fft.irfft(A * np.conj(B), n=n)
+        
+        # Shift the zero-lag component to the center of the array
+        x = np.roll(x, len(b) - 1)
+        
+        # Create an array of lag indices corresponding to the shifted signal
+        lags = np.arange(-len(b) + 1, len(a))
+        
+        # Return the lag indices and the correlation result trimmed to the valid range
+        return lags, x[:len(lags)]
 
-    # 5. Generate CLEAN Inverse (Using Time Reversal)
-    # We use the clean fundamental for the inverse to avoid "baking in" the distortion 
-    # or protection filter into the reference.
-    envelope = np.exp(-t / L)   # Amplitude envelope to correct pink spectrum to white
-    inv = s_fund[::-1] * envelope # Time Reversal
-    
-    # Normalize Inverse in Frequency Domain to ensure unity gain convolution
-    Nfft = int(2**np.ceil(np.log2(len(s_fund) + len(inv) - 1)))
-    S_fft = np.fft.rfft(s_fund, n=Nfft)
-    I_fft = np.fft.rfft(inv, n=Nfft)
-    peak_val = np.max(np.abs(np.fft.irfft(S_fft * I_fft, n=Nfft)))
-    
-    inv /= (peak_val * target_amp + 1e-15) 
-    return s_play, inv
+# ─────────────────────────────────────────────────────────────────────────────
+#  SIGNAL GENERATORS & PIPELINE STEPS
+# ─────────────────────────────────────────────────────────────────────────────
 
-def _make_barker13_marker(fs, dur_ms, bw_hz, level_dbfs):
+class MarkerGenerator:
     """
     Generates a band-limited Barker-13 sequence for precise temporal alignment.
     Barker codes have ideal autocorrelation properties (low sidelobes), making them
     superior to simple pulses for synchronization in noisy environments.
     """
-    chips = np.array([+1,+1,+1,+1,+1,-1,-1,+1,+1,-1,+1,-1,+1], dtype=np.float32)
-    n = max(16, int(round(dur_ms / 1000.0 * fs)))
     
-    # Interpolate chips to desired duration
-    marker_raw = np.interp(np.linspace(0, len(chips) - 1, n), np.arange(chips.size), chips)
-    
-    # Taper edges using the unified _hann_fade
-    marker_raw = _hann_fade(marker_raw.astype(np.float32), 1.0, fs)
-
-    # Frequency Domain Band-Limiting
-    # Ensures the marker doesn't excite resonances outside the measurement band
-    Nfft = int(2 ** np.ceil(np.log2(n * 2)))
-    M = np.fft.rfft(marker_raw, n=Nfft)
-    freqs = np.fft.rfftfreq(Nfft, 1 / fs)
-    f_lo, f_hi = bw_hz
-    mask = np.ones_like(freqs, dtype=np.float32)
-    
-    # Apply cosine ramps at band edges
-    if f_lo > 0:
-        idx = freqs < f_lo
-        ramp = 0.5 * (1 - np.cos(np.pi * np.clip(freqs[idx] / max(1e-9, f_lo), 0, 1)))
-        mask[idx] = ramp ** 2
-    if f_hi < fs / 2:
-        idx = freqs > f_hi
-        ramp = 0.5 * (1 - np.cos(np.pi * np.clip((fs / 2 - freqs[idx]) / max(1e-9, (fs / 2 - f_hi)), 0, 1)))
-        mask[idx] = ramp ** 2
-        
-    marker_bl = np.fft.irfft(M * mask, n=Nfft)[:n].astype(np.float32)
-    marker_bl *= _db_to_lin(level_dbfs) / (np.max(np.abs(marker_bl)) + 1e-12)
-    return marker_bl
-
-def _rfft_xcorr(a, b):
-    """Fast Cross-Correlation via RFFT."""
-    n = int(2 ** np.ceil(np.log2(len(a) + len(b) - 1)))
-    A = np.fft.rfft(a, n=n)
-    B = np.fft.rfft(b, n=n)
-    x = np.fft.irfft(A * np.conj(B), n=n)
-    x = np.roll(x, len(b) - 1)
-    lags = np.arange(-len(b) + 1, len(a))
-    return lags, x[:len(lags)]
-
-def _matched_filter_detect(x, ref, search_start=None, search_end=None):
-    """
-    Finds the best match of signal 'ref' within 'x' using a matched filter.
-    Returns the lag (index) and the correlation coefficient.
-    """
-    lags, corr = _rfft_xcorr(x, ref)
-    if search_start is None: search_start = 0
-    if search_end is None: search_end = len(x) - 1
-    
-    m = (lags >= search_start) & (lags <= search_end)
-    lags_sel, corr_sel = lags[m], corr[m]
-    
-    if len(lags_sel) == 0: return 0, 0.0
-    i = int(np.argmax(corr_sel))
-    return int(lags_sel[i]), float(corr_sel[i])
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-#  INTERFACES
-# ─────────────────────────────────────────────────────────────────────────────
-
-class IAudio(ABC):
-    @abstractmethod
-    def measure_ir(self, position: CylindricalPosition, order_id: str = "NA") -> None:
-        pass
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-#  CORE AUDIO CLASS
-# ─────────────────────────────────────────────────────────────────────────────
-
-class Audio(IAudio):
-    def __init__(self,
-                 device_in_id: int,
-                 device_out_id: int,
-                 ch_in_mic: int,
-                 ch_in_loop: int,
-                 ch_out_spkr: int,
-                 ch_out_ref: int,
-                 fs: int,
-                 sweep_dur_s: float,
-                 sweep_level_dbfs: float,
-                 num_sweeps: int,
-                 pre_sil_ms: float,
-                 post_sil_ms: float,
-                 mic_tail_taper_ms: float,
-                 align_to_first_marker: bool,
-                 blocksize: int,
-                 wasapi_exclusive: bool,
-                 debug_saves: bool,
-                 protect_hpf_hz: Optional[float],
-                 protect_hpf_order: int,
-                 protect_hpf_phase: str,
-                 h2_test_db: Optional[float] = None,
-                 h3_test_db: Optional[float] = None):
-        
-        # Device & Channel Mapping
-        self.dev_in = device_in_id
-        self.dev_out = device_out_id
-        self.ch_in_mic = ch_in_mic
-        self.ch_in_loop = ch_in_loop
-        self.ch_out_spkr = ch_out_spkr
-        self.ch_out_ref = ch_out_ref
-        
-        # Capture Configuration
+    def __init__(self, fs: int, dur_ms: float, bw_hz: Tuple[float, float], level_dbfs: float):
         self.fs = fs
-        self.sweep_dur_s = sweep_dur_s
-        self.sweep_level_dbfs = sweep_level_dbfs
-        self.num_sweeps = num_sweeps            # Number of sweeps to average
-        self.pre_sil_ms = pre_sil_ms
-        self.post_sil_ms = post_sil_ms
-        self.mic_tail_taper_ms = mic_tail_taper_ms
+        self.dur_ms = dur_ms
+        self.bw_hz = bw_hz
+        self.level_dbfs = level_dbfs
+
+    def generate(self) -> np.ndarray:
+        chips = np.array([+1,+1,+1,+1,+1,-1,-1,+1,+1,-1,+1,-1,+1], dtype=np.float32)
+        n = max(16, int(round(self.dur_ms / 1000.0 * self.fs)))
         
-        # Alignment Strategy
-        # True = Find 1st marker, assume perfect clock for subsequent sweeps.
-        # False = Re-run matched filter for every sweep (corrects clock drift).
+        # Interpolate chips to desired duration
+        marker_raw = np.interp(np.linspace(0, len(chips) - 1, n), np.arange(chips.size), chips)
+        
+        # Taper edges using the unified _hann_fade
+        marker_raw = DSPUtils.hann_fade(marker_raw.astype(np.float32), 1.0, self.fs)
+
+        # Frequency Domain Band-Limiting
+        # Ensures the marker doesn't excite resonances outside the measurement band
+        Nfft = int(2 ** np.ceil(np.log2(n * 2)))
+        M = np.fft.rfft(marker_raw, n=Nfft)
+        freqs = np.fft.rfftfreq(Nfft, 1 / self.fs)
+        f_lo, f_hi = self.bw_hz
+        mask = np.ones_like(freqs, dtype=np.float32)
+        
+        # Apply cosine ramps at band edges
+        if f_lo > 0:
+            idx = freqs < f_lo
+            ramp = 0.5 * (1 - np.cos(np.pi * np.clip(freqs[idx] / max(1e-9, f_lo), 0, 1)))
+            mask[idx] = ramp ** 2
+        if f_hi < self.fs / 2:
+            idx = freqs > f_hi
+            ramp = 0.5 * (1 - np.cos(np.pi * np.clip((self.fs / 2 - freqs[idx]) / max(1e-9, (self.fs / 2 - f_hi)), 0, 1)))
+            mask[idx] = ramp ** 2
+            
+        marker_bl = np.fft.irfft(M * mask, n=Nfft)[:n].astype(np.float32)
+        marker_bl *= DSPUtils.db_to_lin(self.level_dbfs) / (np.max(np.abs(marker_bl)) + 1e-12)
+        return marker_bl
+
+
+class SweepGenerator:
+    """
+    Generates an Exponential Sine Sweep (ESS) and its CLEAN inverse filter.
+    
+    Outputs:
+      1. The fundamental sweep signal.
+      2. The phase array (useful for optional harmonic injection downstream).
+      3. A 'clean' Inverse Filter using Time Reversal of the fundamental.
+    """
+    
+    def __init__(self, fs: int, duration_s: float, f1: float, level_dbfs: float):
+        self.fs = fs
+        self.T = duration_s
+        self.f1 = f1
+        self.level_dbfs = level_dbfs
+
+    def generate(self) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        f2 = self.fs * 0.5
+        n = int(round(self.T * self.fs))
+        t = np.arange(n) / self.fs
+        w1, w2 = 2 * np.pi * self.f1, 2 * np.pi * f2
+        L = self.T / np.log(w2 / w1)
+        
+        # 1. Fundamental (Clean) - Used for generating the Inverse Filter
+        phase = w1 * L * (np.exp(t / L) - 1.0)
+        s_fund = np.sin(phase).astype(np.float64)
+        
+        # 2. Generate CLEAN Inverse (Using Time Reversal)
+        # We use the clean fundamental for the inverse to avoid "baking in" the distortion 
+        # or protection filter into the reference.
+        envelope = np.exp(-t / L)   # Amplitude envelope to correct pink spectrum to white
+        inv = s_fund[::-1] * envelope # Time Reversal
+        
+        # Normalize Inverse in Frequency Domain to ensure unity gain convolution
+        target_amp = DSPUtils.db_to_lin(self.level_dbfs)
+        Nfft = int(2**np.ceil(np.log2(len(s_fund) + len(inv) - 1)))
+        S_fft = np.fft.rfft(s_fund, n=Nfft)
+        I_fft = np.fft.rfft(inv, n=Nfft)
+        peak_val = np.max(np.abs(np.fft.irfft(S_fft * I_fft, n=Nfft)))
+        
+        inv /= (peak_val * target_amp + 1e-15) 
+        return s_fund, phase, inv
+
+
+class HarmonicInjector:
+    """Injects H2/H3 distortions using the sweep's phase array."""
+    
+    def __init__(self, h2_db: Optional[float] = None, h3_db: Optional[float] = None):
+        self.h2_db = h2_db
+        self.h3_db = h3_db
+
+    def inject(self, s_fund: np.ndarray, phase: np.ndarray) -> np.ndarray:
+        s_composite = s_fund.copy()
+        
+        # --- HARMONIC INJECTION (TESTING) ---
+        # Adds artificial distortion to verify that the Farina separation logic works.
+        if self.h2_db is not None:
+            amp_h2 = DSPUtils.db_to_lin(self.h2_db)
+            logger.info(f"► INJECTING H2 @ {self.h2_db} dB")
+            s_composite += amp_h2 * np.sin(2 * phase)
+            
+        if self.h3_db is not None:
+            amp_h3 = DSPUtils.db_to_lin(self.h3_db)
+            logger.info(f"► INJECTING H3 @ {self.h3_db} dB")
+            s_composite += amp_h3 * np.sin(3 * phase)
+            
+        return s_composite
+
+
+class ProtectionFilter:
+    """Applies MIN or LIN phase HPF to protect drivers."""
+    
+    def __init__(self, fs: int, freq_hz: float, order: int, phase_mode: str):
+        self.fs = fs
+        self.freq_hz = freq_hz
+        self.order = order
+        self.phase_mode = phase_mode
+
+    def apply(self, sig: np.ndarray) -> np.ndarray:
+        """
+        Applies a High Pass Protection Filter to the signal to ensure driver safety.
+        
+        This filter is applied ONLY to the playback signal, not the inverse filter.
+        """
+        if self.freq_hz is None or self.freq_hz <= 0:
+            return sig
+
+        logger.info(f"► Applying Protection HPF: {self.freq_hz}Hz, Order={self.order}, Phase={self.phase_mode}")
+
+        if self.phase_mode == "MIN":
+            # Minimum Phase: Standard IIR Butterworth (SOS implementation for stability)
+            sos = scipy.signal.butter(self.order, self.freq_hz, btype='hp', fs=self.fs, output='sos')
+            return scipy.signal.sosfilt(sos, sig).astype(np.float32)
+
+        elif self.phase_mode == "LIN":
+            # Linear Phase: Frequency Domain Synthesis (Zero Phase)
+            # We construct the exact Butterworth Magnitude response and apply it without phase shift.
+            # This ensures the slope order is exactly as requested (e.g., 1st order = 6dB/oct).
+            # Note: Standard sosfiltfilt would double the effective order; this method does not.
+            n = len(sig)
+            Nfft = int(2**np.ceil(np.log2(n + self.fs))) # Pad generously to avoid time-domain wrap-around artifacts
+            X = np.fft.rfft(sig, n=Nfft)
+            freqs = np.fft.rfftfreq(Nfft, d=1.0/self.fs)
+            
+            safe_f = np.maximum(freqs, 1e-9)
+            
+            # Butterworth Magnitude: |H(f)| = 1 / sqrt(1 + (fc/f)^(2*N))
+            mag = 1.0 / np.sqrt(1.0 + (self.freq_hz / safe_f)**(2 * self.order))
+            mag[0] = 0.0 # Strict DC kill
+            
+            # Apply Magnitude Mask (Phase remains 0 for the filter -> Linear Phase overall)
+            X_filtered = X * mag
+            y = np.fft.irfft(X_filtered, n=Nfft)
+            return y[:n].astype(np.float32)
+        
+        else:
+            logger.warning(f"Unknown phase mode '{self.phase_mode}', skipping protection filter.")
+            return sig
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  PROCESSING ENGINES
+# ─────────────────────────────────────────────────────────────────────────────
+
+class AlignmentEngine:
+    """Handles cross-correlation and synchronous averaging."""
+    
+    def __init__(self, fs: int, num_sweeps: int, align_to_first_marker: bool, mic_tail_taper_ms: float):
+        self.fs = fs
+        self.num_sweeps = num_sweeps
         self.align_to_first_marker = align_to_first_marker
-        
-        self.blocksize = blocksize
-        self.wasapi_exclusive = wasapi_exclusive
-        self.debug_saves = debug_saves
-        
-        # Protection Filter Config
-        self.protect_hpf_hz = protect_hpf_hz
-        self.protect_hpf_order = protect_hpf_order
-        self.protect_hpf_phase = protect_hpf_phase
+        self.mic_tail_taper_ms = mic_tail_taper_ms
 
-        # Test Parameters (Harmonic Injection)
-        self.h2_test_db = h2_test_db
-        self.h3_test_db = h3_test_db
+    def _matched_filter_detect(self, x: np.ndarray, ref: np.ndarray, search_start: int = None, search_end: int = None):
+        """
+        Finds the best match of signal 'ref' within 'x' using a matched filter.
+        Returns the lag (index) and the correlation coefficient.
+        """
+        lags, corr = DSPUtils.rfft_xcorr(x, ref)
+        if search_start is None: search_start = 0
+        if search_end is None: search_end = len(x) - 1
         
-        # Directories
-        self.rec_dir = Path("./Recordings")
-        self.rec_dir.mkdir(exist_ok=True)
+        m = (lags >= search_start) & (lags <= search_end)
+        lags_sel, corr_sel = lags[m], corr[m]
         
-        if self.debug_saves:
-            self.debug_dir = self.rec_dir / "debug"
-            self.debug_dir.mkdir(exist_ok=True)
+        if len(lags_sel) == 0: return 0, 0.0
+        i = int(np.argmax(corr_sel))
+        peak_val = float(corr_sel[i])
 
-        self._log_config()
+        # --- BEGIN QUALITY / PSR CHECK ---
+        # The Barker marker is 100ms long with 13 chips. The main peak base width is roughly ~15ms.
+        # We mask out +/- 15ms around the peak to find the highest independent sidelobe.
+        exclusion_samps = int(0.015 * self.fs)
+        mask_start = max(0, i - exclusion_samps)
+        mask_end = min(len(corr_sel), i + exclusion_samps)
+        
+        corr_masked = corr_sel.copy()
+        corr_masked[mask_start:mask_end] = 0.0 # Zero out the main lobe
+        
+        sidelobe_val = float(np.max(corr_masked))
+        psr = peak_val / (sidelobe_val + 1e-12) if sidelobe_val > 0 else 99.0
+        
+        # If the peak is less than 2.5x the height of the sidelobes, alignment is dangerously smeared.
+        if psr < 2.5:
+            logger.warning(f"POOR MARKER ALIGNMENT: Correlation Peak Sharpness is {psr:.1f}. Phase smearing detected.")
+        # --- END QUALITY / PSR CHECK ---
 
-    def _log_config(self):
-        logger.info(f"Audio Config: FS={self.fs}, Sweeps={self.num_sweeps}, Dur={self.sweep_dur_s}s")
-        logger.info(f"Devices: In={self.dev_in}, Out={self.dev_out}")
-        logger.info(f"Protection: HPF={self.protect_hpf_hz}Hz, Order={self.protect_hpf_order}, Phase={self.protect_hpf_phase}")
-        if self.h2_test_db is not None or self.h3_test_db is not None:
-             logger.warning(f"TEST MODE: Injecting Harmonics (H2={self.h2_test_db}dB, H3={self.h3_test_db}dB)")
-
-    def _get_api_name(self, dev_index: int) -> str:
+        # --- BEGIN DEBUG DATA SAVE BLOCK ---
         try:
-            d = sd.query_devices(dev_index)
-            return sd.query_hostapis()[d['hostapi']]['name'].upper()
-        except:
-            return "UNKNOWN"
+            debug_dir = Path("./Recordings/debug")
+            if debug_dir.exists():
+                norm_x = np.linalg.norm(x[max(0, lags_sel[i]):max(0, lags_sel[i])+len(ref)])
+                norm_ref = np.linalg.norm(ref)
+                match_pct = float(corr_sel[i]) / (norm_x * norm_ref + 1e-12) if (norm_x * norm_ref) > 0 else 0.0
+                
+                np.savez(
+                    debug_dir / "alignment_debug.npz",
+                    x=x,
+                    ref=ref,
+                    lags=lags,
+                    corr=corr,
+                    peak_idx=int(lags_sel[i]),
+                    match_pct=match_pct,
+                    psr=psr
+                )
+        except Exception as e:
+            logger.warning(f"Failed to save alignment debug data: {e}")
+        # --- END DEBUG DATA SAVE BLOCK ---
 
-    # ─────────────────────────────────────────────────────────────────────────
-    #  STEP 1: SWEEP EXECUTION (The "Black Box")
-    # ─────────────────────────────────────────────────────────────────────────
+        return int(lags_sel[i]), peak_val
 
-    def _run_sweep(self) -> Dict[str, Any]:
-        """
-        Executes the playback and recording of the composite signal.
-        Handles stream synchronization, multiple sweep averaging, and loopback alignment.
-        """
-        # 1. Generate Signals
-        # Create the Farina Sweep (with optional protection & harmonic injection)
-        # Hardcoded: f1=1.0 per requirement
-        sweep_single, inv_sweep = _make_exp_sweep(
-            self.fs, self.sweep_dur_s, f1=1.0, level_dbfs=self.sweep_level_dbfs,
-            h2_db=self.h2_test_db, h3_db=self.h3_test_db,
-            protect_hz=self.protect_hpf_hz, 
-            protect_order=self.protect_hpf_order, 
-            protect_phase=self.protect_hpf_phase
-        )
-        # Hardcoded: bw_hz=(500 Hz -> 15000 Hz). Duration 0.5 S (500 ms).
-        # Goal - push the fundamental frequency (13 chirps / duration 0.5 S = 26 Hz) well
-        # below the 500hz HPF, so only phase flipped transint edges remain for sharp alignemnet. 
-        marker_single = _make_barker13_marker(self.fs, 500.0, (500.0, 15000.0), self.sweep_level_dbfs)
-
-        # 2. Construct Stream
-        pre_samps_settle = int(round(self.pre_sil_ms  / 1000.0 * self.fs))
-        post_samps       = int(round(self.post_sil_ms / 1000.0 * self.fs))
-        sweep_len        = len(sweep_single)
-        marker_len       = len(marker_single)
+    def sync_and_average(self, rec_mic: np.ndarray, rec_loop: np.ndarray, marker_single: np.ndarray, 
+                         pre_samps_settle: int, slot_len: int, sweep_len: int) -> Tuple[np.ndarray, np.ndarray, List[np.ndarray]]:
         
-        # Calculate timeline
-        slot_len = max(sweep_len, marker_len) + post_samps
-        total_len = pre_samps_settle + (slot_len * self.num_sweeps)
-        
-        # Pre-allocate large buffers
-        tx_sweep_long = np.zeros(total_len, dtype=np.float32)
-        tx_ref_long   = np.zeros(total_len, dtype=np.float32)
-        
-        # Populate buffers with repeated sweeps
-        cursor = pre_samps_settle
-        for _ in range(self.num_sweeps):
-            tx_sweep_long[cursor : cursor+sweep_len] = sweep_single
-            tx_ref_long[cursor : cursor+marker_len]  = marker_single
-            cursor += slot_len
-
-        # 3. Setup Buffers & Devices
-        out_ch_count = max(self.ch_out_spkr, self.ch_out_ref) + 1
-        in_ch_count  = max(self.ch_in_mic,  self.ch_in_loop)  + 1
-
-        out_frames = np.zeros((total_len, out_ch_count), dtype=np.float32)
-        out_frames[:, self.ch_out_spkr] = tx_sweep_long
-        out_frames[:, self.ch_out_ref]  = tx_ref_long
-
-        rec_loop = np.zeros(total_len, dtype=np.float32)
-        rec_mic  = np.zeros(total_len, dtype=np.float32)
-
-        out_api = self._get_api_name(self.dev_out)
-        in_api  = self._get_api_name(self.dev_in)
-        use_asio_in, use_asio_out = ("ASIO" in in_api), ("ASIO" in out_api)
-
-        # Configure SoundDevice Settings (ASIO vs WASAPI logic)
-        if use_asio_in: in_args = (2, sd.AsioSettings(channel_selectors=[self.ch_in_loop, self.ch_in_mic]))
-        else: in_args = (in_ch_count, sd.WasapiSettings(exclusive=self.wasapi_exclusive) if "WASAPI" in in_api else None)
-
-        if use_asio_out: out_args = (2, sd.AsioSettings(channel_selectors=[self.ch_out_spkr, self.ch_out_ref]))
-        else: out_args = (out_ch_count, sd.WasapiSettings(exclusive=self.wasapi_exclusive) if "WASAPI" in out_api else None)
-
-        idx_play, idx_rec = 0, 0
-        done_evt = threading.Event()
-        
-        # Real-time Callback
-        def callback(indata, outdata, frames, time_info, status):
-            nonlocal idx_play, idx_rec
-            if status: logger.warning(f"Audio Status: {status}")
-
-            # Output
-            n_out = min(frames, total_len - idx_play)
-            if use_asio_out:
-                outdata[:n_out, 0] = out_frames[idx_play:idx_play+n_out, self.ch_out_spkr]
-                outdata[:n_out, 1] = out_frames[idx_play:idx_play+n_out, self.ch_out_ref]
-                if frames > n_out: outdata[n_out:] = 0
-            else:
-                outdata[:n_out, :out_args[0]] = out_frames[idx_play:idx_play+n_out, :out_args[0]]
-                if frames > n_out: outdata[n_out:] = 0
-
-            # Input
-            n_in = min(frames, total_len - idx_rec)
-            if n_in > 0:
-                if use_asio_in:
-                    rec_loop[idx_rec:idx_rec+n_in] = indata[:n_in, 0]
-                    rec_mic[idx_rec:idx_rec+n_in]  = indata[:n_in, 1]
-                else:
-                    rec_loop[idx_rec:idx_rec+n_in] = indata[:n_in, self.ch_in_loop]
-                    rec_mic[idx_rec:idx_rec+n_in]  = indata[:n_in, self.ch_in_mic]
-            
-            idx_play += n_out
-            idx_rec  += n_in
-            if idx_play >= total_len and idx_rec >= total_len: 
-                done_evt.set()
-
-        # 4. Start Stream
-        with sd.Stream(device=(self.dev_in, self.dev_out), samplerate=self.fs, blocksize=self.blocksize,
-                       dtype="float32", channels=(in_args[0], out_args[0]), dither_off=True,
-                       extra_settings=(in_args[1], out_args[1]), callback=callback):
-            done_evt.wait()
-            
-        # 5. Alignment & Averaging
+        # --- Alignment & Averaging ---
         mic_slices = []
         loop_slices = []
         capture_len = sweep_len + int(round(self.mic_tail_taper_ms/1000.0 * self.fs))
@@ -482,11 +362,10 @@ class Audio(IAudio):
         # --- FIXED ALIGNMENT LOGIC ---
         # 1. Find global anchor (first marker) using Matched Filter
         search_limit = pre_samps_settle + slot_len 
-        k_first_marker, _ = _matched_filter_detect(rec_loop, marker_single, search_end=search_limit)
+        k_first_marker, _ = self._matched_filter_detect(rec_loop, marker_single, search_end=search_limit)
         
-        # In sweep_function.py, the correlation peak IS the start.
+        # The correlation peak IS the start.
         t0_first_sweep = k_first_marker
-        
         logger.debug(f"Marker found at {k_first_marker}. Using this as T0.")
         
         window_samps = int(0.005 * self.fs) # 5ms search window for re-sync
@@ -502,8 +381,7 @@ class Audio(IAudio):
                 # Corrects for minor clock drift in very long sequences
                 s_start = max(0, expected_t0 - window_samps)
                 s_end   = min(len(rec_loop), expected_t0 + window_samps)
-                
-                k_local, _ = _matched_filter_detect(rec_loop, marker_single, search_start=s_start, search_end=s_end)
+                k_local, _ = self._matched_filter_detect(rec_loop, marker_single, search_start=s_start, search_end=s_end)
                 start_idx = k_local
 
             end_idx = start_idx + capture_len
@@ -519,21 +397,18 @@ class Audio(IAudio):
         avg_loop = np.mean(loop_slices, axis=0)
         
         # Fade out tail using the unified _hann_fade (approx 10ms)
-        avg_mic = _hann_fade(avg_mic, 10.0, self.fs, side="out")
+        avg_mic = DSPUtils.hann_fade(avg_mic, 10.0, self.fs, side="out")
 
-        return {
-            "inv_sweep": inv_sweep,
-            "tx_ref_signal": tx_ref_long[:len(avg_mic)], 
-            "rx_mic_conditioned": avg_mic.astype(np.float32), 
-            "rx_loop_aligned": avg_loop.astype(np.float32),
-            "debug_mic_slices": mic_slices 
-        }
+        return avg_mic.astype(np.float32), avg_loop.astype(np.float32), mic_slices
 
-    # ─────────────────────────────────────────────────────────────────────────
-    #  STEP 2: PROCESSING (The "Math")
-    # ─────────────────────────────────────────────────────────────────────────
 
-    def _process_ir(self, mic_data: np.ndarray, inv_data: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+class DeconvolutionEngine:
+    """Handles FFT deconvolution, spectral masking, and Farina separation."""
+    
+    def __init__(self, fs: int):
+        self.fs = fs
+
+    def process_ir(self, mic_data: np.ndarray, inv_data: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         """
         Performs deconvolution to extract the Impulse Response.
         
@@ -560,7 +435,7 @@ class Audio(IAudio):
         
         # LF Mask - Standard Butterworth @ 5Hz (Fixed per requirement)
         safe_freqs = np.maximum(freqs, 1e-9) 
-        lf_mask = 1.0 / np.sqrt(1.0 + (5.0 / safe_freqs)**2) # Change HPF frequency here <-
+        lf_mask = 1.0 / np.sqrt(1.0 + (5.0 / safe_freqs)**2) 
         lf_mask[0] = 0.0
             
         # HF Mask (Taper near Nyquist to avoid ringing)
@@ -612,9 +487,193 @@ class Audio(IAudio):
             
         return h_full, h_linear
 
-    # ─────────────────────────────────────────────────────────────────────────
-    #  STEP 3: ORCHESTRATION (Public API)
-    # ─────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+#  INTERFACES
+# ─────────────────────────────────────────────────────────────────────────────
+
+class IAudio(ABC):
+    @abstractmethod
+    def measure_ir(self, position: CylindricalPosition, order_id: str = "NA") -> None:
+        pass
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  ORCHESTRATOR
+# ─────────────────────────────────────────────────────────────────────────────
+
+class Audio(IAudio):
+    """Orchestrates signal generation, streaming, and deconvolution."""
+    
+    def __init__(self,
+                 hw_config: Dict[str, Any],
+                 capture_config: Dict[str, Any],
+                 sweep_gen: SweepGenerator,
+                 marker_gen: MarkerGenerator,
+                 alignment_engine: AlignmentEngine,
+                 deconv_engine: DeconvolutionEngine,
+                 harmonic_injector: Optional[HarmonicInjector] = None,
+                 protection_filter: Optional[ProtectionFilter] = None):
+        
+        self.hw = hw_config
+        self.cap = capture_config
+        
+        self.sweep_gen = sweep_gen
+        self.marker_gen = marker_gen
+        self.alignment_engine = alignment_engine
+        self.deconv_engine = deconv_engine
+        self.harmonic_injector = harmonic_injector
+        self.protection_filter = protection_filter
+        
+        # Directories
+        self.rec_dir = Path("./Recordings")
+        self.rec_dir.mkdir(exist_ok=True)
+        
+        if self.cap['debug_saves']:
+            self.debug_dir = self.rec_dir / "debug"
+            self.debug_dir.mkdir(exist_ok=True)
+
+        self._log_config()
+
+    def _log_config(self):
+        logger.info(f"Audio Config: FS={self.hw['fs']}, Sweeps={self.cap['num_sweeps']}, Dur={self.cap['sweep_dur_s']}s")
+        logger.info(f"Devices: In={self.hw['dev_in']}, Out={self.hw['dev_out']}")
+
+    def _get_api_name(self, dev_index: int) -> str:
+        try:
+            d = sd.query_devices(dev_index)
+            return sd.query_hostapis()[d['hostapi']]['name'].upper()
+        except:
+            return "UNKNOWN"
+
+    def _run_sweep(self) -> Dict[str, Any]:
+        """
+        Executes the playback and recording of the composite signal.
+        Handles stream synchronization, multiple sweep averaging, and loopback alignment.
+        """
+        # 1. Generate Signals
+        s_fund, phase, inv_sweep = self.sweep_gen.generate()
+        
+        s_composite = s_fund.copy()
+        if self.harmonic_injector:
+            s_composite = self.harmonic_injector.inject(s_fund, phase)
+            
+        # 2. Normalize Playback Signal
+        target_amp = DSPUtils.db_to_lin(self.cap['sweep_level_dbfs'])
+        max_val = np.max(np.abs(s_composite)) + 1e-12
+        s_play = (s_composite * (target_amp / max_val)).astype(np.float32)
+        
+        # Apply a 1ms Hann fade to prevent the step discontinuity "BLIP" at the end
+        s_play = DSPUtils.hann_fade(s_play, 1.0, self.hw['fs'], side="both")
+
+        # 3. Apply Protection Filter (Playback Only)
+        # This modifies what the speaker plays, but NOT the inverse filter. 
+        # The resulting IR will inherently show the rolloff of this filter.
+        if self.protection_filter:
+            s_play = self.protection_filter.apply(s_play)
+            # Re-peak to ensure we hit the target DBFS in the passband.
+            # This prevents the HPF from essentially quieting the whole sweep if fundamental is low.
+            new_max = np.max(np.abs(s_play)) + 1e-12
+            s_play *= (target_amp / new_max)
+
+        # 4. Generate Alignment Marker
+        # Goal: Generate band-limited marker. Pushing the fundamental frequency well 
+        # below the HPF ensures only phase-flipped transient edges remain for sharp alignment.
+        marker_single = self.marker_gen.generate()
+
+        # 5. Construct Stream
+        pre_samps_settle = int(round(self.cap['pre_sil_ms']  / 1000.0 * self.hw['fs']))
+        post_samps       = int(round(self.cap['post_sil_ms'] / 1000.0 * self.hw['fs']))
+        sweep_len        = len(s_play)
+        marker_len       = len(marker_single)
+        
+        # Calculate timeline
+        slot_len = max(sweep_len, marker_len) + post_samps
+        total_len = pre_samps_settle + (slot_len * self.cap['num_sweeps'])
+        
+        # Pre-allocate large buffers
+        tx_sweep_long = np.zeros(total_len, dtype=np.float32)
+        tx_ref_long   = np.zeros(total_len, dtype=np.float32)
+        
+        # Populate buffers with repeated sweeps
+        cursor = pre_samps_settle
+        for _ in range(self.cap['num_sweeps']):
+            tx_sweep_long[cursor : cursor+sweep_len] = s_play
+            tx_ref_long[cursor : cursor+marker_len]  = marker_single
+            cursor += slot_len
+
+        # 6. Setup Buffers & Devices
+        out_ch_count = max(self.hw['ch_out_spkr'], self.hw['ch_out_ref']) + 1
+        in_ch_count  = max(self.hw['ch_in_mic'],  self.hw['ch_in_loop'])  + 1
+
+        out_frames = np.zeros((total_len, out_ch_count), dtype=np.float32)
+        out_frames[:, self.hw['ch_out_spkr']] = tx_sweep_long
+        out_frames[:, self.hw['ch_out_ref']]  = tx_ref_long
+
+        rec_loop = np.zeros(total_len, dtype=np.float32)
+        rec_mic  = np.zeros(total_len, dtype=np.float32)
+
+        out_api = self._get_api_name(self.hw['dev_out'])
+        in_api  = self._get_api_name(self.hw['dev_in'])
+        use_asio_in, use_asio_out = ("ASIO" in in_api), ("ASIO" in out_api)
+
+        # Configure SoundDevice Settings (ASIO vs WASAPI logic)
+        if use_asio_in: in_args = (2, sd.AsioSettings(channel_selectors=[self.hw['ch_in_loop'], self.hw['ch_in_mic']]))
+        else: in_args = (in_ch_count, sd.WasapiSettings(exclusive=self.hw['wasapi_exclusive']) if "WASAPI" in in_api else None)
+
+        if use_asio_out: out_args = (2, sd.AsioSettings(channel_selectors=[self.hw['ch_out_spkr'], self.hw['ch_out_ref']]))
+        else: out_args = (out_ch_count, sd.WasapiSettings(exclusive=self.hw['wasapi_exclusive']) if "WASAPI" in out_api else None)
+
+        idx_play, idx_rec = 0, 0
+        done_evt = threading.Event()
+        
+        # Real-time Callback
+        def callback(indata, outdata, frames, time_info, status):
+            nonlocal idx_play, idx_rec
+            if status: logger.warning(f"Audio Status: {status}")
+
+            # Output
+            n_out = min(frames, total_len - idx_play)
+            if use_asio_out:
+                outdata[:n_out, 0] = out_frames[idx_play:idx_play+n_out, self.hw['ch_out_spkr']]
+                outdata[:n_out, 1] = out_frames[idx_play:idx_play+n_out, self.hw['ch_out_ref']]
+                if frames > n_out: outdata[n_out:] = 0
+            else:
+                outdata[:n_out, :out_args[0]] = out_frames[idx_play:idx_play+n_out, :out_args[0]]
+                if frames > n_out: outdata[n_out:] = 0
+
+            # Input
+            n_in = min(frames, total_len - idx_rec)
+            if n_in > 0:
+                if use_asio_in:
+                    rec_loop[idx_rec:idx_rec+n_in] = indata[:n_in, 0]
+                    rec_mic[idx_rec:idx_rec+n_in]  = indata[:n_in, 1]
+                else:
+                    rec_loop[idx_rec:idx_rec+n_in] = indata[:n_in, self.hw['ch_in_loop']]
+                    rec_mic[idx_rec:idx_rec+n_in]  = indata[:n_in, self.hw['ch_in_mic']]
+            
+            idx_play += n_out
+            idx_rec  += n_in
+            if idx_play >= total_len and idx_rec >= total_len: 
+                done_evt.set()
+
+        # 7. Start Stream
+        with sd.Stream(device=(self.hw['dev_in'], self.hw['dev_out']), samplerate=self.hw['fs'], blocksize=self.hw['blocksize'],
+                       dtype="float32", channels=(in_args[0], out_args[0]), dither_off=True,
+                       extra_settings=(in_args[1], out_args[1]), callback=callback):
+            done_evt.wait()
+            
+        avg_mic, avg_loop, mic_slices = self.alignment_engine.sync_and_average(
+            rec_mic, rec_loop, marker_single, pre_samps_settle, slot_len, sweep_len
+        )
+
+        return {
+            "inv_sweep": inv_sweep,
+            "tx_ref_signal": tx_ref_long[:len(avg_mic)], 
+            "rx_mic_conditioned": avg_mic, 
+            "rx_loop_aligned": avg_loop,
+            "debug_mic_slices": mic_slices 
+        }
+        
+        
 
     def measure_ir(self, position: CylindricalPosition, order_id: str = "NA") -> None:
         """
@@ -626,36 +685,149 @@ class Audio(IAudio):
         result = self._run_sweep()
         
         # 2. Filename formatting
-        base_name = (
-            f"{order_id}_"
-            f"r{_fmt_num_for_name(position.r())}_"
-            f"ph{_fmt_num_for_name(position.t())}_"
-            f"z{_fmt_num_for_name(position.z())}"
-        )
+        if self.cap.get('naming_convention') == 'tom':
+            # tom's Format: (r, t, z).wav
+            base_name = f"({position.r():.1f}, {position.t():.1f}, {position.z():.1f})"
+            main_file_name = f"{base_name}.wav"
+        else:
+            # dimitri's Format: ID_rX_phY_zZ_ir.wav
+            base_name = (
+                f"{order_id}_"
+                f"r{DSPUtils.fmt_num_for_name(position.r())}_"
+                f"ph{DSPUtils.fmt_num_for_name(position.t())}_"
+                f"z{DSPUtils.fmt_num_for_name(position.z())}"
+            )
+            main_file_name = f"{base_name}_ir.wav"
 
         # 3. Debug Saves (Optional - write intermediate files)
-        if self.debug_saves:
+        if self.cap['debug_saves']:
             logger.info("Saving debug artifacts...")
-            sf.write(str(self.debug_dir / f"{base_name}_mic_conditioned.wav"), result["rx_mic_conditioned"], self.fs)
-            sf.write(str(self.debug_dir / f"{base_name}_loop_aligned.wav"), result["rx_loop_aligned"], self.fs)
-            
+            sf.write(str(self.debug_dir / f"{base_name}_mic_conditioned.wav"), result["rx_mic_conditioned"], self.hw['fs'])
+            sf.write(str(self.debug_dir / f"{base_name}_loop_aligned.wav"), result["rx_loop_aligned"], self.hw['fs'])
             for i, slice_data in enumerate(result["debug_mic_slices"]):
-                sf.write(str(self.debug_dir / f"{base_name}_sweep{i+1:02d}.wav"), slice_data, self.fs)
+                sf.write(str(self.debug_dir / f"{base_name}_sweep{i+1:02d}.wav"), slice_data, self.hw['fs'])
 
         # 4. Process IR (Deconvolution)
-        ir_full, ir_linear = self._process_ir(result["rx_mic_conditioned"], result["inv_sweep"])
+        ir_full, ir_linear = self.deconv_engine.process_ir(result["rx_mic_conditioned"], result["inv_sweep"])
         
         # 5. Save Final Files
         # Main (Linear)
-        linear_path = self.rec_dir / f"{base_name}_ir.wav"
-        sf.write(str(linear_path), ir_linear, self.fs, subtype='FLOAT')
+        linear_path = self.rec_dir / main_file_name
+        sf.write(str(linear_path), ir_linear, self.hw['fs'], subtype='FLOAT')
         logger.info(f"Saved Linear IR: {linear_path.name}")
         
-        # Secondary (Distortion) - useful for analysing non-linearities
-        dist_path = self.rec_dir / f"{base_name}_ir_dist.wav"
-        sf.write(str(dist_path), ir_full, self.fs, subtype='FLOAT')
-        logger.info(f"Saved Distortion IR: {dist_path.name}")
+        # Secondary (Distortion) - Only saved for dimitri's convention
+        if self.cap.get('naming_convention') != 'tom':
+            dist_path = self.rec_dir / f"{base_name}_ir_dist.wav"
+            sf.write(str(dist_path), ir_full, self.hw['fs'], subtype='FLOAT')
+            logger.info(f"Saved Distortion IR: {dist_path.name}")
+            
+class mockinterfaceaudio(Audio):
+    """Digital Twin loopback simulating hardware latency and filters."""
+    
+    def _run_sweep(self) -> Dict[str, Any]:
+        # 1. Generate Signals (Identical to standard Audio class)
+        s_fund, phase, inv_sweep = self.sweep_gen.generate()
+        
+        s_composite = s_fund.copy()
+        if self.harmonic_injector:
+            s_composite = self.harmonic_injector.inject(s_fund, phase)
+            
+        target_amp = DSPUtils.db_to_lin(self.cap['sweep_level_dbfs'])
+        max_val = np.max(np.abs(s_composite)) + 1e-12
+        s_play = (s_composite * (target_amp / max_val)).astype(np.float32)
 
+        # Apply a 1ms Hann fade to prevent the step discontinuity "BLIP" at the end
+        s_play = DSPUtils.hann_fade(s_play, 1.0, self.hw['fs'], side="both")
+
+
+        if self.protection_filter:
+            s_play = self.protection_filter.apply(s_play)
+            new_max = np.max(np.abs(s_play)) + 1e-12
+            s_play *= (target_amp / new_max)
+
+        marker_single = self.marker_gen.generate()
+
+        # 2. Construct Stream Timelines
+        pre_samps_settle = int(round(self.cap['pre_sil_ms']  / 1000.0 * self.hw['fs']))
+        post_samps       = int(round(self.cap['post_sil_ms'] / 1000.0 * self.hw['fs']))
+        sweep_len        = len(s_play)
+        marker_len       = len(marker_single)
+        
+        slot_len = max(sweep_len, marker_len) + post_samps
+        total_len = pre_samps_settle + (slot_len * self.cap['num_sweeps'])
+        
+        tx_sweep = np.zeros(total_len, dtype=np.float32)
+        tx_ref   = np.zeros(total_len, dtype=np.float32)
+        
+        cursor = pre_samps_settle
+        for _ in range(self.cap['num_sweeps']):
+            tx_sweep[cursor : cursor+sweep_len] = s_play
+            tx_ref[cursor : cursor+marker_len]  = marker_single
+            cursor += slot_len
+
+        # 3. --- HARDWARE SIMULATION (The Loopback) ---
+        fs = self.hw['fs']
+        
+        # A) CS4272 Simulation: 25-tap FIR filter
+        # We use a stable windowed-sinc filter at ~21kHz. 
+        # This safely rolls off near Nyquist and provides the exact 12-sample 
+        # linear-phase group delay characteristic of the hardware.
+        fir_taps = scipy.signal.firwin(25, 0.45 * fs, fs=fs)
+        
+        # A) CS4272 Stage 1 FIR: 25-tap Remez design for exact datasheet matching
+        # Passband: 0 to 0.454*Nyquist, Stopband: 0.547*Nyquist to Nyquist
+      #  nyq = fs / 2.0
+      #  bands = [0, 0.454 * nyq, 0.547 * nyq, nyq]
+      #  fir_taps = scipy.signal.remez(25, bands, [1, 0], fs=fs)
+        
+        # A) Identity Filter (Disables FIR effect)
+      #  fir_taps = np.array([1.0], dtype=np.float32)
+
+        # B) 15Hz 1st-Order HPF (10k Ohm + 10uF RC circuit)
+        hpf_sos = scipy.signal.butter(1, 15.0, btype='hp', fs=fs, output='sos')
+
+        def apply_hardware_sim(sig: np.ndarray) -> np.ndarray:
+            # 1. Add Padding: Append 100 samples of silence to the end 
+            # This prevents the FIR filter from "slamming" into the end of the array
+            padding_len = 100
+            sig_padded = np.concatenate([sig, np.zeros(padding_len)])
+
+            # 2. Apply Digital FIR (Linear Phase, 12-sample group delay)
+            # Now the "ringing" has room to decay into the padding
+            y_padded = scipy.signal.lfilter(fir_taps, 1.0, sig_padded)
+            
+            # 3. Trim: Remove the padding to return to original length
+            y = y_padded[:len(sig)]
+            
+            # 4. Apply Analog HPF (Minimum Phase)
+            y = scipy.signal.sosfilt(hpf_sos, y)
+            
+            # 5. Apply 20ms Latency (Linear shift)
+            delay_samps = int(0.020 * fs)
+            y = np.concatenate([np.zeros(delay_samps), y[:-delay_samps]])
+            
+            # 6. Add Noise Floor (-100dBFS)
+            noise = np.random.normal(0, 1e-5, len(y))
+            return (y + noise).astype(np.float32)
+
+        logger.info("► Loopback Mode: Applying CS4272 FIR, 15Hz HPF, and 20ms delay.")
+        rec_mic = apply_hardware_sim(tx_sweep)
+        rec_loop = apply_hardware_sim(tx_ref)
+
+        # 4. --- ALIGNMENT & DECONVOLUTION ---
+        avg_mic, avg_loop, mic_slices = self.alignment_engine.sync_and_average(
+            rec_mic, rec_loop, marker_single, pre_samps_settle, slot_len, sweep_len
+        )
+
+        return {
+            "inv_sweep": inv_sweep,
+            "tx_ref_signal": tx_ref[:len(avg_mic)], 
+            "rx_mic_conditioned": avg_mic, 
+            "rx_loop_aligned": avg_loop,
+            "debug_mic_slices": mic_slices 
+        }
+    
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  FACTORY
@@ -668,29 +840,29 @@ class AudioMock(IAudio):
         time.sleep(1.0) # Simulate sweep duration
 
 class AudioFactory:
-    """Parses config files and instantiates the Audio engine."""
+    """Parses config and performs Dependency Injection assembling."""
     
     @staticmethod
     def _get_required_config(config: configparser.ConfigParser, section: str, key: str, type_func):
         if not config.has_option(section, key):
             raise KeyError(f"Missing required config: [{section}] {key}")
-        # Strip whitespace/comments just in case
         val = config.get(section, key).split('#')[0].split(';')[0].strip()
         return type_func(val)
 
     @staticmethod
     def create(config_file: str, audio_section: str = 'audio') -> IAudio:
         """
-        Creates Audio instance.
+        Creates Audio instance based on 'mode' config (hardware, loopback, mock).
         """
-        # FIX: Tell parser to treat ';' and '#' as comments
         config = configparser.ConfigParser(inline_comment_prefixes=('#', ';'))
         config.read(config_file)
         
         if not config.has_section(audio_section):
              raise KeyError(f"Config file missing [{audio_section}] section")
 
-        if config.getboolean(audio_section, 'mock', fallback=False):
+        # Determine operating mode
+        mode = config.get(audio_section, 'mode', fallback='hardware').lower()
+        if mode == 'mock':
             return AudioMock()
 
         sweep_section = 'sweep'
@@ -700,40 +872,74 @@ class AudioFactory:
         def parse_optional_float(s):
             return None if s.lower() == "none" else float(s)
 
-        return Audio(
-            # --- HARDWARE SETTINGS (from [audio]) ---
-            device_in_id=AudioFactory._get_required_config(config, audio_section, 'IN_DEV', int),
-            device_out_id=AudioFactory._get_required_config(config, audio_section, 'OUT_DEV', int),
-            ch_in_mic=AudioFactory._get_required_config(config, audio_section, 'IN_CH_MIC', int),
-            ch_in_loop=AudioFactory._get_required_config(config, audio_section, 'IN_CH_LOOP', int),
-            ch_out_spkr=AudioFactory._get_required_config(config, audio_section, 'OUT_CH_SPKR', int),
-            ch_out_ref=AudioFactory._get_required_config(config, audio_section, 'OUT_CH_REF', int),
-            fs=AudioFactory._get_required_config(config, audio_section, 'FS', int),
-            blocksize=AudioFactory._get_required_config(config, audio_section, 'BLOCKSIZE', int),
-            wasapi_exclusive=AudioFactory._get_required_config(config, audio_section, 'WASAPI_EXCLUSIVE', bool),
-            
-            # --- SIGNAL/SWEEP SETTINGS (from [sweep]) ---
-            debug_saves=AudioFactory._get_required_config(config, sweep_section, 'DEBUG_SAVES', bool),
-            
-            sweep_dur_s=AudioFactory._get_required_config(config, sweep_section, 'SWEEP_DUR_S', float),
-            sweep_level_dbfs=AudioFactory._get_required_config(config, sweep_section, 'SWEEP_LEVEL_DBFS', float),
-            num_sweeps=AudioFactory._get_required_config(config, sweep_section, 'NUM_SWEEPS', int),
-            
-            align_to_first_marker=AudioFactory._get_required_config(config, sweep_section, 'ALIGN_TO_FIRST_MARKER', bool),
-            
-            pre_sil_ms=AudioFactory._get_required_config(config, sweep_section, 'PRE_SIL_MS', float),
-            post_sil_ms=AudioFactory._get_required_config(config, sweep_section, 'POST_SIL_MS', float),
-            mic_tail_taper_ms=AudioFactory._get_required_config(config, sweep_section, 'MIC_TAIL_TAPER_MS', float),
-            
-            # --- PROTECTION FILTER (from [sweep]) ---
-            protect_hpf_hz=AudioFactory._get_required_config(config, sweep_section, 'PROTECT_HPF_HZ', parse_optional_float),
-            protect_hpf_order=AudioFactory._get_required_config(config, sweep_section, 'PROTECT_HPF_ORDER', int),
-            protect_hpf_phase=AudioFactory._get_required_config(config, sweep_section, 'PROTECT_HPF_PHASE', str),
+        fs = AudioFactory._get_required_config(config, audio_section, 'fs', int)
+        sweep_dur_s = AudioFactory._get_required_config(config, sweep_section, 'sweep_dur_s', float)
+        sweep_level_dbfs = AudioFactory._get_required_config(config, sweep_section, 'sweep_level_dbfs', float)
 
-            # --- TEST PARAMS ---
-            h2_test_db=AudioFactory._get_required_config(config, sweep_section, 'H2_TEST_DB', parse_optional_float),
-            h3_test_db=AudioFactory._get_required_config(config, sweep_section, 'H3_TEST_DB', parse_optional_float),
+        hw_config = {
+            'dev_in': AudioFactory._get_required_config(config, audio_section, 'in_dev', int),
+            'dev_out': AudioFactory._get_required_config(config, audio_section, 'out_dev', int),
+            'ch_in_mic': AudioFactory._get_required_config(config, audio_section, 'in_ch_mic', int),
+            'ch_in_loop': AudioFactory._get_required_config(config, audio_section, 'in_ch_loop', int),
+            'ch_out_spkr': AudioFactory._get_required_config(config, audio_section, 'out_ch_spkr', int),
+            'ch_out_ref': AudioFactory._get_required_config(config, audio_section, 'out_ch_ref', int),
+            'fs': fs,
+            'blocksize': AudioFactory._get_required_config(config, audio_section, 'blocksize', int),
+            'wasapi_exclusive': AudioFactory._get_required_config(config, audio_section, 'wasapi_exclusive', bool),
+        }
+
+        cap_config = {
+            'naming_convention': config.get(sweep_section, 'naming_convention', fallback='dimitri').strip(),
+            'debug_saves': AudioFactory._get_required_config(config, sweep_section, 'debug_saves', bool),
+            'sweep_dur_s': sweep_dur_s,
+            'sweep_level_dbfs': sweep_level_dbfs,
+            'num_sweeps': AudioFactory._get_required_config(config, sweep_section, 'num_sweeps', int),
+            'pre_sil_ms': AudioFactory._get_required_config(config, sweep_section, 'pre_sil_ms', float),
+            'post_sil_ms': AudioFactory._get_required_config(config, sweep_section, 'post_sil_ms', float),
+        }
+
+        # Initialize core components
+        sweep_gen = SweepGenerator(fs, sweep_dur_s, f1=1.0, level_dbfs=sweep_level_dbfs)
+        marker_gen = MarkerGenerator(fs, 100.0, (500.0, 5000.0), sweep_level_dbfs)
+        
+        alignment_engine = AlignmentEngine(
+            fs, 
+            cap_config['num_sweeps'], 
+            AudioFactory._get_required_config(config, sweep_section, 'align_to_first_marker', bool),
+            AudioFactory._get_required_config(config, sweep_section, 'mic_tail_taper_ms', float)
         )
+        
+        deconv_engine = DeconvolutionEngine(fs)
+
+        # Gatekeeper logic for optional pipeline stages
+        h2_db = AudioFactory._get_required_config(config, sweep_section, 'H2_TEST_DB', parse_optional_float)
+        h3_db = AudioFactory._get_required_config(config, sweep_section, 'H3_TEST_DB', parse_optional_float)
+        injector = HarmonicInjector(h2_db, h3_db) if (h2_db is not None or h3_db is not None) else None
+
+        protect_hz = AudioFactory._get_required_config(config, sweep_section, 'PROTECT_HPF_HZ', parse_optional_float)
+        if protect_hz is not None and protect_hz > 0:
+            order = AudioFactory._get_required_config(config, sweep_section, 'PROTECT_HPF_ORDER', int)
+            phase_mode = AudioFactory._get_required_config(config, sweep_section, 'PROTECT_HPF_PHASE', str)
+            filter_engine = ProtectionFilter(fs, protect_hz, order, phase_mode)
+        else:
+            filter_engine = None
+
+        kwargs = {
+            'hw_config': hw_config,
+            'capture_config': cap_config,
+            'sweep_gen': sweep_gen,
+            'marker_gen': marker_gen,
+            'alignment_engine': alignment_engine,
+            'deconv_engine': deconv_engine,
+            'harmonic_injector': injector,
+            'protection_filter': filter_engine
+        }
+
+        # Route to correct class based on mode
+        if mode == 'mock_interface':
+            return mockinterfaceaudio(**kwargs)
+            
+        return Audio(**kwargs)
 
 if __name__ == "__main__":
     # Helper to list devices if run directly
