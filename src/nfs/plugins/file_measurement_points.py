@@ -45,7 +45,7 @@ class FileMeasurementPoints:
         self._current_index = 0
 
     def ready(self) -> bool:
-        return self._current_index >= len(self._points)
+        return self._current_index > len(self._points) # Changed >= to > so final point runs a sweep
 
     def need_to_do_evasive_move(self) -> bool: # TODO MPOT I dont think this is used
         return False
@@ -55,8 +55,9 @@ class FileMeasurementPoints:
         return r_cyl < (self._pole_gap / 2.0)
 
     def _remove_point_inside_homing_area(self, theta_cyl) -> bool:
-        # everything in mm and degrees
-        return (theta_cyl > 180.0-self._homing_gap/2) & (theta_cyl < -180.0 + self._homing_gap/2)
+
+        limit = 180.0 - (self._homing_gap / 2.0)   # Calculate the boundary limit (e.g., 175 degrees if gap is 10)
+        return abs(theta_cyl) > limit # Using abs() catches both the positive and negative boundaries 
 
 def register(factory) -> None:
     factory.register("FileMeasurementPoints", FileMeasurementPoints)
