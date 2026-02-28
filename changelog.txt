@@ -15,6 +15,8 @@ audio.py
 27/02/26
 Refactor to follow Single Responsibility Principle (SRP).
 
+RunSweep - Conductor that manages audio streams and execution of the other audio processing classes.
+
 DSPUtils - A utility class containing pure mathematical functions such as Hann windowing, dB-to-linear conversion, and cross-correlation.
 
 MarkerGenerator - Responsible for creating the Barker-13 sequence used to synchronize the timing of the recordings.
@@ -41,3 +43,6 @@ Added a block in _matched_filter_detect to calculate the peak to sidelobe ratio 
 
 28/02/26
 Added alignment_debug.npz export when debug_saves is enabled. Includes raw loopback, reference Barker-13, cross-correlation results, and quality metrics Peak-to-Sidelobe Ratio and match percent. Enables analysis of barker marker alignment quality using util analyze_marker_alignment.py. Implemented originally to inspect blurring caused by hardware DC blocking capacitors on audio interfaces.
+
+28/02/26
+Added user variable for wav file naming convention. Tom for method compatible with Tom's processing code. Dimitri for the method compatible with Dimitri's processing code.
