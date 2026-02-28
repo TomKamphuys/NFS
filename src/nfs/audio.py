@@ -287,11 +287,12 @@ class ProtectionFilter:
 class AlignmentEngine:
     """Handles cross-correlation and synchronous averaging."""
     
-    def __init__(self, fs: int, num_sweeps: int, align_to_first_marker: bool, mic_tail_taper_ms: float):
+    def __init__(self, fs: int, num_sweeps: int, align_to_first_marker: bool, mic_tail_taper_ms: float, marker_dur_ms: float):
         self.fs = fs
         self.num_sweeps = num_sweeps
         self.align_to_first_marker = align_to_first_marker
         self.mic_tail_taper_ms = mic_tail_taper_ms
+        self.marker_dur_ms = marker_dur_ms
 
     def _matched_filter_detect(self, x: np.ndarray, ref: np.ndarray, search_start: int = None, search_end: int = None):
         """
@@ -310,9 +311,10 @@ class AlignmentEngine:
         peak_val = float(corr_sel[i])
 
         # --- BEGIN QUALITY / PSR CHECK ---
-        # The Barker marker is 100ms long with 13 chips. The main peak base width is roughly ~15ms.
-        # We mask out +/- 15ms around the peak to find the highest independent sidelobe.
-        exclusion_samps = int(0.015 * self.fs)
+        # Barker-13 autocorrelation main lobe is 2 chips wide. 
+        # We dynamically calculate this width to mask only the main peak.
+        chip_dur_s = (self.marker_dur_ms / 1000.0) / 13.0
+        exclusion_samps = int((chip_dur_s * 2.0) * self.fs)
         mask_start = max(0, i - exclusion_samps)
         mask_end = min(len(corr_sel), i + exclusion_samps)
         
@@ -907,7 +909,8 @@ class AudioFactory:
             fs, 
             cap_config['num_sweeps'], 
             AudioFactory._get_required_config(config, sweep_section, 'align_to_first_marker', bool),
-            AudioFactory._get_required_config(config, sweep_section, 'mic_tail_taper_ms', float)
+            AudioFactory._get_required_config(config, sweep_section, 'mic_tail_taper_ms', float),
+            marker_gen.dur_ms
         )
         
         deconv_engine = DeconvolutionEngine(fs)
