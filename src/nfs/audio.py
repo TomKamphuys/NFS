@@ -689,6 +689,7 @@ class Audio(IAudio):
             # tom's Format: (r, t, z).wav
             base_name = f"({position.r():.1f}, {position.t():.1f}, {position.z():.1f})"
             main_file_name = f"{base_name}.wav"
+            dist_file_name = f"{base_name}_dist.wav"
         else:
             # dimitri's Format: ID_rX_phY_zZ_ir.wav
             base_name = (
@@ -698,6 +699,7 @@ class Audio(IAudio):
                 f"z{DSPUtils.fmt_num_for_name(position.z())}"
             )
             main_file_name = f"{base_name}_ir.wav"
+            dist_file_name = f"{base_name}_ir_dist.wav"
 
         # 3. Debug Saves (Optional - write intermediate files)
         if self.cap['debug_saves']:
@@ -716,11 +718,10 @@ class Audio(IAudio):
         sf.write(str(linear_path), ir_linear, self.hw['fs'], subtype='FLOAT')
         logger.info(f"Saved Linear IR: {linear_path.name}")
         
-        # Secondary (Distortion) - Only saved for dimitri's convention
-        if self.cap.get('naming_convention') != 'tom':
-            dist_path = self.rec_dir / f"{base_name}_ir_dist.wav"
-            sf.write(str(dist_path), ir_full, self.hw['fs'], subtype='FLOAT')
-            logger.info(f"Saved Distortion IR: {dist_path.name}")
+        # Secondary (Distortion)
+        dist_path = self.rec_dir / dist_file_name
+        sf.write(str(dist_path), ir_full, self.hw['fs'], subtype='FLOAT')
+        logger.info(f"Saved Distortion IR: {dist_path.name}")
             
 class mockinterfaceaudio(Audio):
     """Digital Twin loopback simulating hardware latency and filters."""
