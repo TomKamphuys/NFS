@@ -475,17 +475,20 @@ class DeconvolutionEngine:
         I_filtered = I * H_min_phase
         H_complex = Y * I_filtered
         h_full = np.fft.irfft(H_complex, n=Nfft).astype(np.float32)
+
+        # --- WINDOWING & SEPARATION of Linear and Distortion IRs ---
         
-        # --- Farina Separation (Linear vs Distortion) ---
-        # The linear response is at the end of the buffer (circular convolution wrap) 
-        # or casually placed depending on padding.
-        # With the Inverse Filter generated via Time Reversal, the linear peak is 
-        # usually aligned such that we slice the tail.
+        # Truncate to remove ghost IR from length > sweep duration (inv_data) *2 
+        h_full = h_full[:len(inv_data) * 2]
+        
+        # Calculate fade: 10% of one sweep in ms
+        fade_ms = (len(inv_data) / self.fs) * 100.0 
+        # Send to hann_fade util
+        h_full = DSPUtils.hann_fade(h_full, fade_ms, self.fs, side="out")
+        
+        # Slice the Linear IR from the full IR
         split_idx = len(inv_data) - 5
-        if len(h_full) > split_idx:
-            h_linear = h_full[split_idx:]
-        else:
-            h_linear = h_full
+        h_linear = h_full[split_idx : split_idx + len(inv_data)]
             
         return h_full, h_linear
 
@@ -545,6 +548,21 @@ class Audio(IAudio):
             return sd.query_hostapis()[d['hostapi']]['name'].upper()
         except:
             return "UNKNOWN"
+
+    def _save_wav_with_metadata(self, filepath: Path, data: np.ndarray, title: str, subtype: Optional[str] = None) -> None:
+        """Saves a WAV file and embeds metadata into standard RIFF chunks."""
+        channels = data.shape[1] if len(data.shape) > 1 else 1
+        
+        kwargs = {'mode': 'w', 'samplerate': self.hw['fs'], 'channels': channels}
+        if subtype:
+            kwargs['subtype'] = subtype
+            
+        with sf.SoundFile(str(filepath), **kwargs) as f:
+            # f.title writes the INAM chunk
+            f.title = title 
+            # f.comment writes the ICMT chunk; Windows is more likely to show this
+            f.comment = title 
+            f.write(data)
 
     def _run_sweep(self) -> Dict[str, Any]:
         """
@@ -706,10 +724,11 @@ class Audio(IAudio):
         # 3. Debug Saves (Optional - write intermediate files)
         if self.cap['debug_saves']:
             logger.info("Saving debug artifacts...")
-            sf.write(str(self.debug_dir / f"{base_name}_mic_conditioned.wav"), result["rx_mic_conditioned"], self.hw['fs'])
-            sf.write(str(self.debug_dir / f"{base_name}_loop_aligned.wav"), result["rx_loop_aligned"], self.hw['fs'])
+            self._save_wav_with_metadata(self.debug_dir / f"{base_name}_mic_conditioned.wav", result["rx_mic_conditioned"], f"{base_name}_mic_conditioned.wav")
+            self._save_wav_with_metadata(self.debug_dir / f"{base_name}_loop_aligned.wav", result["rx_loop_aligned"], f"{base_name}_loop_aligned.wav")
             for i, slice_data in enumerate(result["debug_mic_slices"]):
-                sf.write(str(self.debug_dir / f"{base_name}_sweep{i+1:02d}.wav"), slice_data, self.hw['fs'])
+                filename = f"{base_name}_sweep{i+1:02d}.wav"
+                self._save_wav_with_metadata(self.debug_dir / filename, slice_data, filename)
 
         # 4. Process IR (Deconvolution)
         ir_full, ir_linear = self.deconv_engine.process_ir(result["rx_mic_conditioned"], result["inv_sweep"])
@@ -717,12 +736,12 @@ class Audio(IAudio):
         # 5. Save Final Files
         # Main (Linear)
         linear_path = self.rec_dir / main_file_name
-        sf.write(str(linear_path), ir_linear, self.hw['fs'], subtype='FLOAT')
+        self._save_wav_with_metadata(linear_path, ir_linear, main_file_name, subtype='FLOAT')
         logger.info(f"Saved Linear IR: {linear_path.name}")
         
         # Secondary (Distortion)
         dist_path = self.rec_dir / dist_file_name
-        sf.write(str(dist_path), ir_full, self.hw['fs'], subtype='FLOAT')
+        self._save_wav_with_metadata(dist_path, ir_full, dist_file_name, subtype='FLOAT')
         logger.info(f"Saved Distortion IR: {dist_path.name}")
             
 class mockinterfaceaudio(Audio):
