@@ -135,6 +135,7 @@ class MarkerGenerator:
         self.level_dbfs = level_dbfs
 
     def generate(self) -> np.ndarray:
+        """Generates band-limited Barker code marker with tapered edges and normalized level"""
         chips = np.array([+1, +1, +1, +1, +1, -1, -1, +1, +1, -1, +1, -1, +1], dtype=np.float32)
         n = max(16, int(round(self.dur_ms / 1000.0 * self.fs)))
 
@@ -185,6 +186,7 @@ class SweepGenerator:
         self.level_dbfs = level_dbfs
 
     def generate(self) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Generates fundamental sweep, phase array, and time-reversed inverse filter for harmonic injection"""
         f2 = self.fs * 0.5
         n = int(round(self.T * self.fs))
         t = np.arange(n) / self.fs
@@ -309,9 +311,9 @@ class AlignmentEngine:
         Returns the lag (index) and the correlation coefficient.
         """
         lags, corr = DSPUtils.rfft_xcorr(x, ref)
-        if search_start is None: 
+        if search_start is None:
             search_start = 0
-        if search_end is None: 
+        if search_end is None:
             search_end = len(x) - 1
 
         m = (lags >= search_start) & (lags <= search_end)
@@ -366,7 +368,8 @@ class AlignmentEngine:
         return int(lags_sel[i]), peak_val
 
     def sync_and_average(self, rec_mic: np.ndarray, rec_loop: np.ndarray, marker_single: np.ndarray,
-                         pre_samps_settle: int, slot_len: int, sweep_len: int) -> Tuple[np.ndarray, np.ndarray, List[np.ndarray]]:
+                         pre_samps_settle: int, slot_len: int, sweep_len: int) -> Tuple[
+        np.ndarray, np.ndarray, List[np.ndarray]]:
 
         # --- Alignment & Averaging ---
         mic_slices = []
@@ -374,7 +377,7 @@ class AlignmentEngine:
         capture_len = sweep_len + int(round(self.mic_tail_taper_ms / 1000.0 * self.fs))
 
         # --- FIXED ALIGNMENT LOGIC ---
-        # 1. Find global anchor (first marker) using Matched Filter
+        # 1. Find a global anchor (first marker) using Matched Filter
         search_limit = pre_samps_settle + slot_len
         k_first_marker, _ = self._matched_filter_detect(rec_loop, marker_single, search_end=search_limit)
 
@@ -400,6 +403,7 @@ class AlignmentEngine:
                 start_idx = k_local
 
             end_idx = start_idx + capture_len
+            # Stores aligned capture window copies into accumulation lists
             if end_idx <= len(rec_mic) and start_idx >= 0:
                 mic_slices.append(rec_mic[start_idx: end_idx].copy())
                 loop_slices.append(rec_loop[start_idx: end_idx].copy())
@@ -407,7 +411,7 @@ class AlignmentEngine:
         if not mic_slices:
             raise RuntimeError("No valid sweeps captured (Alignment failed).")
 
-        # Synchronous Averaging to lower noise floor
+        # Synchronous Averaging to lower the noise floor
         avg_mic = np.mean(mic_slices, axis=0)
         avg_loop = np.mean(loop_slices, axis=0)
 
@@ -462,10 +466,12 @@ class DeconvolutionEngine:
         idx_hf_start = np.searchsorted(freqs, f_hf_start)
         idx_hf_end = np.searchsorted(freqs, f_hf_end)
 
+        # Tapers high-frequency mask with a cosine window to suppress ringing
         if idx_hf_end > idx_hf_start:
             n = np.linspace(0, 1, idx_hf_end - idx_hf_start)
             hf_mask[idx_hf_start: idx_hf_end] = 0.5 * (1 + np.cos(np.pi * n))
-        if idx_hf_end < len(hf_mask): hf_mask[idx_hf_end:] = 0.0
+        if idx_hf_end < len(hf_mask):
+            hf_mask[idx_hf_end:] = 0.0
 
         mag_mask = lf_mask * hf_mask
 
@@ -480,11 +486,11 @@ class DeconvolutionEngine:
             log_mag_full = np.concatenate([log_mag, log_mag[-1:0:-1]])
 
         cepstrum = np.fft.ifft(log_mag_full).real
-        w = np.zeros(Nfft);
-        w[0] = 1.0;
+        w = np.zeros(Nfft)
+        w[0] = 1.0
         mid = Nfft // 2
         if Nfft % 2 == 0:
-            w[mid] = 1.0;
+            w[mid] = 1.0
             w[1:mid] = 2.0
         else:
             w[1:mid + 1] = 2.0
@@ -678,7 +684,7 @@ class Audio(IAudio):
         # Real-time Callback
         def callback(indata, outdata, frames, time_info, status):
             nonlocal idx_play, idx_rec
-            if status: 
+            if status:
                 logger.warning(f"Audio Status: {status}")
 
             # Output
