@@ -560,6 +560,9 @@ class Audio(IAudio):
         self.rec_dir = Path("./Recordings")
         self.rec_dir.mkdir(exist_ok=True)
 
+        self.dist_dir = Path("./Distortion")
+        self.dist_dir.mkdir(exist_ok=True)
+
         if self.cap['debug_saves']:
             self.debug_dir = self.rec_dir / "debug"
             self.debug_dir.mkdir(exist_ok=True)
@@ -780,7 +783,7 @@ class Audio(IAudio):
         logger.info(f"Saved Linear IR: {linear_path.name}")
 
         # Secondary (Distortion)
-        dist_path = self.rec_dir / dist_file_name
+        dist_path = self.dist_dir / dist_file_name
         self._save_wav_with_metadata(dist_path, ir_full, dist_file_name, subtype='FLOAT')
         logger.info(f"Saved Distortion IR: {dist_path.name}")
 
