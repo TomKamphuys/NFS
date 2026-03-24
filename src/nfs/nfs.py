@@ -41,7 +41,7 @@ class NearFieldScanner:
         :return: None
         """
         with open(self._position_log_file, 'w') as f:
-            f.write('r,theta,z\n')
+            f.write('r_xy_mm,phi_deg,z_mm\n')
         logger.info(f'Position log file cleared: {self._position_log_file}')
 
     def _append_position_to_file(self, position) -> None:
