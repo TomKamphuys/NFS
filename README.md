@@ -16,10 +16,12 @@ The scanner supports multiple coordinate systems and scanning patterns through a
 ## ✨ Features
 
 - **Automated scanning** — define a set of measurement positions and let the scanner work through them unattended.
+- **Real-time Progress Monitoring** — stay informed with point-by-point updates (e.g., "Measuring point 10 of 200... 5% complete") logged during long-running scans.
 - **Cylindrical & spherical grids** — built-in plugins for cylindrical, spherical, arc-based, and file-based measurement point generation.
 - **Impulse response capture** — uses exponential sweep excitation with [pyfar](https://pyfar.org/) for high-quality IR measurements.
 - **GRBL / FluidNC motion control** — communicates with Arduino or ESP32-based CNC controllers over serial.
 - **DSP Backend** — Includes deconvolution of sweeps, time-alignment based on loopback markers, and windowing.
+- **DSP Verification Tooling** — Automated real-time verification of measurement quality, including SNR estimation, THD calculation, and alignment Peak Sharpness Ratio (PSR) monitoring.
 - **Pluggable architecture** — measurement-point generators are loaded as plugins; easy to add your own.
 - **Configurable via INI file** — all hardware, audio, and motion parameters live in a single `config.ini`.
 - **Mock Mode** — test your measurement sequences without hardware using the built-in mock interfaces for both motion and audio.
@@ -101,12 +103,55 @@ Measurement results (impulse responses) are saved as `.wav` files with metadata 
 A log of all measurement positions is saved to `measurement_positions.txt`.
 
 
+## 📚 Documentation
+
+The project uses Sphinx to automatically generate API documentation from docstrings.
+
+### Building Locally
+To build the HTML documentation locally, run:
+```bash
+uv run sphinx-build -b html docs docs/_build/html
+```
+The output will be available in `docs/_build/html/index.html`.
+
+### Logging Configuration
+Logging is centralized and can be configured in `config.ini`:
+```ini
+[logging]
+level = INFO
+file = scanner.log
+rotation = 10 MB
+retention = 1 week
+```
+- `level`: DEBUG, INFO, WARNING, ERROR, CRITICAL
+- `file`: Path to the log file
+- `rotation`: When to rotate the log (e.g., size or time)
+- `retention`: How long to keep old logs
+
+### Online Documentation
+Documentation is automatically built and deployed to GitHub Pages on every push to the `master` branch.
+
 ---
 
 ## 🧪 Testing
 
-```
+Run the standard test suite:
+```bash
 uv run pytest
+```
+
+### Full System Mock Integration Test
+A specialized integration test is available that simulates a complete measurement run using mock hardware (both audio and motion). This verifies the entire orchestration logic from plugin loading to final position logging.
+
+```bash
+uv run pytest tests/test_full_system_mock.py
+```
+
+### DSP Verification Tests
+Run the dedicated DSP verification tests to validate the automated quality metrics (SNR, THD, PSR).
+
+```bash
+uv run pytest tests/test_dsp_verification.py
 ```
 
 ---

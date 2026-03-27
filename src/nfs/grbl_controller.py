@@ -301,10 +301,6 @@ class ESP32Duino(IGrblController):
     :ivar _connection: Represents the underlying connection for communication with
         the CNC controller.
     :type _connection: ClientConnection
-
-    :ivar _position: Stores the current position of the CNC tool head in cylindrical
-        coordinates.
-    :type _position: CylindricalPosition
     """
     UNLOCK_COMMAND = "$X"  # Command to unlock and clear any alarm
 

@@ -127,6 +127,13 @@ class CylindricalMeasurementPoints:
     def need_to_do_evasive_move(self) -> bool:
         return self._evasive_move_needed
 
+    def total_points(self) -> int:
+        # Total points = nr_of_angular_points * (nr_of_radial_cap_points * 2 + nr_of_vertical_points)
+        # However, the code generates TWO points for each radial step in the caps 
+        # (one inner, one outer) and TWO points for each vertical step in the wall.
+        # So it's actually nr_of_angular_points * 2 * (nr_of_radial_cap_points * 2 + nr_of_vertical_points)
+        return self._nr_of_angular_points * 2 * (2 * self._nr_of_radial_cap_points + self._nr_of_vertical_points)
+
 
 def register(factory) -> None:
     factory.register("CylindricalMeasurementPoints", CylindricalMeasurementPoints)

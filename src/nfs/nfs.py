@@ -1,6 +1,7 @@
 import configparser
 import time
 
+from .logging_config import setup_logging
 from loguru import logger
 
 from . import loader
@@ -8,7 +9,8 @@ from .audio import AudioFactory, IAudio
 from .motion_manager import MotionManagerFactory
 from .scanner import Scanner
 
-logger.add('../../scanner.log', mode='w', level="TRACE")
+# Remove manual initialization from here
+# logger.add('../../scanner.log', mode='w', level="TRACE")
 
 
 class NearFieldScanner:
@@ -28,7 +30,7 @@ class NearFieldScanner:
     :ivar _position_log_file: Path to the file where measurement positions are logged.
     :type _position_log_file: str
     """
-    def __init__(self, scanner: Scanner, audio: IAudio, measurement_motion_manager, position_log_file: str = 'measurement_positions.txt'):
+    def __init__(self, scanner: Scanner, audio: IAudio, measurement_motion_manager, position_log_file: str = 'measurement_positions.csv'):
         self._scanner = scanner
         self._audio = audio
         self._measurement_motion_manager = measurement_motion_manager
@@ -68,16 +70,20 @@ class NearFieldScanner:
         :return: nothing
         """
         self._measurement_motion_manager.move_to_safe_starting_radius()
+        total = self._measurement_motion_manager.total_points()
+        current = 0
         while not self._measurement_motion_manager.ready():
-            time.sleep(0.1)
             self._measurement_motion_manager.next()
             if self._measurement_motion_manager.ready():
                 break
 
+            current += 1
+            progress = (current / total) * 100 if total > 0 else 0
+            logger.info(f"Measuring point {current} of {total}... {progress:.1f}% complete")
+
             position = self._scanner.get_position()
             self._append_position_to_file(position)
             self._audio.measure_ir(position)
-            
 
         self._measurement_motion_manager.reset()
         self._measurement_motion_manager.move_to_safe_starting_radius()
@@ -94,6 +100,14 @@ class NearFieldScanner:
         :return: None
         """
         self._scanner.shutdown()  # turn off stuff and tidy
+
+    def __enter__(self):
+        """Context manager enter."""
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit, ensures shutdown is called."""
+        self.shutdown()
 
 
 class NearFieldScannerFactory:
@@ -113,12 +127,14 @@ class NearFieldScannerFactory:
         :param config_file:
         :return: near field scanner
         """
+        setup_logging(config_file)
+        
         config_parser = configparser.ConfigParser(inline_comment_prefixes="#")
         config_parser.read(config_file)
 
         section = 'nfs'
 
-        plugins_section = config_parser.get(section, 'plugins')
+        plugins_section = config_parser.get(section, 'plugins', fallback='plugins')
         loader.load_plugins(config_file, plugins_section)
 
         audio_section = config_parser.get(section, 'audio')

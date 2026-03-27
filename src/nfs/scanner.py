@@ -1,5 +1,6 @@
 import configparser
 from loguru import logger
+from .logging_config import setup_logging
 
 from .datatypes import CylindricalPosition, GrblMachineState
 from .grbl_controller import GrblControllerFactory, IGrblController
@@ -133,6 +134,14 @@ class Scanner:
         """Shutdown the scanner's movers."""
         self._grbl_controller.shutdown()
 
+    def __enter__(self):
+        """Context manager enter."""
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit, ensures shutdown is called."""
+        self.shutdown()
+
     def home(self) -> None:
         self._grbl_controller.send_and_wait_for_move_ready('$H')
 
@@ -162,6 +171,7 @@ class ScannerFactory:
     @staticmethod
     def create(config_file: str) -> Scanner:
 
+        setup_logging(config_file)
         config_parser = configparser.ConfigParser(inline_comment_prefixes="#")
         config_parser.read(config_file)
         section = 'scanner'

@@ -4,7 +4,8 @@ from abc import ABC, abstractmethod
 from loguru import logger
 from nfs import factory
 
-from .datatypes import CylindricalPosition, cyl_to_cart
+from .datatypes import CylindricalPosition
+from .utils.geometry import cyl_to_cart
 from .measurement_points import MeasurementPoints
 from .scanner import Scanner
 
@@ -39,6 +40,10 @@ class IMotionManager(ABC):
     def shutdown(self) -> None:
         pass
 
+    @abstractmethod
+    def total_points(self) -> int:
+        pass
+
 
 class CylindricalMeasurementMotionManager(IMotionManager):
     TOLERANCE = 0.1
@@ -65,6 +70,9 @@ class CylindricalMeasurementMotionManager(IMotionManager):
 
     def shutdown(self) -> None:
         self._scanner.shutdown()
+
+    def total_points(self) -> int:
+        return self._measurement_points.total_points()
 
     def _move_to_next_measurement_point(self, position: CylindricalPosition) -> None:
         current_position = self._scanner.get_position()
@@ -217,6 +225,9 @@ class SphericalMeasurementMotionManager(IMotionManager):
         """
         self._scanner.shutdown()
 
+    def total_points(self) -> int:
+        return self._measurement_points.total_points()
+
     def _move_to_next_measurement_point(self, position: CylindricalPosition) -> None:
         """
         Move the scanner to the specified next measurement point in the cylindrical
@@ -319,6 +330,8 @@ class SphericalMeasurementMotionManager(IMotionManager):
             logger.debug('No angular move needed.')
 
 
+from nfs import registry
+
 class MotionManagerFactory:
     @staticmethod
     def create(config_file: str, section: str, scanner: Scanner) -> IMotionManager:
@@ -331,6 +344,14 @@ class MotionManagerFactory:
         measurement_points = factory.create(item)
 
         motion_manager_type = config_parser.get(section, 'type')
+
+        # Check registry first for custom motion managers
+        try:
+            component = registry.motion_managers.get(motion_manager_type)
+            return component(config_file, section, scanner, measurement_points)
+        except (ValueError, TypeError):
+            pass
+
         if motion_manager_type == 'CylindricalMeasurementMotionManager':
             safe_radius = config_parser.getfloat(section, 'safe_radius')
             return CylindricalMeasurementMotionManager(scanner, measurement_points, safe_radius)

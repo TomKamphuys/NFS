@@ -138,6 +138,7 @@ class SphericalMeasurementPointsArcsRandom:
         Retrieve the next cylindrical position from the internal lists of cylindrical
         coordinates. The method iterates through a pre-defined set of cylindrical
         positions. Once the end of the list is reached, the ready status is updated.
+
         :raises IndexError: If the lists are accessed out of bounds due to incorrect
             indexing or inconsistent list sizes.
         :return: A `CylindricalPosition` object representing the current cylindrical
@@ -164,6 +165,12 @@ class SphericalMeasurementPointsArcsRandom:
 
     def ready(self) -> bool:
         return self._ready
+
+    def total_points(self) -> int:
+        return self._actual_nr_of_points
+
+    def need_to_do_evasive_move(self) -> bool:
+        return False
 
 
 def register(factory) -> None:

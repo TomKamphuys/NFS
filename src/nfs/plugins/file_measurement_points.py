@@ -45,7 +45,10 @@ class FileMeasurementPoints:
         self._current_index = 0
 
     def ready(self) -> bool:
-        return self._current_index > len(self._points) # Changed >= to > so final point runs a sweep
+        return self._current_index >= len(self._points)
+
+    def total_points(self) -> int:
+        return len(self._points)
 
     def need_to_do_evasive_move(self) -> bool: # TODO MPOT I dont think this is used
         return False
