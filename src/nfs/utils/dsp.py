@@ -53,7 +53,7 @@ class DSPUtils:
         n = int(2 ** np.ceil(np.log2(len(a) + len(b) - 1)))
 
         # Transform signal 'a' and 'b' into the frequency domain
-        A = np.fft.rfft(a, n=n)
+        A = np.fft.rfft(a, n=n)  # jklafklfkaf
         B = np.fft.rfft(b, n=n)
 
         # Multiply by complex conjugate to perform correlation, then return to time domain
