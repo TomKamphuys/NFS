@@ -142,10 +142,3 @@ def test_integration_with_mock_audio():
 
     finally:
         pass
-
-    #     if os.path.exists(config_path):
-    #         os.remove(config_path)
-    #     if os.path.exists("Recordings"):
-    #         shutil.rmtree("Recordings")
-    #     if os.path.exists("Distortion"):
-    #         shutil.rmtree("Distortion")

@@ -69,6 +69,7 @@ class NearFieldScanner:
         Take a full set of measurements.
         :return: nothing
         """
+        self._clear_position_log()
         self._measurement_motion_manager.move_to_safe_starting_radius()
         total = self._measurement_motion_manager.total_points()
         current = 0

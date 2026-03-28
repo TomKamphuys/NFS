@@ -35,6 +35,8 @@ def test_full_system_mock_integration():
 
         # 3. Run a full measurement set
         # With the provided config, this should take a few seconds as it processes a small set of points
+        # NOTE: nfs.take_measurement_set() clears the log file at the START.
+        # It should contain data after completion.
         nfs.take_measurement_set()
 
         # 4. Verify results
