@@ -9,9 +9,6 @@ from .audio import AudioFactory, IAudio
 from .motion_manager import MotionManagerFactory
 from .scanner import Scanner
 
-# Remove manual initialization from here
-# logger.add('../../scanner.log', mode='w', level="TRACE")
-
 
 class NearFieldScanner:
     """
@@ -30,7 +27,11 @@ class NearFieldScanner:
     :ivar _position_log_file: Path to the file where measurement positions are logged.
     :type _position_log_file: str
     """
-    def __init__(self, scanner: Scanner, audio: IAudio, measurement_motion_manager, position_log_file: str = 'measurement_positions.csv'):
+    def __init__(self,
+                 scanner: Scanner,
+                 audio: IAudio,
+                 measurement_motion_manager,
+                 position_log_file: str = 'measurement_positions.csv'):
         self._scanner = scanner
         self._audio = audio
         self._measurement_motion_manager = measurement_motion_manager

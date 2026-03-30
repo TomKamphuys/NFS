@@ -26,6 +26,7 @@ dependencies = [
   "grbl-streamer>=2.0.2",
   "pyfar>=0.7.3",
   "sounddevice>=0.5.3",
+  "scipy-stubs~=1.16.3",
 ]
 
 [project.optional-dependencies]

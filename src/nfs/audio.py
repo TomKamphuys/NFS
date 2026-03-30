@@ -32,6 +32,7 @@ import time
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Optional, Dict, Any, List, Tuple
+from nfs import registry
 
 import numpy as np
 import scipy.signal
@@ -46,7 +47,6 @@ from .datatypes import CylindricalPosition
 # This environment variable triggers the loading of ASIO drivers if available.
 os.environ["SD_ENABLE_ASIO"] = "1"
 import sounddevice as sd  # noqa: E402
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  UTILITIES
@@ -927,9 +927,6 @@ class AudioMock(IAudio):
     def measure_ir(self, position: CylindricalPosition, order_id: str = "NA") -> None:
         logger.info(f"[MOCK] Measured {position}, ID={order_id}")
         # time.sleep(1.0)  # Simulate sweep duration
-
-
-from nfs import registry
 
 
 class AudioFactory:
