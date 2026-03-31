@@ -13,21 +13,25 @@ from loguru import logger
 
 from . import factory, registry
 
+
 class ModuleInterface:
     """
     Interface definition for modules that can be registered with a factory.
     """
+
     @staticmethod
     def register(my_factory) -> None:
         """
         Register the necessary items in the measurement points factory.
         """
 
+
 def import_module(name: str) -> ModuleInterface:
     """
     Imports a module dynamically by its name and returns the module object.
     """
     return importlib.import_module(name)  # type: ignore
+
 
 def load_plugins(config_file: Optional[str] = None, plugins_section: Optional[str] = None) -> None:
     """
@@ -40,6 +44,7 @@ def load_plugins(config_file: Optional[str] = None, plugins_section: Optional[st
     if config_file and plugins_section:
         _load_config_plugins(config_file, plugins_section)
 
+
 def _load_entry_points() -> None:
     """
     Discovers and loads plugins registered via entry points.
@@ -49,9 +54,9 @@ def _load_entry_points() -> None:
         "nfs.audio",
         "nfs.motion_managers"
     ]
-    
+
     eps = entry_points()
-    
+
     for group in groups:
         # entry_points().select(group=group) is available in Python 3.10+
         if hasattr(eps, 'select'):
@@ -67,7 +72,7 @@ def _load_entry_points() -> None:
                 if hasattr(plugin_component, 'register'):
                     # Call register with the appropriate registry
                     if group == "nfs.measurement_points":
-                        plugin_component.register(factory) # keep backward compatibility with factory
+                        plugin_component.register(factory)  # keep backward compatibility with factory
                     elif group == "nfs.audio":
                         registry.audio.register(entry_point.name, plugin_component)
                     elif group == "nfs.motion_managers":
@@ -83,6 +88,7 @@ def _load_entry_points() -> None:
             except Exception as e:
                 logger.error(f"Failed to load plugin {entry_point.name}: {e}")
 
+
 def _load_config_plugins(config_file: str, plugins_section: str) -> None:
     """
     Load plugins listed in the specified configuration section.
@@ -96,7 +102,7 @@ def _load_config_plugins(config_file: str, plugins_section: str) -> None:
     items = config_parser.items(plugins_section)
     if not items:
         return
-        
+
     _, plugins = zip(*items)
     for plugin_file in plugins:
         logger.info(f'Loading legacy plugin: {plugin_file}')

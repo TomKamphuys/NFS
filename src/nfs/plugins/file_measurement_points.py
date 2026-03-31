@@ -29,7 +29,6 @@ class FileMeasurementPoints:
             z_mm = float(row.get("z_mm"))  # Height position (mm)
             if self._remove_point_inside_homing_area(phi_deg) or self._remove_point_inside_speaker_stand(r_xy_mm):
                 continue
-            print(f"Point {idx}: ({r_xy_mm:.2f}, {phi_deg:.2f}, {z_mm:.2f})")
             self._points.append(CylindricalPosition(r_xy_mm, phi_deg, z_mm))
 
         logger.info(f"Read {len(self._points)} points from input file '{filename}' (out of {len(coords)} rows in file)")
