@@ -111,7 +111,8 @@ def setup_logging(config_file: str = "config.ini", project_name: str = "NFS Proj
             rotation=rotation,
             retention=retention,
             compression="zip",
-            mode="w",
+            mode="a",
+            enqueue=True,
             format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {name}:{function}:{line} - {message}"
         )
 

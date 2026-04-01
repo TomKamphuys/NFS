@@ -14,6 +14,7 @@ class Scanner:
     def __init__(self, grbl_controller: IGrblController, feed_rate):
         self._grbl_controller = grbl_controller
         self._feed_rate = feed_rate
+        self._grbl_controller.force_position_update()
 
     def radial_move_to(self, r: float) -> None:
         """Move to the specified radial position."""

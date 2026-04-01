@@ -106,7 +106,7 @@ class GrblControllerMock(IGrblController):
 class EventHandler:
     def __init__(self):
         self._received_message = ''
-        self._current_position = CylindricalPosition(0.0, 0.0, 0.0)
+        self._current_position = None
 
         self._state: GrblMachineState = GrblMachineState.IDLE
         self._state_raw: str = "Idle"
@@ -136,7 +136,7 @@ class EventHandler:
     def on_grbl_event(self, event, *data) -> None:
         if event == "on_rx_buffer_percent":
             self._received_message = 'ok'
-            logger.trace("set OK", flush=True)
+            logger.trace("set OK")
         if event == "on_stateupdate":
             if len(data) >= 3:
                 with self._state_lock:
@@ -161,7 +161,7 @@ class EventHandler:
                 self._state_raw = "Alarm"
                 self._state = GrblMachineState.ALARM
                 self._state_seq += 1
-            logger.error("ERROR: Alarm!", flush=True)
+            logger.error("ERROR: Alarm!")
 
         args = []
         for d in data:
@@ -252,19 +252,19 @@ class GrblStreamerClientConnection:
         self._grbl_streamer = grbl_streamer
 
     def killalarm(self) -> None:
-        logger.trace(f'GrblStreamerClientConnection: Sending message: killalarm', flush=True)
+        logger.trace(f'GrblStreamerClientConnection: Sending message: killalarm')
         self._grbl_streamer.killalarm()
 
     def softreset(self) -> None:
-        logger.trace(f'GrblStreamerClientConnection: Sending message: softreset', flush=True)
+        logger.trace(f'GrblStreamerClientConnection: Sending message: softreset')
         self._grbl_streamer.softreset()
 
     def hold(self) -> None:
-        logger.trace(f'GrblStreamerClientConnection: Sending message: hold', flush=True)
+        logger.trace(f'GrblStreamerClientConnection: Sending message: hold')
         self._grbl_streamer.hold()
 
     def send(self, message: str) -> None:
-        logger.trace(f'GrblStreamerClientConnection: Sending message: {message}', flush=True)
+        logger.trace(f'GrblStreamerClientConnection: Sending message: {message}')
         self._grbl_streamer.send_immediately(message)
 
     def receive(self):
@@ -352,6 +352,7 @@ class ESP32Duino(IGrblController):
         """
         Forces a position update by sending a '?' command and waiting for a response.
         """
+        logger.trace('Forcing position update.')
         self._send_immediate('?')
         self._wait_for_idle_state()
 
