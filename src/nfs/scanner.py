@@ -104,8 +104,10 @@ class Scanner:
         Ensures Y (radial) and Z (angular) are identical to G54.
         """
         # 1. Force switch to G55 to ensure we read reference coordinates
+        logger.error(f"Going to G55")
         self._grbl_controller.send('G55')
 
+        logger.error(f"Getting current position")
         # 2. Sync and get current position in G54
         self._grbl_controller.send('G4 P0.1')
         self._grbl_controller.force_position_update()
@@ -124,9 +126,11 @@ class Scanner:
         g54_z_val = g55_t
 
         # 4. Use G10 L20 P1 to align G54 to G55 with the vertical offset
+        logger.error(f"Setting G54 values")
         self._grbl_controller.send(f'G10 L20 P1 X{g54_x_val:.4f} Y{g54_y_val:.4f} Z{g54_z_val:.4f}')
 
         # 5. Be sure to go to G54
+        logger.error(f"Going to G54")
         self._grbl_controller.send('G54')
 
         logger.info(f"G54 aligned to G55 with +{height} vertical offset")
