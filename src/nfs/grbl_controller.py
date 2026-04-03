@@ -1,6 +1,7 @@
 import configparser
 import sys
 import time
+import threading
 from abc import ABC, abstractmethod
 from threading import Lock
 
@@ -213,7 +214,7 @@ class GrblControllerFactory:
             grbl_streamer.cnect(port, baudrate)
             logger.info('Waiting for gbrl to initialize..')
             time.sleep(3)
-            grbl_streamer.poll_start()
+            # grbl_streamer.poll_start()
             grbl_streamer.incremental_streaming = True
             grbl_streamer.send_immediately("$10=2")  # Force the report format to match what we expect.
 
@@ -257,7 +258,24 @@ class GrblStreamerClientConnection:
     def __init__(self, grbl_streamer: GrblStreamer, event_handler: EventHandler) -> None:
         self._event_handler = event_handler
         self._grbl_streamer = grbl_streamer
-        self._grbl_streamer.poll_start()
+        # self._grbl_streamer.poll_start()
+
+        self._stop_polling = threading.Event()
+        self._polling_thread = threading.Thread(target=self._poll_loop, daemon=True)
+        self._polling_thread.start()
+
+    def _poll_loop(self) -> None:
+        """
+        Polls the GRBL device at 5 Hz (every 0.2 seconds) to get status updates.
+        """
+        logger.debug("Starting GRBL polling thread (5 Hz)")
+        while not self._stop_polling.is_set():
+            try:
+                self._grbl_streamer.send_immediately("?")
+            except Exception as e:
+                logger.error(f"Error in GRBL polling thread: {e}")
+            time.sleep(0.2)
+        logger.debug("GRBL polling thread stopped")
 
     def killalarm(self) -> None:
         logger.trace(f'GrblStreamerClientConnection: Sending message: killalarm')
@@ -290,6 +308,9 @@ class GrblStreamerClientConnection:
         self._event_handler.set_on_state_update_callback(callback)
 
     def close(self) -> None:
+        self._stop_polling.set()
+        if self._polling_thread.is_alive():
+            self._polling_thread.join(timeout=1.0)
         self._grbl_streamer.disconnect()
 
 
