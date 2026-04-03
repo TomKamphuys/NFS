@@ -57,6 +57,10 @@ class IGrblController(ABC):
     def get_state_raw(self) -> str:
         pass
 
+    @abstractmethod
+    def set_on_state_update_callback(self, callback) -> None:
+        pass
+
     def force_position_update(self):
         pass
 
@@ -98,6 +102,9 @@ class GrblControllerMock(IGrblController):
     def get_state_raw(self) -> str:
         return "Idle"
 
+    def set_on_state_update_callback(self, callback) -> None:
+        pass
+
     def force_position_update(self):
         logger.trace(f'Mocking force position update')
         pass
@@ -111,9 +118,11 @@ class EventHandler:
         self._state: GrblMachineState = GrblMachineState.IDLE
         self._state_raw: str = "Idle"
 
-        # Track freshness of state reports
-        self._state_seq: int = 0
         self._state_lock = Lock()
+        self._on_state_update_callback = None
+
+    def set_on_state_update_callback(self, callback):
+        self._on_state_update_callback = callback
 
     def get_received_message(self):
         return self._received_message
@@ -128,25 +137,24 @@ class EventHandler:
         with self._state_lock:
             return self._state
 
-    def get_state_seq(self) -> int:
-        """Monotonic counter incremented on each new state update."""
-        with self._state_lock:
-            return self._state_seq
-
     def on_grbl_event(self, event, *data) -> None:
         if event == "on_rx_buffer_percent":
             self._received_message = 'ok'
-            logger.trace("set OK")
         if event == "on_stateupdate":
             if len(data) >= 3:
                 with self._state_lock:
                     self._state_raw = str(data[0])
                     self._state = GrblMachineState.from_grbl_mode(data[0])
-                    self._state_seq += 1
 
                 if isinstance(data[2], tuple):
                     wpos = data[2]
                     self._current_position = CylindricalPosition(wpos[1], wpos[2], wpos[0])
+
+                if self._on_state_update_callback:
+                    try:
+                        self._on_state_update_callback(self._current_position, self._state)
+                    except Exception as e:
+                        logger.error(f"Error in state update callback: {e}")
 
         if event == 'on_error':
             args = []
@@ -160,7 +168,6 @@ class EventHandler:
             with self._state_lock:
                 self._state_raw = "Alarm"
                 self._state = GrblMachineState.ALARM
-                self._state_seq += 1
             logger.error("ERROR: Alarm!")
 
         args = []
@@ -250,6 +257,7 @@ class GrblStreamerClientConnection:
     def __init__(self, grbl_streamer: GrblStreamer, event_handler: EventHandler) -> None:
         self._event_handler = event_handler
         self._grbl_streamer = grbl_streamer
+        self._grbl_streamer.poll_start()
 
     def killalarm(self) -> None:
         logger.trace(f'GrblStreamerClientConnection: Sending message: killalarm')
@@ -278,8 +286,8 @@ class GrblStreamerClientConnection:
     def get_state(self) -> GrblMachineState:
         return self._event_handler.get_state()
 
-    def get_state_seq(self) -> int:
-        return self._event_handler.get_state_seq()
+    def set_on_state_update_callback(self, callback) -> None:
+        self._event_handler.set_on_state_update_callback(callback)
 
     def close(self) -> None:
         self._grbl_streamer.disconnect()
@@ -349,45 +357,12 @@ class ESP32Duino(IGrblController):
         self._wait_for_idle_state()
 
     def force_position_update(self) -> None:
-        """
-        Forces a position update by sending a '?' command and waiting for a response.
-        """
         logger.trace('Forcing position update.')
-        self._send_immediate('?')
-        self._wait_for_idle_state()
+        time.sleep(1)  # I'm polling at 2Hz, so after 1s I should definitely have the correct position
 
     def _wait_for_idle_state(self) -> None:
-        """
-        Wait until we observe a *fresh* state report and it says IDLE.
-        If no update arrives (common during some motions), we force status polls.
-        """
-        timeout = time.time() + 5.0
-
-        # Ensure we don't trust a stale cached value:
-        # capture the last-seen update counter, then force a poll.
-        last_seq = self._connection.get_state_seq()
-        self._send_immediate('?')
-
-        while time.time() < timeout:
-            # Wait until we have seen at least one NEW state update since we started waiting.
-            if self._connection.get_state_seq() == last_seq:
-                time.sleep(0.02)
-                continue
-
-            # Now the state is "fresh enough" to check.
-            state = self._connection.get_state()
-            logger.trace(f'Idle wait: seq={self._connection.get_state_seq()} state={state}')
-            if state == GrblMachineState.IDLE:
-                return
-
-            # Not idle yet; keep nudging status reports occasionally.
-            if int(time.time() * 10) % 5 == 0:  # Every 0.5s
-                last_seq = self._connection.get_state_seq()
-                self._send_immediate('?')
-
-            time.sleep(0.05)
-
-        logger.warning('Idle wait: timed out without IDLE state')
+        while self._connection.get_state() != GrblMachineState.IDLE:
+            time.sleep(0.5)
 
     def killalarm(self) -> None:
         logger.trace(f'Sending killalarm GRBL device')
@@ -409,6 +384,9 @@ class ESP32Duino(IGrblController):
 
     def get_state_raw(self) -> str:
         return self._connection.get_state_raw()
+
+    def set_on_state_update_callback(self, callback) -> None:
+        self._connection.set_on_state_update_callback(callback)
 
     def _wait_for_ack(self) -> None:
         """Wait until an 'ok' acknowledgment is received from the hardware."""

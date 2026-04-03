@@ -14,7 +14,7 @@ class Scanner:
     def __init__(self, grbl_controller: IGrblController, feed_rate):
         self._grbl_controller = grbl_controller
         self._feed_rate = feed_rate
-        self._grbl_controller.force_position_update()
+        # self._grbl_controller.force_position_update()
 
     def radial_move_to(self, r: float) -> None:
         """Move to the specified radial position."""
@@ -80,6 +80,10 @@ class Scanner:
         """Return the raw mode string last reported by GRBL/FluidNC (e.g. 'Hold:0')."""
         return self._grbl_controller.get_state_raw()
 
+    def set_on_state_update_callback(self, callback) -> None:
+        """Register a callback for state and position updates."""
+        self._grbl_controller.set_on_state_update_callback(callback)
+
     def is_idle(self) -> bool:
         return self.get_state() == GrblMachineState.IDLE
 
@@ -107,7 +111,7 @@ class Scanner:
         self._grbl_controller.send('G55')
 
         # 2. Sync and get current position in G54
-        self._grbl_controller.send('G4 P0.1')
+        # self._grbl_controller.send('G4 P0.1')
         self._grbl_controller.force_position_update()
         current_pos = self.get_position()
 
