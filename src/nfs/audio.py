@@ -32,6 +32,7 @@ import time
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Optional, Dict, Any, List, Tuple
+from nfs import registry
 
 import numpy as np
 import scipy.signal
@@ -47,74 +48,73 @@ from .datatypes import CylindricalPosition
 os.environ["SD_ENABLE_ASIO"] = "1"
 import sounddevice as sd  # noqa: E402
 
-
 # ─────────────────────────────────────────────────────────────────────────────
 #  UTILITIES
 # ─────────────────────────────────────────────────────────────────────────────
 
-class DSPUtils:
-    """Static utilities for pure mathematical operations."""
+from .utils.dsp import DSPUtils
 
-    @staticmethod
-    def fmt_num_for_name(val) -> str:
-        """Formats a number for safe filenames (e.g., 4.5 -> '4p5')."""
-        if val is None: return "NA"
-        return str(val).replace(".", "p")
 
-    @staticmethod
-    def db_to_lin(db: float) -> float:
-        """Converts dBFS to linear amplitude scale."""
-        return 10 ** (db / 20.0)
+class DSPVerificationTool:
+    """
+    Calculates Quality Metrics from Impulse Responses and Alignment data.
+    Provides automated verification of SNR, THD, and Timing Jitter.
+    """
 
-    @staticmethod
-    def hann_fade(sig: np.ndarray, fade_ms: float, fs: int, side: str = "both") -> np.ndarray:
+    def __init__(self, fs: int):
+        self.fs = fs
+
+    def calculate_metrics(self, h_full: np.ndarray, h_linear: np.ndarray, psr: float) -> Dict[str, float]:
         """
-        Applies a Hann window fade to the signal edges to prevent spectral leakage (clicks).
+        Calculates a suite of DSP quality metrics.
         
-        Args:
-            :param fs: sample rate
-            :param fade_ms: fade duration in ms
-            :param sig: signal to fade
-            :param side: 'in' (start), 'out' (end), or 'both'.
+        :param h_full: Full IR including distortion products at negative time.
+        :param h_linear: Cropped linear IR.
+        :param psr: Peak Sharpness Ratio from the alignment engine.
+        :return: Dictionary of metrics.
         """
-        n_fade = int(round(fade_ms / 1000.0 * fs))
-        if n_fade <= 0 or n_fade >= len(sig):
-            return sig
+        metrics = {}
 
-        # Generate ramp: 0 to 1 (half-cosine)
-        ramp = 0.5 * (1 - np.cos(np.pi * np.arange(n_fade) / (n_fade - 1)))
-        y = sig.copy()
+        # 1. SNR Estimation (Peak to Noise Floor)
+        # We estimate noise from the very end of the h_full record where signal should have decayed.
+        noise_floor_window = int(0.05 * self.fs)  # 50ms window
+        if len(h_full) > noise_floor_window:
+            noise_floor = np.std(h_full[-noise_floor_window:])
+            peak_val = np.max(np.abs(h_linear))
+            metrics['snr_db'] = float(20 * np.log10(peak_val / (noise_floor + 1e-12)))
+        else:
+            metrics['snr_db'] = 0.0
 
-        if side in ["both", "in"]:
-            y[:n_fade] *= ramp
+        # 2. THD Estimation (Distortion to Linear Energy)
+        # In Farina's method, distortion products appear BEFORE the linear peak.
+        # h_linear starts at split_idx. Anything before split_idx - 100 samples is distortion.
+        split_idx = len(h_full) // 2  # Approximate based on DeconvolutionEngine logic
+        distortion_part = h_full[:split_idx - 50]
 
-        if side in ["both", "out"]:
-            # Fade out uses the reverse of the ramp
-            y[-n_fade:] *= ramp[::-1]
+        linear_energy = np.sum(h_linear ** 2)
+        distortion_energy = np.sum(distortion_part ** 2)
 
-        return y
+        metrics['thd_pct'] = float(np.sqrt(distortion_energy / (linear_energy + 1e-12)) * 100.0)
 
-    @staticmethod
-    def rfft_xcorr(a: np.ndarray, b: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-        """Fast Cross-Correlation via RFFT."""
-        # Calculate next power of 2 for optimal FFT performance and linear convolution
-        n = int(2 ** np.ceil(np.log2(len(a) + len(b) - 1)))
+        # 3. Alignment Quality
+        metrics['psr'] = float(psr)
 
-        # Transform signal 'a' and 'b' into the frequency domain
-        A = np.fft.rfft(a, n=n)
-        B = np.fft.rfft(b, n=n)
+        # 4. Crest Factor of IR (Indicates impulsive vs smeared)
+        metrics['crest_factor'] = float(np.max(np.abs(h_linear)) / (np.sqrt(np.mean(h_linear ** 2)) + 1e-12))
 
-        # Multiply by complex conjugate to perform correlation, then return to time domain
-        x = np.fft.irfft(A * np.conj(B), n=n)
+        return metrics
 
-        # Shift the zero-lag component to the center of the array
-        x = np.roll(x, len(b) - 1)
+    def verify(self, metrics: Dict[str, float]) -> List[str]:
+        """Checks metrics against safety thresholds and returns a list of warnings."""
+        warnings = []
+        if metrics.get('snr_db', 100) < 30:
+            warnings.append(f"LOW SNR: {metrics['snr_db']:.1f} dB. Measurement may be noisy.")
+        if metrics.get('thd_pct', 0) > 10:
+            warnings.append(f"HIGH DISTORTION: {metrics['thd_pct']:.2f}%. Check for clipping or transducer stress.")
+        if metrics.get('psr', 10) < 3.0:
+            warnings.append(f"POOR ALIGNMENT: PSR is {metrics['psr']:.1f}. Possible clock drift or phase smear.")
 
-        # Create an array of lag indices corresponding to the shifted signal
-        lags = np.arange(-len(b) + 1, len(a))
-
-        # Return the lag indices and the correlation result trimmed to the valid range
-        return lags, x[:len(lags)]
+        return warnings
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -305,10 +305,11 @@ class AlignmentEngine:
         self.mic_tail_taper_ms = mic_tail_taper_ms
         self.marker_dur_ms = marker_dur_ms
 
-    def _matched_filter_detect(self, x: np.ndarray, ref: np.ndarray, search_start: int = None, search_end: int = None):
+    def _matched_filter_detect(self, x: np.ndarray, ref: np.ndarray, search_start: int = None,
+                               search_end: int = None) -> Tuple[int, float, float]:
         """
         Finds the best match of signal 'ref' within 'x' using a matched filter.
-        Returns the lag (index) and the correlation coefficient.
+        Returns the lag (index), the correlation coefficient, and the PSR.
         """
         lags, corr = DSPUtils.rfft_xcorr(x, ref)
         if search_start is None:
@@ -320,7 +321,7 @@ class AlignmentEngine:
         lags_sel, corr_sel = lags[m], corr[m]
 
         if len(lags_sel) == 0:
-            return 0, 0.0
+            return 0, 0.0, 0.0
         i = int(np.argmax(corr_sel))
         peak_val = float(corr_sel[i])
 
@@ -365,11 +366,11 @@ class AlignmentEngine:
             logger.warning(f"Failed to save alignment debug data: {e}")
         # --- END DEBUG DATA SAVE BLOCK ---
 
-        return int(lags_sel[i]), peak_val
+        return int(lags_sel[i]), peak_val, psr
 
     def sync_and_average(self, rec_mic: np.ndarray, rec_loop: np.ndarray, marker_single: np.ndarray,
                          pre_samps_settle: int, slot_len: int, sweep_len: int) -> Tuple[
-        np.ndarray, np.ndarray, List[np.ndarray]]:
+        np.ndarray, np.ndarray, List[np.ndarray], float]:
 
         # --- Alignment & Averaging ---
         mic_slices = []
@@ -379,11 +380,11 @@ class AlignmentEngine:
         # --- FIXED ALIGNMENT LOGIC ---
         # 1. Find a global anchor (first marker) using Matched Filter
         search_limit = pre_samps_settle + slot_len
-        k_first_marker, _ = self._matched_filter_detect(rec_loop, marker_single, search_end=search_limit)
+        k_first_marker, _, psr = self._matched_filter_detect(rec_loop, marker_single, search_end=search_limit)
 
         # The correlation peak IS the start.
         t0_first_sweep = k_first_marker
-        logger.debug(f"Marker found at {k_first_marker}. Using this as T0.")
+        logger.debug(f"Marker found at {k_first_marker}. Using this as T0. PSR={psr:.1f}")
 
         window_samps = int(0.005 * self.fs)  # 5ms search window for re-sync
 
@@ -398,9 +399,10 @@ class AlignmentEngine:
                 # Corrects for minor clock drift in very long sequences
                 s_start = max(0, expected_t0 - window_samps)
                 s_end = min(len(rec_loop), expected_t0 + window_samps)
-                k_local, _ = self._matched_filter_detect(rec_loop, marker_single, search_start=s_start,
-                                                         search_end=s_end)
+                k_local, _, psr_local = self._matched_filter_detect(rec_loop, marker_single, search_start=s_start,
+                                                                    search_end=s_end)
                 start_idx = k_local
+                if i == 0: psr = psr_local  # Use first sweep PSR as representative if per-sweep
 
             end_idx = start_idx + capture_len
             # Stores aligned capture window copies into accumulation lists
@@ -418,7 +420,7 @@ class AlignmentEngine:
         # Fade out tail using the unified _hann_fade (approx 10ms)
         avg_mic = DSPUtils.hann_fade(avg_mic, 10.0, self.fs, side="out")
 
-        return avg_mic.astype(np.float32), avg_loop.astype(np.float32), mic_slices
+        return avg_mic.astype(np.float32), avg_loop.astype(np.float32), mic_slices, psr
 
 
 class DeconvolutionEngine:
@@ -555,6 +557,7 @@ class Audio(IAudio):
         self.deconv_engine = deconv_engine
         self.harmonic_injector = harmonic_injector
         self.protection_filter = protection_filter
+        self.verifier = DSPVerificationTool(self.hw['fs'])
 
         # Directories
         self.rec_dir = Path("./Recordings")
@@ -724,7 +727,7 @@ class Audio(IAudio):
                        extra_settings=(in_args[1], out_args[1]), callback=callback):
             done_evt.wait()
 
-        avg_mic, avg_loop, mic_slices = self.alignment_engine.sync_and_average(
+        avg_mic, avg_loop, mic_slices, psr = self.alignment_engine.sync_and_average(
             rec_mic, rec_loop, marker_single, pre_samps_settle, slot_len, sweep_len
         )
 
@@ -733,7 +736,8 @@ class Audio(IAudio):
             "tx_ref_signal": tx_ref_long[:len(avg_mic)],
             "rx_mic_conditioned": avg_mic,
             "rx_loop_aligned": avg_loop,
-            "debug_mic_slices": mic_slices
+            "debug_mic_slices": mic_slices,
+            "psr": psr
         }
 
     def measure_ir(self, position: CylindricalPosition, order_id: str = "NA") -> None:
@@ -776,7 +780,16 @@ class Audio(IAudio):
         # 4. Process IR (Deconvolution)
         ir_full, ir_linear = self.deconv_engine.process_ir(result["rx_mic_conditioned"], result["inv_sweep"])
 
-        # 5. Save Final Files
+        # 5. DSP Verification
+        metrics = self.verifier.calculate_metrics(ir_full, ir_linear, result.get("psr", 0.0))
+        logger.info(
+            f"DSP Metrics: SNR={metrics['snr_db']:.1f}dB, THD={metrics['thd_pct']:.2f}%, PSR={metrics['psr']:.1f}")
+
+        warnings = self.verifier.verify(metrics)
+        for w in warnings:
+            logger.warning(f"VERIFICATION FAILURE: {w}")
+
+        # 6. Save Final Files
         # Main (Linear)
         linear_path = self.rec_dir / main_file_name
         self._save_wav_with_metadata(linear_path, ir_linear, main_file_name, subtype='FLOAT')
@@ -786,6 +799,15 @@ class Audio(IAudio):
         dist_path = self.dist_dir / dist_file_name
         self._save_wav_with_metadata(dist_path, ir_full, dist_file_name, subtype='FLOAT')
         logger.info(f"Saved Distortion IR: {dist_path.name}")
+
+        # Save metrics to debug if enabled
+        if self.cap['debug_saves']:
+            try:
+                import json
+                with open(self.debug_dir / f"{base_name}_metrics.json", "w") as f:
+                    json.dump(metrics, f, indent=4)
+            except Exception as e:
+                logger.warning(f"Failed to save metrics JSON: {e}")
 
 
 class MockInterfaceAudio(Audio):
@@ -881,7 +903,7 @@ class MockInterfaceAudio(Audio):
         rec_loop = apply_hardware_sim(tx_ref)
 
         # 4. --- ALIGNMENT & DECONVOLUTION ---
-        avg_mic, avg_loop, mic_slices = self.alignment_engine.sync_and_average(
+        avg_mic, avg_loop, mic_slices, psr = self.alignment_engine.sync_and_average(
             rec_mic, rec_loop, marker_single, pre_samps_settle, slot_len, sweep_len
         )
 
@@ -890,7 +912,8 @@ class MockInterfaceAudio(Audio):
             "tx_ref_signal": tx_ref[:len(avg_mic)],
             "rx_mic_conditioned": avg_mic,
             "rx_loop_aligned": avg_loop,
-            "debug_mic_slices": mic_slices
+            "debug_mic_slices": mic_slices,
+            "psr": psr
         }
 
 
@@ -903,7 +926,7 @@ class AudioMock(IAudio):
 
     def measure_ir(self, position: CylindricalPosition, order_id: str = "NA") -> None:
         logger.info(f"[MOCK] Measured {position}, ID={order_id}")
-        time.sleep(1.0)  # Simulate sweep duration
+        # time.sleep(1.0)  # Simulate sweep duration
 
 
 class AudioFactory:
@@ -929,8 +952,18 @@ class AudioFactory:
 
         # Determine operating mode
         mode = config.get(audio_section, 'mode', fallback='hardware').lower()
+
         if mode == 'mock':
             return AudioMock()
+
+        # Check registry first for non-standard modes
+        # Built-in modes should skip this
+        if mode not in ['mock', 'hardware', 'loopback', 'mock_interface']:
+            try:
+                component = registry.audio.get(mode)
+                return component(config_file, audio_section)
+            except ValueError:
+                pass  # Fallback
 
         sweep_section = 'sweep'
         if not config.has_section(sweep_section):

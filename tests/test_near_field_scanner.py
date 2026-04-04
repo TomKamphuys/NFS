@@ -46,6 +46,7 @@ def test_take_measurement_set(mocks):
     
     pos1 = CylindricalPosition(100, 0, 10)
     mocks['scanner'].get_position.return_value = pos1
+    mocks['motion_manager'].total_points.return_value = 2
 
     with patch("builtins.open", mock_open()) as mocked_file:
         nfs = NearFieldScanner(mocks['scanner'], mocks['audio'], mocks['motion_manager'])

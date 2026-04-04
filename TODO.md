@@ -1,0 +1,5 @@
+- Jogging just after startup my cause very large movements, even to endstop. Check whether the position is correct and not the initial value which is 0 and should probably be none and we should enforce postiion update
+- Jan showed an image where the position is 0 after " So i set a height offset of 70mm, do SET  HEIGHT OFFSET, then ZERO NFS.". I expected 70mm. After a move everything is ok again. Probably force position update after setting G54. And suppressing it when we are momentarilly in G55. Can we make get_position updates push to the iso the gui asking?
+- Status seems to be IDLE too often. Even when it is moving it still shows IDLE
+- make test of audio stuff using the piston script
+- 

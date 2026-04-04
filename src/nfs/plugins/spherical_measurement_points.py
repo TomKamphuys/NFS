@@ -29,6 +29,15 @@ class SphericalMeasurementPoints:
         self._theta = 0
         self._m_phi = 0
 
+        self._actual_nr_of_points = 0
+        m_temp = 0
+        while m_temp < self._m_theta:
+            theta_temp = np.pi * (m_temp + 0.5) / self._m_theta
+            m_phi_temp = round(2 * np.pi * np.sin(theta_temp) / self._d_phi)
+            if m_phi_temp > 0:
+                self._actual_nr_of_points += m_phi_temp
+            m_temp += 1
+
         self._go_to_next_circle()  # start with first circle
 
     def next(self) -> CylindricalPosition:
@@ -66,6 +75,9 @@ class SphericalMeasurementPoints:
 
     def ready(self) -> bool:
         return self._ready
+
+    def total_points(self) -> int:
+        return self._actual_nr_of_points
 
     def need_to_do_evasive_move(self) -> bool:
         return self._evasive_move_needed

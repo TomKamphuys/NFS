@@ -25,3 +25,6 @@ class MeasurementPoints(Protocol):
 
     def need_to_do_evasive_move(self) -> bool:
         pass
+
+    def total_points(self) -> int:
+        pass

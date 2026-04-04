@@ -125,6 +125,12 @@ class SphericalMeasurementPointsArcs:
     def ready(self) -> bool:
         return self._ready
 
+    def total_points(self) -> int:
+        return self._actual_nr_of_points
+
+    def need_to_do_evasive_move(self) -> bool:
+        return False
+
 
 def register(factory) -> None:
     factory.register("SphericalMeasurementPointsArcs", SphericalMeasurementPointsArcs)
