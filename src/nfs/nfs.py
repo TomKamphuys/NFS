@@ -1,7 +1,10 @@
 import configparser
+import datetime
+import shutil
 import time
+from pathlib import Path
 
-from .logging_config import setup_logging
+from .logging_config import setup_logging, log_version_info
 from loguru import logger
 
 from . import loader
@@ -70,26 +73,84 @@ class NearFieldScanner:
         Take a full set of measurements.
         :return: nothing
         """
-        self._clear_position_log()
-        self._measurement_motion_manager.move_to_safe_starting_radius()
-        total = self._measurement_motion_manager.total_points()
-        current = 0
-        while not self._measurement_motion_manager.ready():
-            self._measurement_motion_manager.next()
-            if self._measurement_motion_manager.ready():
-                break
+        # 1. Setup timestamped session directory
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M")
+        session_dir = Path(f"./measurements/{timestamp}")
+        session_dir.mkdir(parents=True, exist_ok=True)
 
-            current += 1
-            progress = (current / total) * 100 if total > 0 else 0
-            logger.info(f"Measuring point {current} of {total}... {progress:.1f}% complete")
+        # 2. Add a new log sink for this measurement set
+        log_file = session_dir / "scanner.log"
+        sink_id = logger.add(
+            log_file,
+            level="DEBUG",
+            format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {name}:{function}:{line} - {message}"
+        )
+        logger.info(f"Starting new measurement set in: {session_dir}")
 
-            position = self._scanner.get_position()
-            self._append_position_to_file(position)
-            self._audio.measure_ir(position)
+        # 3. Log version info for this session
+        log_version_info(log_env=False)
 
-        self._measurement_motion_manager.reset()
-        self._measurement_motion_manager.move_to_safe_starting_radius()
-        self._scanner.angular_move_to(0.0)
+        # 4. Update audio paths and position log path
+        if hasattr(self._audio, 'set_session_directory'):
+            self._audio.set_session_directory(session_dir)
+
+        original_position_log = self._position_log_file
+        session_position_log = str(session_dir / "measurement_points.csv")
+        # In nfs.take_measurement_set, keep the original log active, but also log to session dir
+        # If we change it, the original is lost for the duration of the set.
+        # But we want to use the session one as primary? The test expects the original one to be updated.
+
+        try:
+            # We will use self._position_log_file for the current log.
+            # To satisfy the requirement of logging to BOTH, we'll keep the test-provided one as primary
+            # and session-specific as secondary.
+            self._clear_position_log()
+            # Also clear the session-specific log if it is different
+            if self._position_log_file != session_position_log:
+                with open(session_position_log, 'w') as f:
+                    f.write('r_xy_mm,phi_deg,z_mm\n')
+
+            self._measurement_motion_manager.move_to_safe_starting_radius()
+            total = self._measurement_motion_manager.total_points()
+            current = 0
+            while not self._measurement_motion_manager.ready():
+                self._measurement_motion_manager.next()
+                if self._measurement_motion_manager.ready():
+                    break
+
+                current += 1
+                progress = (current / total) * 100 if total > 0 else 0
+                logger.info(f"Measuring point {current} of {total}... {progress:.1f}% complete")
+
+                position = self._scanner.get_position()
+                self._append_position_to_file(position)
+                # Also append to the session log if it's different
+                if self._position_log_file != session_position_log:
+                    with open(session_position_log, 'a') as f:
+                        f.write(f'{position.r()},{position.t()},{position.z()}\n')
+
+                self._audio.measure_ir(position)
+
+            self._measurement_motion_manager.reset()
+            self._measurement_motion_manager.move_to_safe_starting_radius()
+            self._scanner.angular_move_to(0.0)
+
+        finally:
+            # 5. Cleanup: Restore paths and remove session log sink
+            self._position_log_file = original_position_log
+            logger.info(f"Measurement set {timestamp} complete.")
+            logger.remove(sink_id)
+
+            # 6. Copy the global scanner.log to session dir (if it exists)
+            # This fulfills "then copy scanner.log" and "overall log" requirement.
+            # But wait, we already have a session log. The user asked for both.
+            # "Then we have a log per measurement set and also the overall log."
+            # The session sink above ALREADY provides the per-session log.
+            # Copying the global log at the end ensures we have the global context too if needed.
+            try:
+                shutil.copy("scanner.log", session_dir / "overall_scanner.log")
+            except Exception as e:
+                logger.warning(f"Could not copy global scanner.log: {e}")
 
     def shutdown(self) -> None:
         """

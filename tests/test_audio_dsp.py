@@ -243,7 +243,7 @@ def test_deconvolution_engine_simple(fs):
     ir_full, ir_linear = engine.process_ir(rec, inv)
 
     # Linear IR should have a peak at 'delay' samples
-    # Actually Farina's deconvolution result usually has the linear peak at some offset
+    # Actually, Farina's deconvolution result usually has the linear peak at some offset
     # or at index 0 depending on the inverse filter construction.
     # In SweepGenerator, inv = s_fund[::-1] * envelope. 
     # The peak of s_fund * s_fund[::-1] is at len(s_fund)-1.
@@ -260,13 +260,13 @@ def test_deconvolution_engine_simple(fs):
     # Since there's a spectral mask, the peak value might be slightly reduced.
     # Also, DeconvolutionEngine.process_ir uses H_min_phase mask which affects magnitude.
 
-    # Let's just verify we have a strong peak and it's somewhat close to expected gain.
+    # Let's just verify we have a strong peak, and it's somewhat close to expected gain.
     # target_lin is db_to_lin(-6.0) = 0.501
-    # SweepGenerator normalizes inv so convolution peak is 1/0.501 = 1.995
+    # SweepGenerator normalizes inv, so convolution peak is 1/0.501 = 1.995
     # If gain=0.5, expected peak is 0.5 * 1.995 = 0.997
 
     # If the peak is around 0.5, it might be that I misunderstood the normalization.
-    # Let's re-verify peak_val vs expected_peak
+    # Let's re-verify peak_val vs. expected_peak
     assert peak_val > 0.1  # Definitely should be a peak
 
 
@@ -294,7 +294,7 @@ def test_deconvolution_engine_farina_separation(fs):
     # There should be another peak in ir_full before the linear peak
     # Search in the region before the main peak
     ir_before = ir_full[:len(s_fund) // 2]
-    # Actually Farina harmonics are shifted by L * ln(N)
+    # Actually, Farina harmonics are shifted by L * ln(N)
     # For H2, it's at t_h2 = t_lin - L * ln(2)
 
     # Just verify that ir_full has more energy than ir_linear (due to distortion)
