@@ -22,59 +22,122 @@ class IMotionManager(ABC):
 
     @abstractmethod
     def move_to_safe_starting_radius(self) -> None:
+        """
+        Move the scanner to a safe starting radial position.
+        """
         pass
 
     @abstractmethod
     def next(self) -> CylindricalPosition:
+        """
+        Move to the next measurement position and return it.
+
+        :return: The next CylindricalPosition.
+        """
         pass
 
     @abstractmethod
     def ready(self) -> bool:
+        """
+        Check if the motion manager is ready or has finished all points.
+
+        :return: True if finished, False otherwise.
+        """
         pass
 
     @abstractmethod
     def reset(self):
+        """
+        Reset the motion manager to the beginning of the measurement set.
+        """
         pass
 
     @abstractmethod
     def shutdown(self) -> None:
+        """
+        Shut down the motion manager and its associated scanner.
+        """
         pass
 
     @abstractmethod
     def total_points(self) -> int:
+        """
+        Return the total number of measurement points.
+
+        :return: Total points as an integer.
+        """
         pass
 
 
 class CylindricalMeasurementMotionManager(IMotionManager):
+    """
+    Manages motion for cylindrical measurement sets.
+    """
     TOLERANCE = 0.1
 
     def __init__(self, scanner: Scanner, measurement_points: MeasurementPoints, safe_radius: float):
+        """
+        Initialize the cylindrical motion manager.
+
+        :param scanner: The scanner instance to control.
+        :param measurement_points: The set of points to measure.
+        :param safe_radius: The radial distance considered safe for vertical moves.
+        """
         self._scanner = scanner
         self._measurement_points = measurement_points
         self._safe_radius = safe_radius
 
     def move_to_safe_starting_radius(self) -> None:
+        """
+        Move to the safe starting radius and zero height.
+        """
         logger.info(f'Performing a first move to a safe radius: {self._safe_radius:.1f}mm')
         self._scanner.planar_move_to(self._safe_radius, 0.0)
 
     def next(self) -> CylindricalPosition:
+        """
+        Move to the next cylindrical measurement point.
+
+        :return: The target CylindricalPosition.
+        """
         position = self._measurement_points.next()
         self._move_to_next_measurement_point(position)  # TODO
         return position
 
     def ready(self) -> bool:
+        """
+        Check if all points have been measured.
+
+        :return: True if ready (all points done), False otherwise.
+        """
         return self._measurement_points.ready()
 
     def reset(self):
+        """
+        Reset the point sequence.
+        """
         self._measurement_points.reset()
 
     def shutdown(self) -> None:
+        """
+        Shut down the scanner.
+        """
         self._scanner.shutdown()
 
     def total_points(self) -> int:
+        """
+        Get the total number of points in the set.
+
+        :return: Total points.
+        """
         return self._measurement_points.total_points()
 
     def _move_to_next_measurement_point(self, position: CylindricalPosition) -> None:
+        """
+        Internal method to execute moves to the next point.
+
+        :param position: The target CylindricalPosition.
+        """
         current_position = self._scanner.get_position()
         logger.info(f'Moving: {current_position} --> {position}')
         self._perform_angular_move(position)
@@ -172,6 +235,12 @@ class SphericalMeasurementMotionManager(IMotionManager):
     TOLERANCE = 0.1
 
     def __init__(self, scanner: Scanner, measurement_points: MeasurementPoints):
+        """
+        Initialize the spherical motion manager.
+
+        :param scanner: The scanner instance to control.
+        :param measurement_points: The set of points to measure.
+        """
         self._scanner = scanner
         self._measurement_points = measurement_points
 
@@ -207,9 +276,17 @@ class SphericalMeasurementMotionManager(IMotionManager):
         return position
 
     def ready(self) -> bool:
+        """
+        Check if all points have been measured.
+
+        :return: True if ready (all points done), False otherwise.
+        """
         return self._measurement_points.ready()
 
     def reset(self):
+        """
+        Reset the point sequence.
+        """
         self._measurement_points.reset()
 
     def shutdown(self) -> None:
@@ -226,6 +303,11 @@ class SphericalMeasurementMotionManager(IMotionManager):
         self._scanner.shutdown()
 
     def total_points(self) -> int:
+        """
+        Get total number of points in the set.
+
+        :return: Total points.
+        """
         return self._measurement_points.total_points()
 
     def _move_to_next_measurement_point(self, position: CylindricalPosition) -> None:
@@ -333,9 +415,19 @@ class SphericalMeasurementMotionManager(IMotionManager):
 from nfs import registry
 
 class MotionManagerFactory:
+    """
+    Factory for creating MotionManager instances.
+    """
     @staticmethod
     def create(config_file: str, section: str, scanner: Scanner) -> IMotionManager:
+        """
+        Create a motion manager based on the configuration.
 
+        :param config_file: Path to the configuration file.
+        :param section: The configuration section to use.
+        :param scanner: The scanner instance to use.
+        :return: An instance of IMotionManager.
+        """
         config_parser = configparser.ConfigParser(inline_comment_prefixes="#")
         config_parser.read(config_file)
 

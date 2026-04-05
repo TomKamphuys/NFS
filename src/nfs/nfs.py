@@ -1,5 +1,4 @@
 import configparser
-import time
 
 from .logging_config import setup_logging
 from loguru import logger
@@ -32,6 +31,14 @@ class NearFieldScanner:
                  audio: IAudio,
                  measurement_motion_manager,
                  position_log_file: str = 'measurement_positions.csv'):
+        """
+        Initialize the NearFieldScanner.
+
+        :param scanner: The scanner object used to manage the scanning hardware.
+        :param audio: The audio interface for measurement and signal capture.
+        :param measurement_motion_manager: Manager responsible for controlling motions during measurements.
+        :param position_log_file: Path to the file where measurement positions are logged.
+        """
         self._scanner = scanner
         self._audio = audio
         self._measurement_motion_manager = measurement_motion_manager
@@ -104,11 +111,21 @@ class NearFieldScanner:
         self._scanner.shutdown()  # turn off stuff and tidy
 
     def __enter__(self):
-        """Context manager enter."""
+        """
+        Context manager enter.
+        
+        :return: The NearFieldScanner instance.
+        """
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        """Context manager exit, ensures shutdown is called."""
+        """
+        Context manager exit, ensures shutdown is called.
+        
+        :param exc_type: Exception type if an exception occurred.
+        :param exc_val: Exception value if an exception occurred.
+        :param exc_tb: Traceback if an exception occurred.
+        """
         self.shutdown()
 
 
@@ -124,10 +141,11 @@ class NearFieldScannerFactory:
     @staticmethod
     def create(scanner: Scanner, config_file: str) -> NearFieldScanner:
         """
-        Create a Near Field Scanner based on a config file
-        :param scanner:
-        :param config_file:
-        :return: near field scanner
+        Create a Near Field Scanner based on a config file.
+
+        :param scanner: The scanner instance to use.
+        :param config_file: Path to the configuration file.
+        :return: A fully initialized NearFieldScanner instance.
         """
         setup_logging(config_file)
         

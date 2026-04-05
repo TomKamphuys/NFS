@@ -1,8 +1,6 @@
 import math
 from enum import Enum
 
-import numpy as np
-
 
 class GrblMachineState(str, Enum):
     IDLE = "idle"
@@ -69,6 +67,14 @@ class GrblConfig:
     :type _invert_direction: bool
     """
     def __init__(self, steps_per_millimeter: float, maximum_rate: float, acceleration: float, invert_direction: bool):
+        """
+        Initialize the GRBL configuration.
+
+        :param steps_per_millimeter: Steps per millimeter for the axis.
+        :param maximum_rate: Maximum feed rate for the axis.
+        :param acceleration: Acceleration for the axis.
+        :param invert_direction: Whether to invert the axis direction.
+        """
         self._steps_per_millimeter = steps_per_millimeter
         self._maximum_rate = maximum_rate
         self._acceleration = acceleration
@@ -145,6 +151,13 @@ class CylindricalPosition:
     :type _z: float
     """
     def __init__(self, r: float, t: float, z: float) -> None:
+        """
+        Initialize a CylindricalPosition.
+
+        :param r: Radius coordinate.
+        :param t: Angular coordinate (degrees).
+        :param z: Vertical/Height coordinate.
+        """
         self._r = r
         self._t = t
         self._z = z
