@@ -12,9 +12,14 @@ class Scanner:
     Combines planar and angular movement capabilities and manages scanner's position.
     """
     def __init__(self, grbl_controller: IGrblController, feed_rate):
+        """
+        Initialize the Scanner with a controller and feed rate.
+
+        :param grbl_controller: The controller interface to send G-code commands.
+        :param feed_rate: The feed rate for arc movements.
+        """
         self._grbl_controller = grbl_controller
         self._feed_rate = feed_rate
-        # self._grbl_controller.force_position_update()
 
     def radial_move_to(self, r: float) -> None:
         """Move to the specified radial position."""
@@ -22,7 +27,12 @@ class Scanner:
             self._grbl_controller.send_and_wait_for_move_ready(f'G0 Y{r:.4f}')
 
     def planar_move_to(self, r: float, z: float):
-        """Move to a specified planar position (radial and vertical)."""
+        """
+        Move to a specified planar position (radial and vertical).
+
+        :param r: The radial coordinate (Y axis).
+        :param z: The vertical coordinate (X axis).
+        """
         self._grbl_controller.send_and_wait_for_move_ready(f'G0 X{z:.4f} Y{r:.4f}')
 
     def cw_arc_move_to(self, r: float, z: float, radius: float) -> None:
@@ -85,12 +95,27 @@ class Scanner:
         self._grbl_controller.set_on_state_update_callback(callback)
 
     def is_idle(self) -> bool:
+        """
+        Check if the scanner is in the IDLE state.
+
+        :return: True if idle, False otherwise.
+        """
         return self.get_state() == GrblMachineState.IDLE
 
     def is_running(self) -> bool:
+        """
+        Check if the scanner is in the RUN state.
+
+        :return: True if running, False otherwise.
+        """
         return self.get_state() == GrblMachineState.RUN
 
     def is_alarm(self) -> bool:
+        """
+        Check if the scanner is in the ALARM state.
+
+        :return: True if in alarm state, False otherwise.
+        """
         return self.get_state() == GrblMachineState.ALARM
 
     def set_as_zero(self) -> None:
@@ -111,7 +136,7 @@ class Scanner:
         self._grbl_controller.send('G55')
 
         # 2. Sync and get current position in G54
-        # self._grbl_controller.send('G4 P0.1')
+        self._grbl_controller.send('G4 P0.1')
         self._grbl_controller.force_position_update()
         current_pos = self.get_position()
 
@@ -148,15 +173,27 @@ class Scanner:
         self.shutdown()
 
     def home(self) -> None:
+        """
+        Initiate the homing cycle ($H).
+        """
         self._grbl_controller.send_and_wait_for_move_ready('$H')
 
     def clear_alarm(self) -> None:
+        """
+        Clear the GRBL alarm state ($X).
+        """
         self._grbl_controller.killalarm()
 
     def softreset(self) -> None:
+        """
+        Perform a soft reset of the GRBL controller.
+        """
         self._grbl_controller.softreset()
 
     def hold(self) -> None:
+        """
+        Initiate a feed hold (!) to pause movement.
+        """
         self._grbl_controller.hold()
 
 
@@ -175,7 +212,12 @@ class ScannerFactory:
     """
     @staticmethod
     def create(config_file: str) -> Scanner:
+        """
+        Create and configure a Scanner instance from a configuration file.
 
+        :param config_file: Path to the configuration file.
+        :return: A fully initialized Scanner object.
+        """
         setup_logging(config_file)
         config_parser = configparser.ConfigParser(inline_comment_prefixes="#")
         config_parser.read(config_file)

@@ -28,7 +28,6 @@ Key Features:
 import configparser
 import os
 import threading
-import time
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Optional, Dict, Any, List, Tuple
@@ -62,6 +61,11 @@ class DSPVerificationTool:
     """
 
     def __init__(self, fs: int):
+        """
+        Initialize the DSP verification tool.
+
+        :param fs: The sample rate (Hz).
+        """
         self.fs = fs
 
     def calculate_metrics(self, h_full: np.ndarray, h_linear: np.ndarray, psr: float) -> Dict[str, float]:
@@ -129,6 +133,14 @@ class MarkerGenerator:
     """
 
     def __init__(self, fs: int, dur_ms: float, bw_hz: Tuple[float, float], level_dbfs: float):
+        """
+        Initialize the marker generator.
+
+        :param fs: Sample rate (Hz).
+        :param dur_ms: Duration in milliseconds.
+        :param bw_hz: Bandwidth tuple (low, high) in Hz.
+        :param level_dbfs: Level in dBFS.
+        """
         self.fs = fs
         self.dur_ms = dur_ms
         self.bw_hz = bw_hz
@@ -180,6 +192,14 @@ class SweepGenerator:
     """
 
     def __init__(self, fs: int, duration_s: float, f1: float, level_dbfs: float):
+        """
+        Initialize the sweep generator.
+
+        :param fs: Sample rate (Hz).
+        :param duration_s: Duration in seconds.
+        :param f1: Starting frequency (Hz).
+        :param level_dbfs: Level in dBFS.
+        """
         self.fs = fs
         self.T = duration_s
         self.f1 = f1
@@ -218,6 +238,12 @@ class HarmonicInjector:
     """Injects H2/H3 distortions using the sweep's phase array."""
 
     def __init__(self, h2_db: Optional[float] = None, h3_db: Optional[float] = None):
+        """
+        Initialize the harmonic injector.
+
+        :param h2_db: Level of H2 in dB relative to fundamental.
+        :param h3_db: Level of H3 in dB relative to fundamental.
+        """
         self.h2_db = h2_db
         self.h3_db = h3_db
 
@@ -243,6 +269,14 @@ class ProtectionFilter:
     """Applies MIN or LIN phase HPF to protect drivers."""
 
     def __init__(self, fs: int, freq_hz: float, order: int, phase_mode: str):
+        """
+        Initialize the protection filter.
+
+        :param fs: Sample rate (Hz).
+        :param freq_hz: Cutoff frequency (Hz).
+        :param order: Filter order.
+        :param phase_mode: 'min' for minimum phase, 'linear' for linear phase.
+        """
         self.fs = fs
         self.freq_hz = freq_hz
         self.order = order
@@ -299,6 +333,15 @@ class AlignmentEngine:
 
     def __init__(self, fs: int, num_sweeps: int, align_to_first_marker: bool, mic_tail_taper_ms: float,
                  marker_dur_ms: float):
+        """
+        Initialize the alignment engine.
+
+        :param fs: Sample rate (Hz).
+        :param num_sweeps: Number of sweeps to average.
+        :param align_to_first_marker: If True, align only to the first marker.
+        :param mic_tail_taper_ms: Duration of the tail taper in milliseconds.
+        :param marker_dur_ms: Duration of the marker in milliseconds.
+        """
         self.fs = fs
         self.num_sweeps = num_sweeps
         self.align_to_first_marker = align_to_first_marker
@@ -370,6 +413,17 @@ class AlignmentEngine:
 
     def sync_and_average(self, rec_mic: np.ndarray, rec_loop: np.ndarray, marker_single: np.ndarray,
                          pre_samps_settle: int, slot_len: int, sweep_len: int) -> Tuple[np.ndarray, np.ndarray, List[np.ndarray], float]:
+        """
+        Align multiple sweeps and average them to increase SNR.
+
+        :param rec_mic: Recorded microphone signal.
+        :param rec_loop: Recorded loopback signal.
+        :param marker_single: The reference marker signal.
+        :param pre_samps_settle: Number of samples to skip at the beginning.
+        :param slot_len: Total length of one sweep slot (including silence/markers).
+        :param sweep_len: Length of the actual sweep signal.
+        :return: Tuple of (averaged mic, averaged loop, individual mic slices, PSR).
+        """
 
         # --- Alignment & Averaging ---
         mic_slices = []
@@ -401,7 +455,8 @@ class AlignmentEngine:
                 k_local, _, psr_local = self._matched_filter_detect(rec_loop, marker_single, search_start=s_start,
                                                                     search_end=s_end)
                 start_idx = k_local
-                if i == 0: psr = psr_local  # Use first sweep PSR as representative if per-sweep
+                if i == 0:
+                    psr = psr_local  # Use first sweep PSR as representative if per-sweep
 
             end_idx = start_idx + capture_len
             # Stores aligned capture window copies into accumulation lists
@@ -426,6 +481,11 @@ class DeconvolutionEngine:
     """Handles FFT deconvolution, spectral masking, and Farina separation."""
 
     def __init__(self, fs: int):
+        """
+        Initialize the deconvolution engine.
+
+        :param fs: The sample rate (Hz).
+        """
         self.fs = fs
 
     def process_ir(self, mic_data: np.ndarray, inv_data: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
@@ -584,11 +644,18 @@ class Audio(IAudio):
         logger.debug(f"Audio session directory updated to: {session_path}")
 
     def _log_config(self):
+        """Log the current hardware and capture configuration."""
         logger.info(
             f"Audio Config: FS={self.hw['fs']}, Sweeps={self.cap['num_sweeps']}, Dur={self.cap['sweep_dur_s']}s")
         logger.info(f"Devices: In={self.hw['dev_in']}, Out={self.hw['dev_out']}")
 
     def _get_api_name(self, dev_index: int) -> str:
+        """
+        Get the name of the API used by the device at the given index.
+
+        :param dev_index: Device index.
+        :return: API name.
+        """
         try:
             d = sd.query_devices(dev_index)
             return sd.query_hostapis()[d['hostapi']]['name'].upper()
@@ -938,6 +1005,12 @@ class AudioMock(IAudio):
     """Simulation class for when hardware is unavailable."""
 
     def measure_ir(self, position: CylindricalPosition, order_id: str = "NA") -> None:
+        """
+        Measure the impulse response at a given position.
+
+        :param position: The scanner position.
+        :param order_id: An optional order ID for file naming.
+        """
         logger.info(f"[MOCK] Measured {position}, ID={order_id}")
         # time.sleep(1.0)  # Simulate sweep duration
 
