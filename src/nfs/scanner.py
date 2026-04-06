@@ -136,7 +136,7 @@ class Scanner:
         self._grbl_controller.send('G55')
 
         # 2. Sync and get current position in G54
-        # self._grbl_controller.send('G4 P0.1')
+        self._grbl_controller.send('G4 P0.1')
         self._grbl_controller.force_position_update()
         current_pos = self.get_position()
 
