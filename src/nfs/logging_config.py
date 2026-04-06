@@ -9,7 +9,12 @@ _initialized = False
 
 
 def get_git_info(repo_path: str = None):
-    """Retrieves git versioning information."""
+    """
+    Retrieves git versioning information.
+
+    :param repo_path: Path to the git repository.
+    :return: A dictionary with version, branch, commit, and status, or None if failed.
+    """
     try:
         # Get branch name
         branch = subprocess.check_output(['git', 'rev-parse', '--abbrev-ref', 'HEAD'], 
@@ -40,7 +45,13 @@ def get_git_info(repo_path: str = None):
 
 
 def log_version_info(project_name: str = "NFS Project", repo_path: str = None, log_env: bool = True):
-    """Logs the software version and optionally environment details."""
+    """
+    Logs the software version and optionally environment details.
+
+    :param project_name: The name of the project.
+    :param repo_path: Path to the repository.
+    :param log_env: Whether to log environment details.
+    """
     git = get_git_info(repo_path)
     
     if log_env:

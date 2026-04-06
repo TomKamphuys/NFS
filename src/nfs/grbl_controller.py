@@ -1,6 +1,7 @@
 import configparser
 import sys
 import time
+import threading
 from abc import ABC, abstractmethod
 from threading import Lock
 
@@ -23,41 +24,90 @@ class IGrblController(ABC):
     """
     @abstractmethod
     def shutdown(self) -> None:
+        """
+        Gracefully shut down the GRBL controller.
+        """
         pass
 
     @abstractmethod
     def send(self, message: str) -> None:
+        """
+        Send a G-code command to the GRBL controller.
+
+        :param message: The G-code string to send.
+        """
         pass
 
     @abstractmethod
     def send_and_wait_for_move_ready(self, message: str) -> None:
+        """
+        Send a movement command and wait until the controller is ready for the next one.
+
+        :param message: The G-code movement command.
+        """
         pass
 
     @abstractmethod
     def killalarm(self) -> None:
+        """
+        Clear the GRBL alarm state ($X).
+        """
         pass
 
     @abstractmethod
     def softreset(self) -> None:
+        """
+        Perform a soft reset of the GRBL controller.
+        """
         pass
 
     @abstractmethod
     def hold(self) -> None:
+        """
+        Initiate a feed hold (!) to pause movement.
+        """
         pass
 
     @abstractmethod
     def get_position(self) -> CylindricalPosition:
+        """
+        Return the current cylindrical position of the scanner.
+
+        :return: A CylindricalPosition object.
+        """
         pass
 
     @abstractmethod
     def get_state(self) -> GrblMachineState:
+        """
+        Return the current normalized state of the GRBL controller.
+
+        :return: A GrblMachineState enum value.
+        """
         pass
 
     @abstractmethod
     def get_state_raw(self) -> str:
+        """
+        Return the raw state string from the GRBL controller.
+
+        :return: The raw state string.
+        """
+        pass
+
+    @abstractmethod
+    def set_on_state_update_callback(self, callback) -> None:
+        """
+        Register a callback for state and position updates.
+
+        :param callback: A callable that receives (position, state).
+        """
         pass
 
     def force_position_update(self):
+        """
+        Force a position update from the controller.
+        """
         pass
 
 
@@ -98,55 +148,96 @@ class GrblControllerMock(IGrblController):
     def get_state_raw(self) -> str:
         return "Idle"
 
+    def set_on_state_update_callback(self, callback) -> None:
+        pass
+
     def force_position_update(self):
         logger.trace(f'Mocking force position update')
         pass
 
 
 class EventHandler:
+    """
+    Handles events from the GRBL streamer and maintains the current state and position.
+    """
     def __init__(self):
+        """
+        Initialize the EventHandler.
+        """
         self._received_message = ''
         self._current_position = None
 
         self._state: GrblMachineState = GrblMachineState.IDLE
         self._state_raw: str = "Idle"
 
-        # Track freshness of state reports
-        self._state_seq: int = 0
         self._state_lock = Lock()
+        self._on_state_update_callback = None
+
+    def set_on_state_update_callback(self, callback):
+        """
+        Set the callback function for state updates.
+
+        :param callback: A callable that receives (position, state).
+        """
+        self._on_state_update_callback = callback
 
     def get_received_message(self):
+        """
+        Get the last received message.
+
+        :return: The received message string.
+        """
         return self._received_message
 
     def set_received_message(self, value):
+        """
+        Set the received message.
+
+        :param value: The message string.
+        """
         self._received_message = value
 
     def get_current_position(self) -> CylindricalPosition:
+        """
+        Get the current cylindrical position.
+
+        :return: A CylindricalPosition object.
+        """
         return self._current_position
 
     def get_state(self) -> GrblMachineState:
+        """
+        Get the current machine state.
+
+        :return: A GrblMachineState enum value.
+        """
         with self._state_lock:
             return self._state
 
-    def get_state_seq(self) -> int:
-        """Monotonic counter incremented on each new state update."""
-        with self._state_lock:
-            return self._state_seq
-
     def on_grbl_event(self, event, *data) -> None:
+        """
+        Callback for GRBL events from the streamer.
+
+        :param event: The event name.
+        :param data: Additional data associated with the event.
+        """
         if event == "on_rx_buffer_percent":
             self._received_message = 'ok'
-            logger.trace("set OK")
         if event == "on_stateupdate":
             if len(data) >= 3:
                 with self._state_lock:
                     self._state_raw = str(data[0])
                     self._state = GrblMachineState.from_grbl_mode(data[0])
-                    self._state_seq += 1
 
                 if isinstance(data[2], tuple):
                     wpos = data[2]
                     self._current_position = CylindricalPosition(wpos[1], wpos[2], wpos[0])
+
+                if self._on_state_update_callback:
+                    try:
+                        self._on_state_update_callback(self._current_position, self._state)
+                    except Exception as e:
+                        logger.error(f"Error in state update callback: {e}")
 
         if event == 'on_error':
             args = []
@@ -160,7 +251,6 @@ class EventHandler:
             with self._state_lock:
                 self._state_raw = "Alarm"
                 self._state = GrblMachineState.ALARM
-                self._state_seq += 1
             logger.error("ERROR: Alarm!")
 
         args = []
@@ -181,6 +271,13 @@ class GrblControllerFactory:
     """
     @staticmethod
     def create(section: str, config_file: str) -> IGrblController:
+        """
+        Create a GRBL controller based on the configuration.
+
+        :param section: The configuration section to use.
+        :param config_file: Path to the configuration file.
+        :return: An instance of IGrblController.
+        """
         config_parser = configparser.ConfigParser(inline_comment_prefixes="#")
         config_parser.read(config_file)
 
@@ -206,7 +303,7 @@ class GrblControllerFactory:
             grbl_streamer.cnect(port, baudrate)
             logger.info('Waiting for gbrl to initialize..')
             time.sleep(3)
-            grbl_streamer.poll_start()
+            # grbl_streamer.poll_start()
             grbl_streamer.incremental_streaming = True
             grbl_streamer.send_immediately("$10=2")  # Force the report format to match what we expect.
 
@@ -226,6 +323,13 @@ class GrblControllerFactory:
 
     @staticmethod
     def _set_axis_according_to_config(grbl_streamer, config_parser, axis: str) -> None:
+        """
+        Configure a specific axis on the GRBL streamer based on settings.
+
+        :param grbl_streamer: The GRBL streamer instance.
+        :param config_parser: The configuration parser.
+        :param axis: The axis name ('x', 'y', or 'z').
+        """
         section = f'grbl_{axis}_axis'
         steps_per_millimeter = config_parser.getfloat(section, 'steps_per_millimeter')
         maximum_rate = config_parser.getfloat(section, 'maximum_rate')
@@ -247,41 +351,108 @@ class GrblControllerFactory:
 
 
 class GrblStreamerClientConnection:
+    """
+    Manages a connection to a GRBL streamer, including polling for status updates.
+    """
     def __init__(self, grbl_streamer: GrblStreamer, event_handler: EventHandler) -> None:
+        """
+        Initialize the connection and start the polling thread.
+
+        :param grbl_streamer: The GRBL streamer instance.
+        :param event_handler: The event handler to use.
+        """
         self._event_handler = event_handler
         self._grbl_streamer = grbl_streamer
+        # self._grbl_streamer.poll_start()
+
+        self._stop_polling = threading.Event()
+        self._polling_thread = threading.Thread(target=self._poll_loop, daemon=True)
+        self._polling_thread.start()
+
+    def _poll_loop(self) -> None:
+        """
+        Polls the GRBL device at 5 Hz (every 0.2 seconds) to get status updates.
+        """
+        logger.debug("Starting GRBL polling thread (5 Hz)")
+        while not self._stop_polling.is_set():
+            try:
+                self._grbl_streamer.send_immediately("?")
+            except Exception as e:
+                logger.error(f"Error in GRBL polling thread: {e}")
+            time.sleep(0.2)
+        logger.debug("GRBL polling thread stopped")
 
     def killalarm(self) -> None:
+        """
+        Send a killalarm command to the streamer.
+        """
         logger.trace(f'GrblStreamerClientConnection: Sending message: killalarm')
         self._grbl_streamer.killalarm()
 
     def softreset(self) -> None:
+        """
+        Send a softreset command to the streamer.
+        """
         logger.trace(f'GrblStreamerClientConnection: Sending message: softreset')
         self._grbl_streamer.softreset()
 
     def hold(self) -> None:
+        """
+        Send a hold command to the streamer.
+        """
         logger.trace(f'GrblStreamerClientConnection: Sending message: hold')
         self._grbl_streamer.hold()
 
     def send(self, message: str) -> None:
+        """
+        Send a message to the streamer.
+
+        :param message: The message string.
+        """
         logger.trace(f'GrblStreamerClientConnection: Sending message: {message}')
         self._grbl_streamer.send_immediately(message)
 
     def receive(self):
+        """
+        Receive the last message from the event handler.
+
+        :return: The received message.
+        """
         message = self._event_handler.get_received_message()
         self._event_handler.set_received_message('')
         return message
 
     def get_position(self) -> CylindricalPosition:
+        """
+        Get the current position from the event handler.
+
+        :return: A CylindricalPosition object.
+        """
         return self._event_handler.get_current_position()
 
     def get_state(self) -> GrblMachineState:
+        """
+        Get the current state from the event handler.
+
+        :return: A GrblMachineState enum value.
+        """
         return self._event_handler.get_state()
 
-    def get_state_seq(self) -> int:
-        return self._event_handler.get_state_seq()
+    def set_on_state_update_callback(self, callback) -> None:
+        """
+        Set the state update callback on the event handler.
+
+        :param callback: The callback function.
+        """
+        self._event_handler.set_on_state_update_callback(callback)
 
     def close(self) -> None:
+        """
+        Close the connection and stop the polling thread.
+        """
+        self._stop_polling.set()
+        if self._polling_thread.is_alive():
+            self._polling_thread.join(timeout=1.0)
         self._grbl_streamer.disconnect()
 
 
@@ -305,6 +476,11 @@ class ESP32Duino(IGrblController):
     UNLOCK_COMMAND = "$X"  # Command to unlock and clear any alarm
 
     def __init__(self, connection: GrblStreamerClientConnection) -> None:
+        """
+        Initialize the ESP32Duino controller.
+
+        :param connection: The connection instance to use.
+        """
         self._connection = connection
         self._unlock()
 
@@ -319,19 +495,27 @@ class ESP32Duino(IGrblController):
         This method ensures a clean shutdown by logging the disconnection process
         and properly closing the established connection.
 
-        :raises Exception: If the connection is already closed or invalid during the
-            shutdown process.
         :return: None
         """
         logger.info('Disconnecting from GRBL device')
         self._connection.close()
 
     def send(self, message: str) -> None:
+        """
+        Send a G-code command and wait for acknowledgment.
+
+        :param message: The command to send.
+        """
         self._connection.send(message + '\n')
         logger.trace(f'Sending message to GRBL device: {message}')
         self._wait_for_ack()
 
     def _send_immediate(self, message: str) -> None:
+        """
+        Send an immediate command (e.g., real-time commands).
+
+        :param message: The command to send.
+        """
         logger.trace(f'Sending immediate message to GRBL device: {message}')
         self._connection.send(message)
 
@@ -339,6 +523,8 @@ class ESP32Duino(IGrblController):
         """
         Sends a message, waits for acknowledgment (sync point), 
         and then ensures we have a valid position.
+        
+        :param message: The movement command to send.
         """
         self.send(message)
         self.send('G04 P0')
@@ -350,68 +536,75 @@ class ESP32Duino(IGrblController):
 
     def force_position_update(self) -> None:
         """
-        Forces a position update by sending a '?' command and waiting for a response.
+        Force a position update (currently just waits for polling).
         """
         logger.trace('Forcing position update.')
-        self._send_immediate('?')
-        self._wait_for_idle_state()
+        time.sleep(1)  # I'm polling at 2Hz, so after 1s I should definitely have the correct position
 
     def _wait_for_idle_state(self) -> None:
         """
-        Wait until we observe a *fresh* state report and it says IDLE.
-        If no update arrives (common during some motions), we force status polls.
+        Block until the machine state becomes IDLE.
         """
-        timeout = time.time() + 5.0
-
-        # Ensure we don't trust a stale cached value:
-        # capture the last-seen update counter, then force a poll.
-        last_seq = self._connection.get_state_seq()
-        self._send_immediate('?')
-
-        while time.time() < timeout:
-            # Wait until we have seen at least one NEW state update since we started waiting.
-            if self._connection.get_state_seq() == last_seq:
-                time.sleep(0.02)
-                continue
-
-            # Now the state is "fresh enough" to check.
-            state = self._connection.get_state()
-            logger.trace(f'Idle wait: seq={self._connection.get_state_seq()} state={state}')
-            if state == GrblMachineState.IDLE:
-                return
-
-            # Not idle yet; keep nudging status reports occasionally.
-            if int(time.time() * 10) % 5 == 0:  # Every 0.5s
-                last_seq = self._connection.get_state_seq()
-                self._send_immediate('?')
-
-            time.sleep(0.05)
-
-        logger.warning('Idle wait: timed out without IDLE state')
+        while self._connection.get_state() != GrblMachineState.IDLE:
+            time.sleep(0.5)
 
     def killalarm(self) -> None:
+        """
+        Send a killalarm command.
+        """
         logger.trace(f'Sending killalarm GRBL device')
         self._connection.killalarm()
 
     def softreset(self) -> None:
+        """
+        Send a softreset command.
+        """
         logger.trace(f'Sending softreset GRBL device')
         self._connection.softreset()
 
     def hold(self) -> None:
+        """
+        Send a hold command.
+        """
         logger.trace(f'Sending hold GRBL device')
         self._connection.hold()
 
     def get_position(self) -> CylindricalPosition:
+        """
+        Get the current cylindrical position.
+
+        :return: A CylindricalPosition object.
+        """
         return self._connection.get_position()
 
     def get_state(self) -> GrblMachineState:
+        """
+        Get the current machine state.
+
+        :return: A GrblMachineState enum value.
+        """
         return self._connection.get_state()
 
     def get_state_raw(self) -> str:
+        """
+        Get the raw state string.
+
+        :return: The raw state string.
+        """
         return self._connection.get_state_raw()
 
+    def set_on_state_update_callback(self, callback) -> None:
+        """
+        Set the state update callback.
+
+        :param callback: The callback function.
+        """
+        self._connection.set_on_state_update_callback(callback)
+
     def _wait_for_ack(self) -> None:
-        """Wait until an 'ok' acknowledgment is received from the hardware."""
+        """
+        Wait until an 'ok' acknowledgment is received from the hardware.
+        """
         ready = False
         while not ready:
             time.sleep(0.01)
@@ -422,7 +615,11 @@ class ESP32Duino(IGrblController):
                 ready = True
 
     def _receive(self) -> str:
-        """Receive a message from the connection."""
+        """
+        Receive a message from the connection.
+
+        :return: The decoded message string.
+        """
         result = self._connection.receive()
         if isinstance(result, bytes):
             result = result.decode("utf-8")

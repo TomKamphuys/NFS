@@ -29,6 +29,9 @@ class ModuleInterface:
 def import_module(name: str) -> ModuleInterface:
     """
     Imports a module dynamically by its name and returns the module object.
+
+    :param name: The name of the module to import.
+    :return: The imported module object.
     """
     return importlib.import_module(name)  # type: ignore
 
@@ -36,6 +39,9 @@ def import_module(name: str) -> ModuleInterface:
 def load_plugins(config_file: Optional[str] = None, plugins_section: Optional[str] = None) -> None:
     """
     Load and initialize plugins from both entry points and configuration file.
+
+    :param config_file: Path to the configuration file.
+    :param plugins_section: The section in the config file listing plugins.
     """
     # 1. Load from entry points (Standard Pythonic way)
     _load_entry_points()
@@ -92,6 +98,9 @@ def _load_entry_points() -> None:
 def _load_config_plugins(config_file: str, plugins_section: str) -> None:
     """
     Load plugins listed in the specified configuration section.
+
+    :param config_file: Path to the configuration file.
+    :param plugins_section: The section name to read from.
     """
     config_parser = configparser.ConfigParser(inline_comment_prefixes="#")
     config_parser.read(config_file)
