@@ -34,7 +34,8 @@ class NearFieldScanner:
                  scanner: Scanner,
                  audio: IAudio,
                  measurement_motion_manager,
-                 position_log_file: str = 'measurement_positions.csv'):
+                 position_log_file: str = 'measurement_positions.csv',
+                 config_file: str = None):
         """
         Initialize the NearFieldScanner.
 
@@ -42,11 +43,13 @@ class NearFieldScanner:
         :param audio: The audio interface for measurement and signal capture.
         :param measurement_motion_manager: Manager responsible for controlling motions during measurements.
         :param position_log_file: Path to the file where measurement positions are logged.
+        :param config_file: Path to the configuration file used.
         """
         self._scanner = scanner
         self._audio = audio
         self._measurement_motion_manager = measurement_motion_manager
         self._position_log_file = position_log_file
+        self._config_file = config_file
         self._clear_position_log()
 
     def _clear_position_log(self) -> None:
@@ -94,6 +97,16 @@ class NearFieldScanner:
             format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {name}:{function}:{line} - {message}"
         )
         logger.info(f"Starting new measurement set in: {session_dir}")
+
+        # 2.1 Copy config file if it exists
+        if self._config_file and Path(self._config_file).exists():
+            try:
+                shutil.copy(self._config_file, session_dir / Path(self._config_file).name)
+                logger.info(f"Copied config file {self._config_file} to {session_dir}")
+            except Exception as e:
+                logger.warning(f"Could not copy config file {self._config_file}: {e}")
+        elif self._config_file:
+            logger.warning(f"Config file {self._config_file} not found, skipping copy.")
 
         # 3. Log version info for this session
         log_version_info(log_env=False)
@@ -201,12 +214,12 @@ class NearFieldScannerFactory:
     and initializing the measurement manager for the scanner.
     """
     @staticmethod
-    def create(scanner: Scanner, config_file: str) -> NearFieldScanner:
+    def create(scanner: Scanner, config_file: str = "config.ini") -> NearFieldScanner:
         """
         Create a Near Field Scanner based on a config file.
 
         :param scanner: The scanner instance to use.
-        :param config_file: Path to the configuration file.
+        :param config_file: Path to the configuration file. Default is "config.ini".
         :return: A fully initialized NearFieldScanner instance.
         """
         setup_logging(config_file)
@@ -225,4 +238,4 @@ class NearFieldScannerFactory:
         motion_manager_section = config_parser.get(section, 'motion_manager')
         measurement_manager = MotionManagerFactory.create(config_file, motion_manager_section, scanner)
 
-        return NearFieldScanner(scanner, audio, measurement_manager)
+        return NearFieldScanner(scanner, audio, measurement_manager, config_file=config_file)

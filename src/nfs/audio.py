@@ -620,7 +620,7 @@ class Audio(IAudio):
 
         # Directories
         self.rec_dir = Path("./Recordings")
-        self.dist_dir = Path("./Distortion")
+        self.dist_dir = self.rec_dir / "Distortion"
         self.debug_dir = None
 
         self._ensure_directories()
@@ -639,7 +639,7 @@ class Audio(IAudio):
     def set_session_directory(self, session_path: Path):
         """Updates internal recording and debug directories to a timestamped session path."""
         self.rec_dir = session_path / "Recordings"
-        self.dist_dir = session_path / "Distortion"
+        self.dist_dir = self.rec_dir / "Distortion"
         self._ensure_directories()
         logger.debug(f"Audio session directory updated to: {session_path}")
 

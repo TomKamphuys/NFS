@@ -53,7 +53,7 @@ def test_create_near_field_scanner(mock_scanner, mock_config_file):
         mock_motion_manager_factory.assert_called_once_with(mock_config_file, 'test_motion_manager', mock_scanner)
         
         mock_near_field_scanner.assert_called_once_with(
-            mock_scanner, mock_audio_instance, mock_mm_instance
+            mock_scanner, mock_audio_instance, mock_mm_instance, config_file=mock_config_file
         )
 
         assert result == mock_nfs_instance
