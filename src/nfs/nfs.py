@@ -3,6 +3,7 @@ import datetime
 import shutil
 import time
 from pathlib import Path
+from typing import Optional
 
 from .logging_config import setup_logging, log_version_info
 from loguru import logger
@@ -173,16 +174,38 @@ class NearFieldScanner:
             except Exception as e:
                 logger.warning(f"Could not copy global scanner.log: {e}")
 
+    def play_sine(self, frequency: float, level_dbfs: float, duration_s: Optional[float] = 1.0) -> None:
+        """
+        Plays a sine wave at the specified frequency and level.
+        :param frequency: Frequency in Hz.
+        :param level_dbfs: Level in dBFS.
+        :param duration_s: Duration in seconds. If None, plays until stop_sine() is called.
+        :return: None
+        """
+        self._audio.play_sine(frequency, level_dbfs, duration_s)
+
+    def stop_sine(self) -> None:
+        """
+        Stops any active sine wave playback.
+        :return: None
+        """
+        self._audio.stop_sine()
+
     def shutdown(self) -> None:
         """
         Shuts down the scanner system gracefully.
 
         This method shuts down the scanner system by invoking the shutdown
-        functionality of the internal scanner component. It ensures that all
-        internal operations are stopped and resources are tidied up properly.
+        functionality of the internal scanner component and stopping any
+        active audio signals. It ensures that all internal operations are 
+        stopped and resources are tidied up properly.
 
         :return: None
         """
+        try:
+            self.stop_sine()
+        except Exception as e:
+            logger.warning(f"Error stopping sine during shutdown: {e}")
         self._scanner.shutdown()  # turn off stuff and tidy
 
     def __enter__(self):
