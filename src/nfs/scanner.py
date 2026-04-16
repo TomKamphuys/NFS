@@ -211,11 +211,11 @@ class ScannerFactory:
     :type config_file: Str
     """
     @staticmethod
-    def create(config_file: str) -> Scanner:
+    def create(config_file: str = "config.ini") -> Scanner:
         """
         Create and configure a Scanner instance from a configuration file.
 
-        :param config_file: Path to the configuration file.
+        :param config_file: Path to the configuration file. Default is "config.ini".
         :return: A fully initialized Scanner object.
         """
         setup_logging(config_file)

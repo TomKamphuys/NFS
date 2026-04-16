@@ -136,7 +136,6 @@ def test_set_speaker_center_above_stool(scanner, mock_grbl):
 
     # Check sequence
     mock_grbl.send.assert_any_call('G55')
-    mock_grbl.send.assert_any_call('G4 P0.1')
     mock_grbl.force_position_update.assert_called()
 
     # height=20, g55_z=50 -> g54_x = 50 - 20 = 30

@@ -41,17 +41,17 @@ import soundfile as sf
 from loguru import logger
 
 from .datatypes import CylindricalPosition
+from .utils.dsp import DSPUtils
 
 # Enable ASIO build of PortAudio in python-sounddevice (Windows).
 # This environment variable triggers the loading of ASIO drivers if available.
 os.environ["SD_ENABLE_ASIO"] = "1"
 import sounddevice as sd  # noqa: E402
 
+
 # ─────────────────────────────────────────────────────────────────────────────
 #  UTILITIES
 # ─────────────────────────────────────────────────────────────────────────────
-
-from .utils.dsp import DSPUtils
 
 
 class DSPVerificationTool:
@@ -620,16 +620,28 @@ class Audio(IAudio):
 
         # Directories
         self.rec_dir = Path("./Recordings")
-        self.rec_dir.mkdir(exist_ok=True)
+        self.dist_dir = self.rec_dir / "Distortion"
+        self.debug_dir = None
 
-        self.dist_dir = Path("./Distortion")
-        self.dist_dir.mkdir(exist_ok=True)
+        self._ensure_directories()
+        self._log_config()
+
+    def _ensure_directories(self):
+        self.rec_dir.mkdir(parents=True, exist_ok=True)
+        self.dist_dir.mkdir(parents=True, exist_ok=True)
 
         if self.cap['debug_saves']:
             self.debug_dir = self.rec_dir / "debug"
-            self.debug_dir.mkdir(exist_ok=True)
+            self.debug_dir.mkdir(parents=True, exist_ok=True)
+        else:
+            self.debug_dir = None
 
-        self._log_config()
+    def set_session_directory(self, session_path: Path):
+        """Updates internal recording and debug directories to a timestamped session path."""
+        self.rec_dir = session_path / "Recordings"
+        self.dist_dir = self.rec_dir / "Distortion"
+        self._ensure_directories()
+        logger.debug(f"Audio session directory updated to: {session_path}")
 
     def _log_config(self):
         """Log the current hardware and capture configuration."""
@@ -908,7 +920,9 @@ class MockInterfaceAudio(Audio):
         marker_len = len(marker_single)
 
         slot_len = max(sweep_len, marker_len) + post_samps
-        total_len = pre_samps_settle + (slot_len * self.cap['num_sweeps'])
+        # Add 50ms extra padding to total_len for simulated hardware latency (20ms) and FIR filter
+        extra_padding = int(0.050 * self.hw['fs'])
+        total_len = pre_samps_settle + (slot_len * self.cap['num_sweeps']) + extra_padding
 
         tx_sweep = np.zeros(total_len, dtype=np.float32)
         tx_ref = np.zeros(total_len, dtype=np.float32)

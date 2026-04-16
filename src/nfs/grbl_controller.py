@@ -125,10 +125,21 @@ class GrblControllerMock(IGrblController):
         logger.trace(f'MockingShutting down')
 
     def send(self, message: str) -> None:
-        logger.trace(f'Mocking sending message')
+        logger.trace(f'Mocking sending message: {message}')
+        # Handle coordinate extraction if needed, but for now we just track Y/Z/X
+        # In nfs, R=Y, T=Z, Z=X
+        import re
+        x_match = re.search(r'X([-+]?\d*\.?\d+)', message)
+        y_match = re.search(r'Y([-+]?\d*\.?\d+)', message)
+        z_match = re.search(r'Z([-+]?\d*\.?\d+)', message)
+        
+        if x_match: self._pos_z = float(x_match.group(1))
+        if y_match: self._pos_r = float(y_match.group(1))
+        if z_match: self._pos_t = float(z_match.group(1))
 
     def send_and_wait_for_move_ready(self, message: str) -> None:
-        logger.trace(f'Mocking send and wait')
+        logger.trace(f'Mocking send and wait: {message}')
+        self.send(message)
 
     def killalarm(self) -> None:
         logger.trace(f'Mocking killalarm')
@@ -139,8 +150,13 @@ class GrblControllerMock(IGrblController):
     def hold(self) -> None:
         logger.trace(f'Mocking hold')
 
+    def __init__(self):
+        self._pos_r = 0.0
+        self._pos_t = 0.0
+        self._pos_z = 0.0
+
     def get_position(self) -> CylindricalPosition:
-        return CylindricalPosition(0.0, 0.0, 0.0)
+        return CylindricalPosition(self._pos_r, self._pos_t, self._pos_z)
 
     def get_state(self) -> GrblMachineState:
         return GrblMachineState.IDLE
@@ -363,7 +379,6 @@ class GrblStreamerClientConnection:
         """
         self._event_handler = event_handler
         self._grbl_streamer = grbl_streamer
-        # self._grbl_streamer.poll_start()
 
         self._stop_polling = threading.Event()
         self._polling_thread = threading.Thread(target=self._poll_loop, daemon=True)
