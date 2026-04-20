@@ -1,9 +1,9 @@
 import configparser
 import sys
 import time
-import threading
+# import threading
 from abc import ABC, abstractmethod
-from threading import Lock
+# from threading import Lock
 
 from grbl_streamer import GrblStreamer  # type: ignore
 from loguru import logger
@@ -186,7 +186,7 @@ class EventHandler:
         self._state: GrblMachineState = GrblMachineState.IDLE
         self._state_raw: str = "Idle"
 
-        self._state_lock = Lock()
+        # self._state_lock = Lock()
         self._on_state_update_callback = None
 
     def set_on_state_update_callback(self, callback):
@@ -227,8 +227,8 @@ class EventHandler:
 
         :return: A GrblMachineState enum value.
         """
-        with self._state_lock:
-            return self._state
+        # with self._state_lock:
+        return self._state
 
     def on_grbl_event(self, event, *data) -> None:
         """
@@ -241,9 +241,9 @@ class EventHandler:
             self._received_message = 'ok'
         if event == "on_stateupdate":
             if len(data) >= 3:
-                with self._state_lock:
-                    self._state_raw = str(data[0])
-                    self._state = GrblMachineState.from_grbl_mode(data[0])
+                # with self._state_lock:
+                self._state_raw = str(data[0])
+                self._state = GrblMachineState.from_grbl_mode(data[0])
 
                 if isinstance(data[2], tuple):
                     wpos = data[2]
@@ -264,9 +264,9 @@ class EventHandler:
 
         if event == 'on_alarm':
             self._received_message = 'ok'
-            with self._state_lock:
-                self._state_raw = "Alarm"
-                self._state = GrblMachineState.ALARM
+            # with self._state_lock:
+            self._state_raw = "Alarm"
+            self._state = GrblMachineState.ALARM
             logger.error("ERROR: Alarm!")
 
         args = []
@@ -380,22 +380,22 @@ class GrblStreamerClientConnection:
         self._event_handler = event_handler
         self._grbl_streamer = grbl_streamer
 
-        self._stop_polling = threading.Event()
-        self._polling_thread = threading.Thread(target=self._poll_loop, daemon=True)
-        self._polling_thread.start()
+        # self._stop_polling = threading.Event()
+        # self._polling_thread = threading.Thread(target=self._poll_loop, daemon=True)
+        # self._polling_thread.start()
 
-    def _poll_loop(self) -> None:
-        """
-        Polls the GRBL device at 5 Hz (every 0.2 seconds) to get status updates.
-        """
-        logger.debug("Starting GRBL polling thread (5 Hz)")
-        while not self._stop_polling.is_set():
-            try:
-                self._grbl_streamer.send_immediately("?")
-            except Exception as e:
-                logger.error(f"Error in GRBL polling thread: {e}")
-            time.sleep(0.2)
-        logger.debug("GRBL polling thread stopped")
+    # def _poll_loop(self) -> None:
+    #     """
+    #     Polls the GRBL device at 5 Hz (every 0.2 seconds) to get status updates.
+    #     """
+    #     logger.debug("Starting GRBL polling thread (5 Hz)")
+    #     while not self._stop_polling.is_set():
+    #         try:
+    #             self._grbl_streamer.send_immediately("?")
+    #         except Exception as e:
+    #             logger.error(f"Error in GRBL polling thread: {e}")
+    #         time.sleep(0.2)
+    #     logger.debug("GRBL polling thread stopped")
 
     def killalarm(self) -> None:
         """
@@ -416,7 +416,9 @@ class GrblStreamerClientConnection:
         Send a hold command to the streamer.
         """
         logger.trace(f'GrblStreamerClientConnection: Sending message: hold')
-        self._grbl_streamer.hold()
+        # self._grbl_streamer.hold()
+        self._grbl_streamer.send_immediately('!')
+
 
     def send(self, message: str) -> None:
         """
@@ -465,9 +467,9 @@ class GrblStreamerClientConnection:
         """
         Close the connection and stop the polling thread.
         """
-        self._stop_polling.set()
-        if self._polling_thread.is_alive():
-            self._polling_thread.join(timeout=1.0)
+        # self._stop_polling.set()
+        # if self._polling_thread.is_alive():
+        #     self._polling_thread.join(timeout=1.0)
         self._grbl_streamer.disconnect()
 
 
