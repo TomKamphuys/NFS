@@ -73,6 +73,10 @@ Install dependencies (including dev tools)
 uv sync --all-groups
 ```
 
+If you don't want to install dev tools, you can run this command instead:
+```
+uv sync --no-dev
+```
 
 ### Configuration
 
