@@ -215,7 +215,7 @@ class SweepGenerator:
 
         # 1. Fundamental (Clean) - Used for generating the Inverse Filter
         phase = w1 * L * (np.exp(t / L) - 1.0)
-        s_fund = np.sin(phase).astype(np.float64)
+        s_fund = (np.sin(phase) * DSPUtils.db_to_lin(self.level_dbfs)).astype(np.float64)
 
         # 2. Generate CLEAN Inverse (Using Time Reversal)
         # We use the clean fundamental for the inverse to avoid "baking in" the distortion 
@@ -224,13 +224,12 @@ class SweepGenerator:
         inv = s_fund[::-1] * envelope  # Time Reversal
 
         # Normalize Inverse in Frequency Domain to ensure unity gain convolution
-        target_amp = DSPUtils.db_to_lin(self.level_dbfs)
         Nfft = int(2 ** np.ceil(np.log2(len(s_fund) + len(inv) - 1)))
         S_fft = np.fft.rfft(s_fund, n=Nfft)
         I_fft = np.fft.rfft(inv, n=Nfft)
         peak_val = np.max(np.abs(np.fft.irfft(S_fft * I_fft, n=Nfft)))
 
-        inv /= (peak_val * target_amp + 1e-15)
+        inv /= (peak_val + 1e-15)
         return s_fund, phase, inv
 
 
@@ -589,6 +588,24 @@ class IAudio(ABC):
     def measure_ir(self, position: CylindricalPosition, order_id: str = "NA") -> None:
         pass
 
+    @abstractmethod
+    def play_sine(self, frequency: float, level_dbfs: float, duration_s: Optional[float] = 1.0) -> None:
+        """
+        Plays a sine wave at the specified frequency and level.
+
+        :param frequency: Frequency in Hz.
+        :param level_dbfs: Level in dBFS.
+        :param duration_s: Duration in seconds. If None, plays until stop_sine() is called.
+        """
+        pass
+
+    @abstractmethod
+    def stop_sine(self) -> None:
+        """
+        Stops the sine wave playback.
+        """
+        pass
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  ORCHESTRATOR
@@ -609,6 +626,7 @@ class Audio(IAudio):
 
         self.hw = hw_config
         self.cap = capture_config
+        self._sine_stream = None
 
         self.sweep_gen = sweep_gen
         self.marker_gen = marker_gen
@@ -691,9 +709,9 @@ class Audio(IAudio):
             s_composite = self.harmonic_injector.inject(s_fund, phase)
 
         # 2. Normalize Playback Signal
-        target_amp = DSPUtils.db_to_lin(self.cap['sweep_level_dbfs'])
-        max_val = np.max(np.abs(s_composite)) + 1e-12
-        s_play = (s_composite * (target_amp / max_val)).astype(np.float32)
+        # The sweep is already generated at the correct level in sweep_gen.
+        # We only need to ensure s_play is float32 for the audio stream.
+        s_play = s_composite.astype(np.float32)
 
         # Apply a 1ms Hann fade to prevent the step discontinuity "BLIP" at the end
         s_play = DSPUtils.hann_fade(s_play, 1.0, self.hw['fs'], side="both")
@@ -703,10 +721,6 @@ class Audio(IAudio):
         # The resulting IR will inherently show the rolloff of this filter.
         if self.protection_filter:
             s_play = self.protection_filter.apply(s_play)
-            # Re-peak to ensure we hit the target DBFS in the passband.
-            # This prevents the HPF from essentially quieting the whole sweep if fundamental is low.
-            new_max = np.max(np.abs(s_play)) + 1e-12
-            s_play *= (target_amp / new_max)
 
         # 4. Generate Alignment Marker
         # Goal: Generate band-limited marker. Pushing the fundamental frequency well 
@@ -887,6 +901,100 @@ class Audio(IAudio):
             except Exception as e:
                 logger.warning(f"Failed to save metrics JSON: {e}")
 
+    def play_sine(self, frequency: float, level_dbfs: float, duration_s: Optional[float] = 1.0) -> None:
+        """
+        Plays a sine wave at the specified frequency and level.
+
+        :param frequency: Frequency in Hz.
+        :param level_dbfs: Level in dBFS.
+        :param duration_s: Duration in seconds. If None, plays until stop_sine() is called.
+        """
+        self.stop_sine()
+
+        logger.info(
+            f"Playing sine: {frequency} Hz, {level_dbfs} dBFS, {'until stopped' if duration_s is None else f'for {duration_s} s'}")
+
+        fs = self.hw['fs']
+        target_amp = DSPUtils.db_to_lin(level_dbfs)
+
+        out_dev = self.hw['dev_out']
+        out_api = self._get_api_name(out_dev)
+        use_asio_out = "ASIO" in out_api
+
+        if duration_s is not None:
+            n = int(round(duration_s * fs))
+            t = np.arange(n) / fs
+            sine = (np.sin(2 * np.pi * frequency * t) * target_amp).astype(np.float32)
+
+            # Apply protection filter if configured
+            if self.protection_filter:
+                sine = self.protection_filter.apply(sine)
+
+            if use_asio_out:
+                # ASIO mapping: we want to play sine on ch_out_spkr.
+                # channel_selectors maps outdata[:, 0] to spkr, outdata[:, 1] to ref
+                out_args_extra = sd.AsioSettings(channel_selectors=[self.hw['ch_out_spkr'], self.hw['ch_out_ref']])
+                out_data = np.zeros((n, 2), dtype=np.float32)
+                out_data[:, 0] = sine
+                out_ch_count = 2
+            else:
+                out_ch_count = max(self.hw['ch_out_spkr'], self.hw['ch_out_ref']) + 1
+                out_args_extra = sd.WasapiSettings(exclusive=self.hw['wasapi_exclusive']) if "WASAPI" in out_api else None
+                out_data = np.zeros((n, out_ch_count), dtype=np.float32)
+                out_data[:, self.hw['ch_out_spkr']] = sine
+
+            sd.play(out_data, samplerate=fs, device=out_dev, extra_settings=out_args_extra)
+            sd.wait()
+        else:
+            # Indefinite playback
+            phase = 0.0
+            phase_inc = 2 * np.pi * frequency / fs
+
+            # For indefinite sine, we use the target_amp directly.
+            # (Filtering and re-normalizing a steady-state sine wave with a linear filter
+            # results in the same sine wave with a possible phase shift, which we ignore here).
+            effective_amp = target_amp
+
+            def callback(outdata, frames, time, status):
+                nonlocal phase
+                if status:
+                    logger.warning(f"Sine Callback Status: {status}")
+                t = np.arange(frames)
+                s = (np.sin(phase + phase_inc * t) * effective_amp).astype(np.float32)
+                phase = (phase + phase_inc * frames) % (2 * np.pi)
+
+                if use_asio_out:
+                    outdata[:, 0] = s
+                    outdata[:, 1] = 0
+                else:
+                    outdata.fill(0)
+                    outdata[:, self.hw['ch_out_spkr']] = s
+
+            if use_asio_out:
+                out_args_extra = sd.AsioSettings(channel_selectors=[self.hw['ch_out_spkr'], self.hw['ch_out_ref']])
+                out_ch_count = 2
+            else:
+                out_ch_count = max(self.hw['ch_out_spkr'], self.hw['ch_out_ref']) + 1
+                out_args_extra = sd.WasapiSettings(exclusive=self.hw['wasapi_exclusive']) if "WASAPI" in out_api else None
+
+            self._sine_stream = sd.OutputStream(
+                device=out_dev, samplerate=fs, channels=out_ch_count,
+                extra_settings=out_args_extra, callback=callback, dtype='float32'
+            )
+            self._sine_stream.start()
+
+    def stop_sine(self) -> None:
+        """Stops any active sine wave playback."""
+        if self._sine_stream is not None:
+            logger.info("Stopping indefinite sine playback")
+            try:
+                self._sine_stream.stop()
+                self._sine_stream.close()
+            except Exception as e:
+                logger.debug(f"Error closing sine stream: {e}")
+            self._sine_stream = None
+        sd.stop()
+
 
 class MockInterfaceAudio(Audio):
     """Digital Twin loopback simulating hardware latency and filters."""
@@ -899,17 +1007,15 @@ class MockInterfaceAudio(Audio):
         if self.harmonic_injector:
             s_composite = self.harmonic_injector.inject(s_fund, phase)
 
-        target_amp = DSPUtils.db_to_lin(self.cap['sweep_level_dbfs'])
-        max_val = np.max(np.abs(s_composite)) + 1e-12
-        s_play = (s_composite * (target_amp / max_val)).astype(np.float32)
+        # The sweep is already generated at the correct level in sweep_gen.
+        # We only need to ensure s_play is float32 for the audio stream.
+        s_play = s_composite.astype(np.float32)
 
         # Apply a 1ms Hann fade to prevent the step discontinuity "BLIP" at the end
         s_play = DSPUtils.hann_fade(s_play, 1.0, self.hw['fs'], side="both")
 
         if self.protection_filter:
             s_play = self.protection_filter.apply(s_play)
-            new_max = np.max(np.abs(s_play)) + 1e-12
-            s_play *= (target_amp / new_max)
 
         marker_single = self.marker_gen.generate()
 
@@ -996,6 +1102,21 @@ class MockInterfaceAudio(Audio):
             "psr": psr
         }
 
+    def play_sine(self, frequency: float, level_dbfs: float, duration_s: Optional[float] = 1.0) -> None:
+        """
+        Plays a sine wave at the specified frequency and level.
+
+        :param frequency: Frequency in Hz.
+        :param level_dbfs: Level in dBFS.
+        :param duration_s: Duration in seconds. If None, plays until stop_sine() is called.
+        """
+        logger.info(
+            f"[MOCK-INTERFACE] Playing sine: {frequency} Hz, {level_dbfs} dBFS, {'until stopped' if duration_s is None else f'for {duration_s} s'}")
+
+    def stop_sine(self) -> None:
+        """Stops sine playback."""
+        logger.info("[MOCK-INTERFACE] Stopped sine playback")
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  FACTORY
@@ -1013,6 +1134,21 @@ class AudioMock(IAudio):
         """
         logger.info(f"[MOCK] Measured {position}, ID={order_id}")
         # time.sleep(1.0)  # Simulate sweep duration
+
+    def play_sine(self, frequency: float, level_dbfs: float, duration_s: Optional[float] = 1.0) -> None:
+        """
+        Plays a sine wave at the specified frequency and level.
+
+        :param frequency: Frequency in Hz.
+        :param level_dbfs: Level in dBFS.
+        :param duration_s: Duration in seconds. If None, plays until stop_sine() is called.
+        """
+        logger.info(
+            f"[MOCK] Playing sine: {frequency} Hz, {level_dbfs} dBFS, {'until stopped' if duration_s is None else f'for {duration_s} s'}")
+
+    def stop_sine(self) -> None:
+        """Stops sine playback."""
+        logger.info("[MOCK] Stopped sine playback")
 
 
 class AudioFactory:
