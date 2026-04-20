@@ -215,7 +215,7 @@ class SweepGenerator:
 
         # 1. Fundamental (Clean) - Used for generating the Inverse Filter
         phase = w1 * L * (np.exp(t / L) - 1.0)
-        s_fund = np.sin(phase).astype(np.float64)
+        s_fund = (np.sin(phase) * DSPUtils.db_to_lin(self.level_dbfs)).astype(np.float64)
 
         # 2. Generate CLEAN Inverse (Using Time Reversal)
         # We use the clean fundamental for the inverse to avoid "baking in" the distortion 
@@ -709,9 +709,9 @@ class Audio(IAudio):
             s_composite = self.harmonic_injector.inject(s_fund, phase)
 
         # 2. Normalize Playback Signal
-        target_amp = DSPUtils.db_to_lin(self.cap['sweep_level_dbfs'])
-        max_val = np.max(np.abs(s_composite)) + 1e-12
-        s_play = (s_composite * (target_amp / max_val)).astype(np.float32)
+        # The sweep is already generated at the correct level in sweep_gen.
+        # We only need to ensure s_play is float32 for the audio stream.
+        s_play = s_composite.astype(np.float32)
 
         # Apply a 1ms Hann fade to prevent the step discontinuity "BLIP" at the end
         s_play = DSPUtils.hann_fade(s_play, 1.0, self.hw['fs'], side="both")
@@ -1007,9 +1007,9 @@ class MockInterfaceAudio(Audio):
         if self.harmonic_injector:
             s_composite = self.harmonic_injector.inject(s_fund, phase)
 
-        target_amp = DSPUtils.db_to_lin(self.cap['sweep_level_dbfs'])
-        max_val = np.max(np.abs(s_composite)) + 1e-12
-        s_play = (s_composite * (target_amp / max_val)).astype(np.float32)
+        # The sweep is already generated at the correct level in sweep_gen.
+        # We only need to ensure s_play is float32 for the audio stream.
+        s_play = s_composite.astype(np.float32)
 
         # Apply a 1ms Hann fade to prevent the step discontinuity "BLIP" at the end
         s_play = DSPUtils.hann_fade(s_play, 1.0, self.hw['fs'], side="both")
