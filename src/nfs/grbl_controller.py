@@ -335,7 +335,7 @@ class GrblControllerFactory:
         elif type_to_build == 'Mock':
             return GrblControllerMock()
         else:
-            raise Exception(f'Unknown controller type: {type}')
+            raise Exception(f'Unknown controller type: {type_to_build}')
 
     @staticmethod
     def _set_axis_according_to_config(grbl_streamer, config_parser, axis: str) -> None:
