@@ -253,6 +253,9 @@ class NearFieldScannerFactory:
         section = 'nfs'
 
         plugins_section = config_parser.get(section, 'plugins', fallback='plugins')
+        # We need to ensure plugins are reloaded/re-registered if they changed,
+        # but loader.load_plugins currently doesn't support easy unregistering.
+        # For now, we just call it again which might be redundant but safe for most plugins.
         loader.load_plugins(config_file, plugins_section)
 
         audio_section = config_parser.get(section, 'audio')

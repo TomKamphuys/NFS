@@ -2,6 +2,7 @@ import configparser
 import sys
 import time
 from abc import ABC, abstractmethod
+from typing import Optional
 
 from grbl_streamer import GrblStreamer  # type: ignore
 from loguru import logger
@@ -284,6 +285,8 @@ class GrblControllerFactory:
     class based on the type specified in the configuration file. Additional methods
     assist in configuring specific GRBL controller settings like axes configurations.
     """
+    _instance: Optional[IGrblController] = None
+
     @staticmethod
     def create(section: str, config_file: str) -> IGrblController:
         """
@@ -293,6 +296,10 @@ class GrblControllerFactory:
         :param config_file: Path to the configuration file.
         :return: An instance of IGrblController.
         """
+        if GrblControllerFactory._instance is not None:
+            logger.info("Using existing GRBL controller instance.")
+            return GrblControllerFactory._instance
+
         config_parser = configparser.ConfigParser(inline_comment_prefixes="#")
         config_parser.read(config_file)
 
@@ -323,11 +330,13 @@ class GrblControllerFactory:
             grbl_streamer.send_immediately("$10=2")  # Force the report format to match what we expect.
 
             connection = GrblStreamerClientConnection(grbl_streamer, event_handler)
-            return ESP32Duino(connection)  # TODO MPOT check this. Maybe simply rename. Looking at the class diagram this can be much simpler and a few layers of indirection can be removed.
+            GrblControllerFactory._instance = ESP32Duino(connection)
+            return GrblControllerFactory._instance
         elif type_to_build == 'Mock':
-            return GrblControllerMock()
+            GrblControllerFactory._instance = GrblControllerMock()
+            return GrblControllerFactory._instance
         else:
-            raise Exception(f'Unknown controller type: {type}')
+            raise Exception(f'Unknown controller type: {type_to_build}')
 
 
 class GrblStreamerClientConnection:
