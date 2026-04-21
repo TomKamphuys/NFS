@@ -27,6 +27,7 @@ dependencies = [
   "pyfar>=0.7.3",
   "sounddevice>=0.5.3",
   "scipy-stubs~=1.16.3",
+  "nicegui[highcharts]>=2.24.2",
 ]
 
 [project.optional-dependencies]
@@ -34,6 +35,7 @@ dev = ["pytest", "pylint", "mypy"]
 
 [project.scripts]
 nfs-app = "nfs.nfs_app:main"
+harmonic-drive = "harmonic_drive.gui:main"
 
 [project.entry-points."nfs.measurement_points"]
 cylindrical = "nfs.plugins.cylindrical_measurement_points:register"
@@ -50,7 +52,7 @@ spherical = "nfs.motion_manager:SphericalMeasurementMotionManager"
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["nfs*"]
+include = ["nfs*", "harmonic_drive*"]
 exclude = ["tests*"]
 
 [tool.setuptools.package-data]
