@@ -232,6 +232,14 @@ class EventHandler:
         """
         return self._state
 
+    def get_state_raw(self) -> str:
+        """
+        Get the raw state string.
+
+        :return: The raw state string.
+        """
+        return self._state_raw
+
     def on_grbl_event(self, event, *data) -> None:
         """
         Callback for GRBL events from the streamer.
@@ -325,16 +333,17 @@ class GrblControllerFactory:
             grbl_streamer.cnect(port, baudrate)
             logger.info('Waiting for gbrl to initialize..')
             time.sleep(3)
-            # grbl_streamer.poll_start()
             grbl_streamer.incremental_streaming = True
             grbl_streamer.send_immediately("$10=2")  # Force the report format to match what we expect.
 
             connection = GrblStreamerClientConnection(grbl_streamer, event_handler)
-            GrblControllerFactory._instance = ESP32Duino(connection)
-            return GrblControllerFactory._instance
+            instance = ESP32Duino(connection)
+            GrblControllerFactory._instance = instance
+            return instance
         elif type_to_build == 'Mock':
-            GrblControllerFactory._instance = GrblControllerMock()
-            return GrblControllerFactory._instance
+            instance = GrblControllerMock()
+            GrblControllerFactory._instance = instance
+            return instance
         else:
             raise Exception(f'Unknown controller type: {type_to_build}')
 
@@ -372,8 +381,9 @@ class GrblStreamerClientConnection:
         Send a hold command to the streamer.
         """
         logger.trace(f'GrblStreamerClientConnection: Sending message: hold')
-        self._grbl_streamer.send_immediately('!')  # somehow the grbl-streamer hold() function does not work with GRBLHAL
-
+        # somehow the grbl-streamer hold() function does not work with GRBLHAL
+        self._grbl_streamer.send_immediately('!')
+        
     def send(self, message: str) -> None:
         """
         Send a message to the streamer.
@@ -408,6 +418,14 @@ class GrblStreamerClientConnection:
         :return: A GrblMachineState enum value.
         """
         return self._event_handler.get_state()
+
+    def get_state_raw(self) -> str:
+        """
+        Get the raw state from the event handler.
+
+        :return: The raw state string.
+        """
+        return self._event_handler.get_state_raw()
 
     def set_on_state_update_callback(self, callback) -> None:
         """
