@@ -1,9 +1,7 @@
 import configparser
 import sys
 import time
-import threading
 from abc import ABC, abstractmethod
-from threading import Lock
 
 from grbl_streamer import GrblStreamer  # type: ignore
 from loguru import logger
@@ -133,9 +131,14 @@ class GrblControllerMock(IGrblController):
         y_match = re.search(r'Y([-+]?\d*\.?\d+)', message)
         z_match = re.search(r'Z([-+]?\d*\.?\d+)', message)
         
-        if x_match: self._pos_z = float(x_match.group(1))
-        if y_match: self._pos_r = float(y_match.group(1))
-        if z_match: self._pos_t = float(z_match.group(1))
+        if x_match:
+            self._pos_z = float(x_match.group(1))
+
+        if y_match:
+            self._pos_r = float(y_match.group(1))
+
+        if z_match:
+            self._pos_t = float(z_match.group(1))
 
     def send_and_wait_for_move_ready(self, message: str) -> None:
         logger.trace(f'Mocking send and wait: {message}')
@@ -186,7 +189,6 @@ class EventHandler:
         self._state: GrblMachineState = GrblMachineState.IDLE
         self._state_raw: str = "Idle"
 
-        self._state_lock = Lock()
         self._on_state_update_callback = None
 
     def set_on_state_update_callback(self, callback):
@@ -227,8 +229,7 @@ class EventHandler:
 
         :return: A GrblMachineState enum value.
         """
-        with self._state_lock:
-            return self._state
+        return self._state
 
     def on_grbl_event(self, event, *data) -> None:
         """
@@ -241,9 +242,8 @@ class EventHandler:
             self._received_message = 'ok'
         if event == "on_stateupdate":
             if len(data) >= 3:
-                with self._state_lock:
-                    self._state_raw = str(data[0])
-                    self._state = GrblMachineState.from_grbl_mode(data[0])
+                self._state_raw = str(data[0])
+                self._state = GrblMachineState.from_grbl_mode(data[0])
 
                 if isinstance(data[2], tuple):
                     wpos = data[2]
@@ -264,9 +264,8 @@ class EventHandler:
 
         if event == 'on_alarm':
             self._received_message = 'ok'
-            with self._state_lock:
-                self._state_raw = "Alarm"
-                self._state = GrblMachineState.ALARM
+            self._state_raw = "Alarm"
+            self._state = GrblMachineState.ALARM
             logger.error("ERROR: Alarm!")
 
         args = []
@@ -323,13 +322,6 @@ class GrblControllerFactory:
             grbl_streamer.incremental_streaming = True
             grbl_streamer.send_immediately("$10=2")  # Force the report format to match what we expect.
 
-            set_config = config_parser.getboolean(section, 'set_config')
-            if set_config:
-                # TODO read from config file
-                GrblControllerFactory._set_axis_according_to_config(grbl_streamer, config_parser, 'x')
-                GrblControllerFactory._set_axis_according_to_config(grbl_streamer, config_parser, 'y')
-                GrblControllerFactory._set_axis_according_to_config(grbl_streamer, config_parser, 'z')
-
             connection = GrblStreamerClientConnection(grbl_streamer, event_handler)
             return ESP32Duino(connection)  # TODO MPOT check this. Maybe simply rename. Looking at the class diagram this can be much simpler and a few layers of indirection can be removed.
         elif type_to_build == 'Mock':
@@ -337,65 +329,20 @@ class GrblControllerFactory:
         else:
             raise Exception(f'Unknown controller type: {type_to_build}')
 
-    @staticmethod
-    def _set_axis_according_to_config(grbl_streamer, config_parser, axis: str) -> None:
-        """
-        Configure a specific axis on the GRBL streamer based on settings.
-
-        :param grbl_streamer: The GRBL streamer instance.
-        :param config_parser: The configuration parser.
-        :param axis: The axis name ('x', 'y', or 'z').
-        """
-        section = f'grbl_{axis}_axis'
-        steps_per_millimeter = config_parser.getfloat(section, 'steps_per_millimeter')
-        maximum_rate = config_parser.getfloat(section, 'maximum_rate')
-        acceleration = config_parser.getfloat(section, 'acceleration')
-
-        nr = 0  # silence the code analyzer
-        if axis == 'x':
-            nr = 0
-        elif axis == 'y':
-            nr = 1
-        elif axis == 'z':
-            nr = 2
-        else:
-            logger.critical('Unsupported axis in configuration file. Axis found is ' + axis)
-
-        grbl_streamer.send_immediately(f'${100 + nr}={steps_per_millimeter}')
-        grbl_streamer.send_immediately(f'${110 + nr}={maximum_rate}')
-        grbl_streamer.send_immediately(f'${120 + nr}={acceleration}')
-
 
 class GrblStreamerClientConnection:
     """
-    Manages a connection to a GRBL streamer, including polling for status updates.
+    Manages a connection to a GRBL streamer.
     """
     def __init__(self, grbl_streamer: GrblStreamer, event_handler: EventHandler) -> None:
         """
-        Initialize the connection and start the polling thread.
+        Initialize the connection.
 
         :param grbl_streamer: The GRBL streamer instance.
         :param event_handler: The event handler to use.
         """
         self._event_handler = event_handler
         self._grbl_streamer = grbl_streamer
-
-        self._stop_polling = threading.Event()
-        self._polling_thread = threading.Thread(target=self._poll_loop, daemon=True)
-        self._polling_thread.start()
-
-    def _poll_loop(self) -> None:
-        """
-        Polls the GRBL device at 5 Hz (every 0.2 seconds) to get status updates.
-        """
-        logger.debug("Starting GRBL polling thread (5 Hz)")
-        while not self._stop_polling.is_set():
-            try:
-                self._grbl_streamer.send_immediately("?")
-            except Exception as e:
-                logger.error(f"Error in GRBL polling thread: {e}")
-            time.sleep(0.2)
-        logger.debug("GRBL polling thread stopped")
 
     def killalarm(self) -> None:
         """
@@ -416,7 +363,7 @@ class GrblStreamerClientConnection:
         Send a hold command to the streamer.
         """
         logger.trace(f'GrblStreamerClientConnection: Sending message: hold')
-        self._grbl_streamer.hold()
+        self._grbl_streamer.send_immediately('!')  # somehow the grbl-streamer hold() function does not work with GRBLHAL
 
     def send(self, message: str) -> None:
         """
@@ -463,11 +410,8 @@ class GrblStreamerClientConnection:
 
     def close(self) -> None:
         """
-        Close the connection and stop the polling thread.
+        Close the connection.
         """
-        self._stop_polling.set()
-        if self._polling_thread.is_alive():
-            self._polling_thread.join(timeout=1.0)
         self._grbl_streamer.disconnect()
 
 
@@ -551,10 +495,10 @@ class ESP32Duino(IGrblController):
 
     def force_position_update(self) -> None:
         """
-        Force a position update (currently just waits for polling).
+        Force a position update (currently just waits for push updates to catch up).
         """
         logger.trace('Forcing position update.')
-        time.sleep(1)  # I'm polling at 2Hz, so after 1s I should definitely have the correct position
+        time.sleep(0.5)
 
     def _wait_for_idle_state(self) -> None:
         """
@@ -632,7 +576,6 @@ class ESP32Duino(IGrblController):
     def _receive(self) -> str:
         """
         Receive a message from the connection.
-
         :return: The decoded message string.
         """
         result = self._connection.receive()
