@@ -75,16 +75,8 @@ def test_sweep_generator(fs):
     target_lin = DSPUtils.db_to_lin(level_dbfs)
 
     # Normalization in SweepGenerator ensures unity gain when convolved.
-    # So peak_val should be approx 1.0 (relative to target_lin, wait...)
-    # In SweepGenerator: inv /= (peak_val * target_amp + 1e-15) where target_amp is db_to_lin(level_dbfs)
-    # Actually, it normalizes so that peak_val of (S * I) is 1.0 / target_amp? 
-    # Let's re-read: peak_val = np.max(np.abs(np.fft.irfft(S_fft * I_fft, n=Nfft)))
-    # inv /= (peak_val * target_amp + 1e-15)
-    # So the new peak_val will be old_peak_val / (old_peak_val * target_amp) = 1/target_amp.
-    # Then when we multiply by s_fund (which has peak approx 1.0) and inv...
-    # Let's just check if it's a sharp peak.
-
-    assert peak_val > 0.9 / target_lin
+    # So peak_val should be approx 1.0.
+    assert np.isclose(peak_val, 1.0, atol=1e-3)
 
     # PSR of the IR should be high
     psr = peak_val / (np.sort(np.abs(ir))[-100] + 1e-12)  # Use 100th largest as noise floor proxy
