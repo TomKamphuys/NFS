@@ -215,7 +215,7 @@ class SweepGenerator:
 
         # 1. Fundamental (Clean) - Used for generating the Inverse Filter
         phase = w1 * L * (np.exp(t / L) - 1.0)
-        s_fund = np.sin(phase).astype(np.float64)
+        s_fund = (np.sin(phase) * DSPUtils.db_to_lin(self.level_dbfs)).astype(np.float64)
 
         # 2. Generate CLEAN Inverse (Using Time Reversal)
         # We use the clean fundamental for the inverse to avoid "baking in" the distortion 
@@ -224,13 +224,12 @@ class SweepGenerator:
         inv = s_fund[::-1] * envelope  # Time Reversal
 
         # Normalize Inverse in Frequency Domain to ensure unity gain convolution
-        target_amp = DSPUtils.db_to_lin(self.level_dbfs)
         Nfft = int(2 ** np.ceil(np.log2(len(s_fund) + len(inv) - 1)))
         S_fft = np.fft.rfft(s_fund, n=Nfft)
         I_fft = np.fft.rfft(inv, n=Nfft)
         peak_val = np.max(np.abs(np.fft.irfft(S_fft * I_fft, n=Nfft)))
 
-        inv /= (peak_val * target_amp + 1e-15)
+        inv /= (peak_val + 1e-15)
         return s_fund, phase, inv
 
 
@@ -710,9 +709,9 @@ class Audio(IAudio):
             s_composite = self.harmonic_injector.inject(s_fund, phase)
 
         # 2. Normalize Playback Signal
-        target_amp = DSPUtils.db_to_lin(self.cap['sweep_level_dbfs'])
-        max_val = np.max(np.abs(s_composite)) + 1e-12
-        s_play = (s_composite * (target_amp / max_val)).astype(np.float32)
+        # The sweep is already generated at the correct level in sweep_gen.
+        # We only need to ensure s_play is float32 for the audio stream.
+        s_play = s_composite.astype(np.float32)
 
         # Apply a 1ms Hann fade to prevent the step discontinuity "BLIP" at the end
         s_play = DSPUtils.hann_fade(s_play, 1.0, self.hw['fs'], side="both")
@@ -722,10 +721,6 @@ class Audio(IAudio):
         # The resulting IR will inherently show the rolloff of this filter.
         if self.protection_filter:
             s_play = self.protection_filter.apply(s_play)
-            # Re-peak to ensure we hit the target DBFS in the passband.
-            # This prevents the HPF from essentially quieting the whole sweep if fundamental is low.
-            new_max = np.max(np.abs(s_play)) + 1e-12
-            s_play *= (target_amp / new_max)
 
         # 4. Generate Alignment Marker
         # Goal: Generate band-limited marker. Pushing the fundamental frequency well 
@@ -934,9 +929,6 @@ class Audio(IAudio):
             # Apply protection filter if configured
             if self.protection_filter:
                 sine = self.protection_filter.apply(sine)
-                # Re-normalize if filtered
-                new_max = np.max(np.abs(sine)) + 1e-12
-                sine *= (target_amp / new_max)
 
             if use_asio_out:
                 # ASIO mapping: we want to play sine on ch_out_spkr.
@@ -1015,17 +1007,15 @@ class MockInterfaceAudio(Audio):
         if self.harmonic_injector:
             s_composite = self.harmonic_injector.inject(s_fund, phase)
 
-        target_amp = DSPUtils.db_to_lin(self.cap['sweep_level_dbfs'])
-        max_val = np.max(np.abs(s_composite)) + 1e-12
-        s_play = (s_composite * (target_amp / max_val)).astype(np.float32)
+        # The sweep is already generated at the correct level in sweep_gen.
+        # We only need to ensure s_play is float32 for the audio stream.
+        s_play = s_composite.astype(np.float32)
 
         # Apply a 1ms Hann fade to prevent the step discontinuity "BLIP" at the end
         s_play = DSPUtils.hann_fade(s_play, 1.0, self.hw['fs'], side="both")
 
         if self.protection_filter:
             s_play = self.protection_filter.apply(s_play)
-            new_max = np.max(np.abs(s_play)) + 1e-12
-            s_play *= (target_amp / new_max)
 
         marker_single = self.marker_gen.generate()
 
