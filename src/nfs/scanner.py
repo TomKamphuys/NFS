@@ -227,6 +227,9 @@ class ScannerFactory:
         grbl_controller = GrblControllerFactory.create(grbl_section, config_file)
         feed_rate = config_parser.getfloat(section, 'feed_rate')
 
+        # If a scanner instance already exists, we might want to just update its feed_rate
+        # but for simplicity and to follow "reloadable" request, we create a new Scanner
+        # wrapping the SAME grbl_controller (which is a singleton).
         scanner = Scanner(grbl_controller, feed_rate)
 
         return scanner

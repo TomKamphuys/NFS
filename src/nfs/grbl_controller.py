@@ -2,6 +2,7 @@ import configparser
 import sys
 import time
 from abc import ABC, abstractmethod
+from typing import Optional
 
 from grbl_streamer import GrblStreamer  # type: ignore
 from loguru import logger
@@ -231,6 +232,14 @@ class EventHandler:
         """
         return self._state
 
+    def get_state_raw(self) -> str:
+        """
+        Get the raw state string.
+
+        :return: The raw state string.
+        """
+        return self._state_raw
+
     def on_grbl_event(self, event, *data) -> None:
         """
         Callback for GRBL events from the streamer.
@@ -284,6 +293,8 @@ class GrblControllerFactory:
     class based on the type specified in the configuration file. Additional methods
     assist in configuring specific GRBL controller settings like axes configurations.
     """
+    _instance: Optional[IGrblController] = None
+
     @staticmethod
     def create(section: str, config_file: str) -> IGrblController:
         """
@@ -293,6 +304,10 @@ class GrblControllerFactory:
         :param config_file: Path to the configuration file.
         :return: An instance of IGrblController.
         """
+        if GrblControllerFactory._instance is not None:
+            logger.info("Using existing GRBL controller instance.")
+            return GrblControllerFactory._instance
+
         config_parser = configparser.ConfigParser(inline_comment_prefixes="#")
         config_parser.read(config_file)
 
@@ -318,14 +333,17 @@ class GrblControllerFactory:
             grbl_streamer.cnect(port, baudrate)
             logger.info('Waiting for gbrl to initialize..')
             time.sleep(3)
-            # grbl_streamer.poll_start()
             grbl_streamer.incremental_streaming = True
             grbl_streamer.send_immediately("$10=2")  # Force the report format to match what we expect.
 
             connection = GrblStreamerClientConnection(grbl_streamer, event_handler)
-            return ESP32Duino(connection)  # TODO MPOT check this. Maybe simply rename. Looking at the class diagram this can be much simpler and a few layers of indirection can be removed.
+            instance = ESP32Duino(connection)
+            GrblControllerFactory._instance = instance
+            return instance
         elif type_to_build == 'Mock':
-            return GrblControllerMock()
+            instance = GrblControllerMock()
+            GrblControllerFactory._instance = instance
+            return instance
         else:
             raise Exception(f'Unknown controller type: {type_to_build}')
 
@@ -363,8 +381,9 @@ class GrblStreamerClientConnection:
         Send a hold command to the streamer.
         """
         logger.trace(f'GrblStreamerClientConnection: Sending message: hold')
-        self._grbl_streamer.send_immediately('!')  # somehow the grbl-streamer hold() function does not work with GRBLHAL
-
+        # somehow the grbl-streamer hold() function does not work with GRBLHAL
+        self._grbl_streamer.send_immediately('!')
+        
     def send(self, message: str) -> None:
         """
         Send a message to the streamer.
@@ -399,6 +418,14 @@ class GrblStreamerClientConnection:
         :return: A GrblMachineState enum value.
         """
         return self._event_handler.get_state()
+
+    def get_state_raw(self) -> str:
+        """
+        Get the raw state from the event handler.
+
+        :return: The raw state string.
+        """
+        return self._event_handler.get_state_raw()
 
     def set_on_state_update_callback(self, callback) -> None:
         """
