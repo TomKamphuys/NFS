@@ -327,7 +327,7 @@ class GrblControllerFactory:
         elif type_to_build == 'Mock':
             return GrblControllerMock()
         else:
-            raise Exception(f'Unknown controller type: {type}')
+            raise Exception(f'Unknown controller type: {type_to_build}')
 
 
 class GrblStreamerClientConnection:

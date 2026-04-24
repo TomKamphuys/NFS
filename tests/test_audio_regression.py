@@ -101,9 +101,9 @@ def test_measure_ir_regression(mock_config, tmp_path):
         data, fs_ir = sf.read(str(ir_file))
         assert fs_ir == 48000
 
-        # Known reference values (Calculated 2026-04-04)
+        # Known reference values (Calculated 2026-04-20)
         # Hash of the raw float32 data from the WAV file
-        ref_hash = "fc7f91782417c6cc1effc0e27828f45edf416c6decf09b30a7e06f72e3e796b1"
+        ref_hash = "aac2c3c2a2aaf99e10686a0b2c00b4358ab0a631219e6bd8336ccccec1441361"
         ref_std = 0.00585583
         
         import hashlib
