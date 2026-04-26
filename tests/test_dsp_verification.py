@@ -81,55 +81,59 @@ def test_verification_warnings():
     assert any("POOR ALIGNMENT" in w for w in warnings)
 
 
-def test_integration_with_mock_audio():
+def test_integration_with_mock_audio(tmp_path):
     from nfs.audio import AudioFactory
     import configparser
+    from nfs.datatypes import CylindricalPosition
 
-    config = configparser.ConfigParser()
-    config['audio'] = {
-        'mode': 'mock_interface',
-        'fs': '48000',
-        'in_dev': '0',
-        'out_dev': '0',
-        'in_ch_mic': '1',
-        'in_ch_loop': '0',
-        'out_ch_spkr': '0',
-        'out_ch_ref': '1',
-        'blocksize': '1024',
-        'wasapi_exclusive': 'False'
-    }
-
-    config['sweep'] = {
-        'sweep_dur_s': '0.5',
-        'sweep_level_dbfs': '-10',
-        'num_sweeps': '1',
-        'pre_sil_ms': '50',
-        'post_sil_ms': '50',
-        'mic_tail_taper_ms': '10',
-        'align_to_first_marker': 'True',
-        'debug_saves': 'True',
-        'H2_TEST_DB': 'None',
-        'H3_TEST_DB': 'None',
-        'PROTECT_HPF_HZ': '0',
-        'PROTECT_HPF_ORDER': '4',
-        'PROTECT_HPF_PHASE': 'min'
-    }
-
-    config['marker'] = {
-        'marker_dur_ms': '50',
-        'marker_f_lo': '1000',
-        'marker_f_hi': '5000',
-        'marker_level_dbfs': '-6'
-    }
-
-    config_path = "tests/dsp_test_config.ini"
-    with open(config_path, "w") as f:
-        config.write(f)
+    # Change working directory to tmp_path to ensure isolation and proper directory creation
+    old_cwd = os.getcwd()
+    os.chdir(tmp_path)
 
     try:
-        audio = AudioFactory.create(config_path)
-        from nfs.datatypes import CylindricalPosition
-        pos = CylindricalPosition(100, 0, 10)
+        config = configparser.ConfigParser()
+        config['audio'] = {
+            'mode': 'mock_interface',
+            'fs': '48000',
+            'in_dev': '0',
+            'out_dev': '0',
+            'in_ch_mic': '1',
+            'in_ch_loop': '0',
+            'out_ch_spkr': '0',
+            'out_ch_ref': '1',
+            'blocksize': '1024',
+            'wasapi_exclusive': 'False'
+        }
+
+        config['sweep'] = {
+            'sweep_dur_s': '0.5',
+            'sweep_level_dbfs': '-10',
+            'num_sweeps': '1',
+            'pre_sil_ms': '50',
+            'post_sil_ms': '50',
+            'mic_tail_taper_ms': '10',
+            'align_to_first_marker': 'True',
+            'debug_saves': 'True',
+            'H2_TEST_DB': 'None',
+            'H3_TEST_DB': 'None',
+            'PROTECT_HPF_HZ': '0',
+            'PROTECT_HPF_ORDER': '4',
+            'PROTECT_HPF_PHASE': 'min'
+        }
+
+        config['marker'] = {
+            'marker_dur_ms': '50',
+            'marker_f_lo': '1000',
+            'marker_f_hi': '5000',
+            'marker_level_dbfs': '-6'
+        }
+
+        config_path = tmp_path / "dsp_test_config.ini"
+        with open(config_path, "w") as f:
+            config.write(f)
+
+        audio = AudioFactory.create(str(config_path))
+        pos = CylindricalPosition(100.0, 0.0, 10.0)
 
         # This will trigger measure_ir -> _run_sweep -> metrics calculation
         # Since it's MockInterfaceAudio, it should have good metrics
@@ -137,8 +141,9 @@ def test_integration_with_mock_audio():
 
         # Check if metrics file was created
         # The filename depends on the naming convention (default: dimitri)
-        metrics_file = Path("Recordings/debug/DSP_TEST_r100_ph0_z10_metrics.json")
-        assert metrics_file.exists()
+        # r100.0 -> r100p0, ph0.0 -> ph0p0, z10.0 -> z10p0
+        metrics_file = Path("Recordings/debug/DSP_TEST_r100p0_ph0p0_z10p0_metrics.json")
+        assert metrics_file.exists(), f"Metrics file not found at {metrics_file}. Files: {list(Path('Recordings/debug').glob('*'))}"
 
     finally:
-        pass
+        os.chdir(old_cwd)

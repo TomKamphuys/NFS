@@ -5,7 +5,7 @@ from nfs.nfs import NearFieldScannerFactory
 from nfs.scanner import ScannerFactory
 
 
-def test_full_system_mock_integration():
+def test_full_system_mock_integration(tmp_path):
     """
     Test a full measurement set using mock audio and mock GRBL controller.
     This verifies the integration between:
@@ -16,14 +16,20 @@ def test_full_system_mock_integration():
     - MotionManagerFactory
     - Plugin loader
     """
-    config_file = "tests/full_system_mock_config.ini"
-    log_file = "tests/full_system_test_positions.csv"
-
-    # Ensure log file doesn't exist from previous runs
-    if os.path.exists(log_file):
-        os.remove(log_file)
+    # Change working directory to tmp_path for isolation
+    old_cwd = os.getcwd()
+    os.chdir(tmp_path)
 
     try:
+        # 0. Copy the config file and ensure needed directories exist
+        test_dir = os.path.dirname(os.path.abspath(__file__))
+        original_config = os.path.join(test_dir, "full_system_mock_config.ini")
+        config_file = "full_system_mock_config.ini"
+        import shutil
+        shutil.copy(original_config, config_file)
+
+        log_file = "full_system_test_positions.csv"
+
         # 1. Create the scanner using the factory
         scanner = ScannerFactory.create(config_file)
 
@@ -57,9 +63,7 @@ def test_full_system_mock_integration():
         nfs.shutdown()
 
     finally:
-        # Cleanup
-        if os.path.exists(log_file):
-            os.remove(log_file)
+        os.chdir(old_cwd)
 
 
 if __name__ == "__main__":
