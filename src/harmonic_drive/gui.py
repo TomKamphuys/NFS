@@ -24,6 +24,7 @@ from nfs.logging_config import setup_logging
 
 # --- 7-segment look: load digital-ish font ---
 ui.add_head_html('<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap" rel="stylesheet">', shared=True)
+ui.add_head_html('<link rel="icon" type="image/png" href="/images/icon.png">', shared=True)
 
 # Global state
 scanner_app = None
@@ -52,22 +53,40 @@ class ScannerApp:
         self.greyable_buttons = []
         self.home_state = {'ok': False}
         self.log_handler = None
+        self._load_lock = threading.Lock()
+        self._is_loaded = False
 
-    def load_config(self):
-        logger.info(f"(Re)loading configuration from {self.config_file}")
-        setup_logging(self.config_file, project_name="HarmonicDrive")
+    def load_config(self, status_callback=None):
+        with self._load_lock:
+            if self._is_loaded:
+                return
+            
+            def update_status(msg):
+                logger.info(msg)
+                if status_callback:
+                    status_callback(msg)
 
-        # Create or reuse scanner
-        self.scanner = ScannerFactory.create(self.config_file)
-        # Create or reuse NFS
-        self.nfs = NearFieldScannerFactory.create(self.scanner, self.config_file)
+            update_status("(Re)loading configuration")
+            setup_logging(self.config_file, project_name="HarmonicDrive")
+    
+            # Create or reuse scanner
+            update_status("Connecting to GRBL")
+            self.scanner = ScannerFactory.create(self.config_file)
+            
+            # Create or reuse NFS
+            update_status("Initializing Near Field Scanner & reading points")
+            self.nfs = NearFieldScannerFactory.create(self.scanner, self.config_file)
 
-        # Re-register callback to the new scanner instance
-        if self.scanner:
-            self.scanner.set_on_state_update_callback(update_scanner_position)
+            # Re-register callback to the new scanner instance
+            if self.scanner:
+                self.scanner.set_on_state_update_callback(update_scanner_position)
+            
+            self._is_loaded = True
 
     def reload_config_ui(self):
         try:
+            with self._load_lock:
+                self._is_loaded = False
             self.load_config()
             ui.notify("Configuration reloaded successfully", type='positive')
         except Exception as e:
@@ -396,10 +415,17 @@ def update_plot():
 
 
 def update_ir_fr_plots(ir_plot_container):
-    rec_dir = Path('./Recordings')
-    if not rec_dir.exists():
-        return
-    wav_files = list(rec_dir.glob('*_ir.wav'))
+    # Find all _ir.wav files in current Recordings or any measurement session
+    search_dirs = [Path('./Recordings')]
+    measurement_dir = Path('./measurements')
+    if measurement_dir.exists():
+        search_dirs.extend(measurement_dir.glob('*/Recordings'))
+
+    wav_files = []
+    for d in search_dirs:
+        if d.exists():
+            wav_files.extend(list(d.glob('*_ir.wav')))
+
     if not wav_files:
         return
     latest_file = max(wav_files, key=lambda f: f.stat().st_mtime)
@@ -434,7 +460,7 @@ def update_ir_fr_plots(ir_plot_container):
         ax1.grid(True, alpha=0.3)
         ax2 = f.add_subplot(2, 1, 2)
         ax2.semilogx(freqs, mag_db)
-        ax2.set_title('Frequency Response')
+        ax2.set_title(f'Frequency Response: {latest_file.name}')
         ax2.set_xlabel('Frequency (Hz)')
         ax2.set_ylabel('Magnitude (dB)')
         ax2.set_xlim(20, 20000)
@@ -447,13 +473,17 @@ async def watch_file(main_plot, ir_plot):
     measurement_dir = Path('./measurements')
     last_mtime = 0
     last_file_path = None
+    last_ir_mtime = 0
+
     while True:
         try:
+            # Check for CSV updates (Scanner position/grid)
             all_csv_files = list(measurement_dir.glob('*/measurement_points.csv'))
             root_csv = Path('measurement_points.csv')
             if root_csv.exists(): all_csv_files.append(root_csv)
             root_pos_csv = Path('measurement_positions.csv')
             if root_pos_csv.exists(): all_csv_files.append(root_pos_csv)
+            
             if all_csv_files:
                 current_file_path = max(all_csv_files, key=lambda f: f.stat().st_mtime)
                 current_mtime = current_file_path.stat().st_mtime
@@ -462,6 +492,24 @@ async def watch_file(main_plot, ir_plot):
                     last_file_path = current_file_path
                     update_plot()
                     update_ir_fr_plots(ir_plot)
+
+            # Check for IR updates (New measurements)
+            search_dirs = [Path('./Recordings')]
+            if measurement_dir.exists():
+                search_dirs.extend(measurement_dir.glob('*/Recordings'))
+            
+            latest_ir_mtime = 0
+            for d in search_dirs:
+                if d.exists():
+                    wavs = list(d.glob('*_ir.wav'))
+                    if wavs:
+                        mtime = max(f.stat().st_mtime for f in wavs)
+                        latest_ir_mtime = max(latest_ir_mtime, mtime)
+            
+            if latest_ir_mtime > last_ir_mtime:
+                last_ir_mtime = latest_ir_mtime
+                update_ir_fr_plots(ir_plot)
+
             await asyncio.sleep(1)
         except asyncio.CancelledError:
             break
@@ -537,6 +585,14 @@ def update_scanner_position(pos=None, state=None):
 
 def add_jog_row(axis: str, left_label: str, right_label: str, unit: str,
                 left_moves: list, right_moves: list):
+    def _execute_move(method_name: str, value: float):
+        scanner = get_scanner()
+        if not scanner:
+            ui.notify("Scanner not initialized", type='warning')
+            return
+        method = getattr(scanner, method_name)
+        safe_move(method, value)
+
     with ui.column().classes('w-full'):
         with ui.element('div').classes('jog-grid'):
             ui.label('')
@@ -545,12 +601,12 @@ def add_jog_row(axis: str, left_label: str, right_label: str, unit: str,
             ui.label(right_label).classes('jog-hdr jog-hdr-right')
         with ui.element('div').classes('jog-grid'):
             ui.html(f'<div class="jog-axis">{axis}:<div class="jog-unit">{unit}</div></div>')
-            for value, func in left_moves:
-                b = ui.button(f'{value}', on_click=log_button_click(f'{axis} {left_label} {value}{unit}', lambda v=value, f=func: safe_move(f, v))).classes('jog-btn')
+            for value, method_name in left_moves:
+                b = ui.button(f'{value}', on_click=log_button_click(f'{axis} {left_label} {value}{unit}', lambda v=value, m=method_name: _execute_move(m, v))).classes('jog-btn')
                 scanner_app.greyable_buttons.append(b)
             ui.button('STOP', color='red', on_click=log_button_click(f'{axis} STOP (HOLD)', lambda: run.io_bound(hold_scanner))).classes('jog-stop')
-            for value, func in right_moves:
-                b = ui.button(f'{value}', on_click=log_button_click(f'{axis} {right_label} {value}{unit}', lambda v=value, f=func: safe_move(f, v))).classes('jog-btn')
+            for value, method_name in right_moves:
+                b = ui.button(f'{value}', on_click=log_button_click(f'{axis} {right_label} {value}{unit}', lambda v=value, m=method_name: _execute_move(m, v))).classes('jog-btn')
                 scanner_app.greyable_buttons.append(b)
 
 
@@ -558,6 +614,56 @@ def add_jog_row(axis: str, left_label: str, right_label: str, unit: str,
 def main_page():
     global log_handler, play_button, level_input, freq_input, dur_input, pos_r, pos_t, pos_z, pos_state, plot, fig, home_button, ir_fr_plot, fig_ir_fr
     
+    with ui.element('div').style('position: fixed; top: 25%; left: 25%; width: 50%; height: 50%; z-index: 9999; background: transparent; opacity: 1;') as splash:
+        ui.image('/images/splash.png').style('width: 100%; height: 100%; object-fit: cover; position: absolute; top: 0; left: 0;')
+        with ui.column().classes('w-full items-start justify-end h-full p-8 relative'):
+            with ui.row().classes('items-center'):
+                status_label = ui.label('Initializing').classes('text-xl font-bold text-white shadow-sm')
+                dots_label = ui.label('.').classes('text-xl font-bold text-white')
+            
+            def update_dots():
+                dots_label.set_text('.' * ((len(dots_label.text) % 3) + 1))
+            ui.timer(0.5, update_dots)
+
+    async def finish_splash():
+        ui.timer(2.0, lambda: splash.style('transition: opacity 1s; opacity: 0;'))
+        def safe_delete():
+            try:
+                splash.delete()
+            except Exception:
+                pass
+        ui.timer(3.0, safe_delete)
+
+    async def load_app():
+        try:
+            # Check if already loaded to avoid multiple splash screen sequences if triggered redundantly
+            if scanner_app._is_loaded:
+                status_label.set_text("Ready!")
+                await finish_splash()
+                return
+
+            # Run load_config in a thread to avoid blocking the event loop
+            await run.io_bound(scanner_app.load_config, lambda msg: status_label.set_text(msg))
+            status_label.set_text("Ready!")
+            
+            # Register initial callback (now that scanner exists)
+            if get_scanner():
+                get_scanner().set_on_state_update_callback(update_scanner_position)
+            
+            # Update plots if NFS is ready
+            if get_nfs():
+                update_ir_fr_plots(ir_fr_plot)
+                
+        except Exception as e:
+            logger.error(f"Initialization error: {e}")
+            status_label.set_text(f"Error: {e}")
+            ui.notify(f"Initialization error: {e}", type='negative')
+        finally:
+            await finish_splash()
+
+    # Start loading as soon as we connect
+    ui.timer(0, load_app, once=True)
+
     log_dialog = ui.dialog().props('full-width')
     with log_dialog, ui.card().classes('w-full flex flex-col').style('height: 80vh; resize: both; overflow: auto; min-height: 400px;'):
         with ui.row().classes('w-full justify-between items-center'):
@@ -568,9 +674,18 @@ def main_page():
     with ui.splitter(value=50).classes('w-full h-screen items-stretch') as splitter:
         with splitter.before:
             with ui.column().classes('w-full h-full min-w-0 overflow-auto px-2 py-2'):
-                add_jog_row(axis='PHI', left_label='CW', right_label='CCW', unit='Deg', left_moves=[(120, get_scanner().rotate_cw), (60, get_scanner().rotate_cw), (10, get_scanner().rotate_cw), (1, get_scanner().rotate_cw)], right_moves=[(1, get_scanner().rotate_ccw), (10, get_scanner().rotate_ccw), (60, get_scanner().rotate_ccw), (120, get_scanner().rotate_ccw)])
-                add_jog_row(axis='R', left_label='IN', right_label='OUT', unit='mm', left_moves=[(120, get_scanner().move_in), (60, get_scanner().move_in), (10, get_scanner().move_in), (1, get_scanner().move_in)], right_moves=[(1, get_scanner().move_out), (10, get_scanner().move_out), (60, get_scanner().move_out), (120, get_scanner().move_out)])
-                add_jog_row(axis='Z', left_label='DOWN', right_label='UP', unit='mm', left_moves=[(120, get_scanner().move_down), (60, get_scanner().move_down), (10, get_scanner().move_down), (1, get_scanner().move_down)], right_moves=[(1, get_scanner().move_up), (10, get_scanner().move_up), (60, get_scanner().move_up), (120, get_scanner().move_up)])
+                with ui.row().classes('w-full items-start gap-4 mb-4'):
+                    with ui.column().classes('flex-1'):
+                        add_jog_row(axis='PHI', left_label='CW', right_label='CCW', unit='Deg',
+                                    left_moves=[(120, 'rotate_cw'), (60, 'rotate_cw'), (10, 'rotate_cw'), (1, 'rotate_cw')],
+                                    right_moves=[(1, 'rotate_ccw'), (10, 'rotate_ccw'), (60, 'rotate_ccw'), (120, 'rotate_ccw')])
+                        add_jog_row(axis='R', left_label='IN', right_label='OUT', unit='mm',
+                                    left_moves=[(120, 'move_in'), (60, 'move_in'), (10, 'move_in'), (1, 'move_in')],
+                                    right_moves=[(1, 'move_out'), (10, 'move_out'), (60, 'move_out'), (120, 'move_out')])
+                        add_jog_row(axis='Z', left_label='DOWN', right_label='UP', unit='mm',
+                                    left_moves=[(120, 'move_down'), (60, 'move_down'), (10, 'move_down'), (1, 'move_down')],
+                                    right_moves=[(1, 'move_up'), (10, 'move_up'), (60, 'move_up'), (120, 'move_up')])
+                    ui.image('/images/splash.png').classes('w-64 rounded-lg shadow-lg self-center')
 
                 async def _wait_for_home_settle(timeout_s: float = 5.0) -> bool:
                     deadline = time.time() + timeout_s
@@ -589,14 +704,14 @@ def main_page():
 
                 with ui.element('div').classes('cmd-row w-full justify-start mt-1'):
                     home_button = ui.button('HOME', color='orange', on_click=log_button_click('Home', home_and_update)).classes('cmd-btn')
-                    ui.button('Clear\nAlarm', on_click=log_button_click('Clear Alarm', lambda: run.io_bound(get_scanner().clear_alarm))).classes('cmd-btn cmd-btn-blue')
-                    ui.button('Soft\nReset', on_click=log_button_click('Soft Reset', lambda: run.io_bound(get_scanner().softreset))).classes('cmd-btn cmd-btn-blue')
+                    ui.button('Clear\nAlarm', on_click=log_button_click('Clear Alarm', lambda: run.io_bound(get_scanner().clear_alarm if get_scanner() else None))).classes('cmd-btn cmd-btn-blue')
+                    ui.button('Soft\nReset', on_click=log_button_click('Soft Reset', lambda: run.io_bound(get_scanner().softreset if get_scanner() else None))).classes('cmd-btn cmd-btn-blue')
                     ui.button('REHOME', on_click=log_button_click('ReHome', lambda: safe_move(rehome))).classes('cmd-btn cmd-btn-blue')
-                    ui.button('HOLD', color='red', on_click=log_button_click('Hold', lambda: run.io_bound(get_scanner().hold))).classes('cmd-btn')
+                    ui.button('HOLD', color='red', on_click=log_button_click('Hold', lambda: run.io_bound(get_scanner().hold if get_scanner() else None))).classes('cmd-btn')
 
                 with ui.button_group():
                     height_input = ui.number(label='Height Offset (mm)', value=0, format='%.2f')
-                    ui.button('Set height offset', on_click=log_button_click('Set height offset', lambda: run.io_bound(get_scanner().set_speaker_center_above_stool, height_input.value)))
+                    ui.button('Set height offset', on_click=log_button_click('Set height offset', lambda: run.io_bound(get_scanner().set_speaker_center_above_stool if get_scanner() else None, height_input.value)))
                 scanner_app.greyable_buttons.append(ui.button('Zero NFS', color='orange', on_click=log_button_click('Zero NFS', lambda: zero_nfs_then_apply_height_offset(height_input.value))))
 
                 with ui.button_group():
@@ -669,12 +784,8 @@ def main_page():
                 ui.timer(0.5, tail_scanner_log)
 
     ui.timer(1.0, lambda: watch_file(plot, ir_fr_plot))
-    if get_nfs():
-        update_ir_fr_plots(ir_fr_plot)
     
-    # Register initial callback
-    if get_scanner():
-        get_scanner().set_on_state_update_callback(update_scanner_position)
+    # Initialization is now handled by load_app in main_page()
 
 
 def main():
@@ -685,7 +796,6 @@ def main():
     config_file = args.config
 
     scanner_app = ScannerApp(config_file)
-    scanner_app.load_config()
 
     log_handler = LogBuffer()
     scanner_app.log_handler = log_handler
@@ -695,7 +805,7 @@ def main():
     if os.path.exists(static_images_path):
         app.add_static_files('/images', static_images_path)
 
-    ui.run(reload=False, title='HarmonicDrive', favicon='/images/HarmonicDrive.png' if os.path.exists(os.path.join(static_images_path, 'HarmonicDrive.png')) else None)
+    ui.run(reload=False, title='HALS', favicon=os.path.join(static_images_path, 'icon.png') if os.path.exists(os.path.join(static_images_path, 'icon.png')) else None)
 
 
 if __name__ in {"__main__", "__mp_main__"}:

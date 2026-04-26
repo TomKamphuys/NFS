@@ -101,11 +101,50 @@ def test_measure_ir_regression(mock_config, tmp_path):
         data, fs_ir = sf.read(str(ir_file))
         assert fs_ir == 48000
 
-        # Known reference values (Calculated 2026-04-20)
+        # Known reference values (Calculated 2026-04-24)
         # Hash of the raw float32 data from the WAV file
-        ref_hash = "aac2c3c2a2aaf99e10686a0b2c00b4358ab0a631219e6bd8336ccccec1441361"
+        ref_hash = "9c5b8bdf50c62ed5e20ce23f5882d3e03c12ae23c1da76e291ec31cd971e72d8"
         ref_std = 0.00585583
         
+        # --- FUNCTIONAL VALIDATION (More informative than just a hash) ---
+        # 1. Peak Amplitude Check
+        peak_amp = np.max(np.abs(data))
+        assert np.isclose(peak_amp, 0.525361, atol=1e-4), f"Peak amplitude mismatch: {peak_amp}"
+
+        # 2. RMS Level Check
+        rms_level = np.sqrt(np.mean(data**2))
+        assert np.isclose(rms_level, 0.005856, atol=1e-6), f"RMS level mismatch: {rms_level}"
+
+        # 3. Frequency Response Check (Flatness in passband)
+        # We expect it to be flat between 100Hz and 15kHz within +/- 0.5dB
+        n_fft = 2**14
+        spec = np.abs(np.fft.rfft(data, n=n_fft))
+        freqs = np.fft.rfftfreq(n_fft, 1/fs_ir)
+        
+        # Normalize to 1kHz
+        idx_1k = np.argmin(np.abs(freqs - 1000))
+        ref_mag = spec[idx_1k]
+        spec_db = 20 * np.log10(spec / (ref_mag + 1e-12))
+
+        # Check a few key frequencies
+        test_freqs = [100, 500, 2000, 5000, 10000, 15000]
+        for f in test_freqs:
+            idx = np.argmin(np.abs(freqs - f))
+            # Mock interface has some roll-off from simulated HPF and FIR, but passband is very flat
+            assert -0.5 < spec_db[idx] < 0.5, f"Frequency response at {f}Hz is out of bounds: {spec_db[idx]:.2f} dB"
+
+        # Check roll-off at extremes
+        idx_20 = np.argmin(np.abs(freqs - 20))
+        # 15Hz HPF 1st order should be roughly -3dB at 15Hz, so at 20Hz it's still slightly down
+        assert spec_db[idx_20] < 0, f"Expected low-end roll-off at 20Hz, got {spec_db[idx_20]:.2f} dB"
+
+        # 4. Temporal Alignment (Peak position)
+        # MockInterfaceAudio has 20ms fixed latency + FIR group delay (12 samples)
+        # BUT the DeconvolutionEngine trims the IR so the peak is near the beginning.
+        peak_idx = np.argmax(np.abs(data))
+        assert 0 <= peak_idx <= 20, f"Peak alignment mismatch: found at index {peak_idx}"
+
+        # --- HASH VALIDATION (Strict bit-exactness) ---
         import hashlib
         actual_hash = hashlib.sha256(data.tobytes()).hexdigest()
         

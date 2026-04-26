@@ -1,7 +1,7 @@
-# NFS — Near Field Scanner
+# HALS — Holographic Acoustic Loudspeaker Scanner
 
 <p align="center">
-  <img src="images/NFS.png" alt="Near Field Scanner" width="600"/>
+  <img src="images/splash.png" alt="Holographic Acoustic Loudspeaker Scanner" width="600"/>
 </p>
 
 A Python-based **Near Field Scanner** for automated acoustic impulse response measurements. The system orchestrates a 3-axis CNC rig (typically GRBL or FluidNC based) 
@@ -39,8 +39,6 @@ NFS/
 ├── src/
 │   ├── harmonic_drive/ # GUI Application (HarmonicDrive)
 │   │   ├── gui.py             # Main GUI entry point
-│   │   ├── list_sound_devices.py
-│   │   └── ...                # GUI utilities
 │   └── nfs/            # Core Library
 │       ├── audio.py           # Audio capture and DSP
 │       ├── datatypes.py       # Shared data structures
