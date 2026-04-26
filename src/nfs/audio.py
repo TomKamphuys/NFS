@@ -13,8 +13,9 @@ Key Features:
     * Time Reversal Deconvolution: The inverse filter is generated via 
       time-reversal of the excitation signal (with amplitude envelope 
       correction), ensuring maximal SNR out of band.
-    * Driver Protection: Configurable High-Pass Filter (Minimum or Linear Phase) 
-      applied to the playback signal to protect tweeters/drivers from LF damage.
+    * Driver Protection: Configurable High-Pass Filter (Minimum Phase) applied 
+      to the playback signal to protect tweeters/drivers from LF damage, with 
+      optional magnitude-capped inverse filtering during deconvolution.
     * Harmonic Injection: Debug feature to inject artificial H2/H3 into the 
       sweep to verify distortion analysis logic.
     * Robust Alignment: Uses a Barker-13 code for precise temporal alignment. 
@@ -215,7 +216,7 @@ class SweepGenerator:
 
         # 1. Fundamental (Clean) - Used for generating the Inverse Filter
         phase = w1 * L * (np.exp(t / L) - 1.0)
-        s_fund = (np.sin(phase) * DSPUtils.db_to_lin(self.level_dbfs)).astype(np.float64)
+        s_fund = np.sin(phase).astype(np.float64)
 
         # 2. Generate CLEAN Inverse (Using Time Reversal)
         # We use the clean fundamental for the inverse to avoid "baking in" the distortion 
@@ -265,62 +266,68 @@ class HarmonicInjector:
 
 
 class ProtectionFilter:
-    """Applies MIN or LIN phase HPF to protect drivers."""
+    """Applies MIN phase HPF to protect drivers, and generates a regularized inverse mask."""
 
-    def __init__(self, fs: int, freq_hz: float, order: int, phase_mode: str):
+    def __init__(self, fs: int, freq_hz: float, order: int, hpf_correction: bool = False, hpf_corr_db_cap: float = 12.0):
         """
         Initialize the protection filter.
 
         :param fs: Sample rate (Hz).
         :param freq_hz: Cutoff frequency (Hz).
         :param order: Filter order.
-        :param phase_mode: 'min' for minimum phase, 'linear' for linear phase.
+        :param hpf_correction: If True, generates an inverse mask for deconvolution.
+        :param hpf_corr_db_cap: Maximum magnitude gain applied during correction.
         """
         self.fs = fs
         self.freq_hz = freq_hz
         self.order = order
-        self.phase_mode = phase_mode
+        self.hpf_correction = hpf_correction
+        self.hpf_corr_db_cap = hpf_corr_db_cap
+
+        if self.freq_hz is not None and self.freq_hz > 0:
+            # Minimum Phase: Standard IIR Butterworth (SOS implementation for stability)
+            self.sos = scipy.signal.butter(self.order, self.freq_hz, btype='hp', fs=self.fs, output='sos')
+        else:
+            self.sos = None
 
     def apply(self, sig: np.ndarray) -> np.ndarray:
-        """
-        Applies a High Pass Protection Filter to the signal to ensure driver safety.
-        
-        This filter is applied ONLY to the playback signal, not the inverse filter.
-        """
-        if self.freq_hz is None or self.freq_hz <= 0:
+        """Applies the High Pass Protection Filter to the playback signal."""
+        if self.sos is None:
             return sig
 
-        logger.info(f"► Applying Protection HPF: {self.freq_hz}Hz, Order={self.order}, Phase={self.phase_mode}")
+        logger.info(f"► Applying Protection HPF: {self.freq_hz}Hz, Order={self.order} (Min Phase)")
+        return scipy.signal.sosfilt(self.sos, sig).astype(np.float32)
 
-        if self.phase_mode == "MIN":
-            # Minimum Phase: Standard IIR Butterworth (SOS implementation for stability)
-            sos = scipy.signal.butter(self.order, self.freq_hz, btype='hp', fs=self.fs, output='sos')
-            return scipy.signal.sosfilt(sos, sig).astype(np.float32)
+    def get_correction_mask(self, n_bins: int) -> np.ndarray:
+        """
+        Generates the frequency-domain correction mask for the deconvolution engine.
+        Applies full phase inversion but hard-caps the magnitude gain.
+        """
+        if self.sos is None or not self.hpf_correction:
+            return np.ones(n_bins, dtype=np.complex64)
 
-        elif self.phase_mode == "LIN":
-            # Linear Phase: Frequency Domain Synthesis (Zero Phase)
-            # We construct the exact Butterworth Magnitude response and apply it without phase shift.
-            # This ensures the slope order is exactly as requested (e.g., 1st order = 6dB/oct).
-            # Note: Standard sosfiltfilt would double the effective order; this method does not.
-            n = len(sig)
-            Nfft = int(2 ** np.ceil(np.log2(n + self.fs)))  # Pad generously to avoid time-domain wrap-around artifacts
-            X = np.fft.rfft(sig, n=Nfft)
-            freqs = np.fft.rfftfreq(Nfft, d=1.0 / self.fs)
+        logger.info(f"► Generating HPF Correction Mask (Max Gain: +{self.hpf_corr_db_cap}dB)")
 
-            safe_f = np.maximum(freqs, 1e-9)
+        # 1. Calculate the exact complex frequency response of the applied IIR filter
+        _, H = scipy.signal.sosfreqz(self.sos, worN=n_bins, fs=self.fs)
 
-            # Butterworth Magnitude: |H(f)| = 1 / sqrt(1 + (fc/f)^(2*N))
-            mag = 1.0 / np.sqrt(1.0 + (self.freq_hz / safe_f) ** (2 * self.order))
-            mag[0] = 0.0  # Strict DC kill
+        # 2. Full Phase Inversion (No penalty to SNR)
+        phase_inv = np.exp(-1j * np.angle(H))
 
-            # Apply Magnitude Mask (Phase remains 0 for the filter -> Linear Phase overall)
-            X_filtered = X * mag
-            y = np.fft.irfft(X_filtered, n=Nfft)
-            return y[:n].astype(np.float32)
+        # 3. Capped Magnitude Inversion
+        mag_h = np.abs(H)
+        inv_mag = 1.0 / np.maximum(mag_h, 1e-12)  # Avoid divide by zero
 
-        else:
-            logger.warning(f"Unknown phase mode '{self.phase_mode}', skipping protection filter.")
-            return sig
+        max_gain_lin = DSPUtils.db_to_lin(self.hpf_corr_db_cap)
+        inv_mag_capped = np.minimum(inv_mag, max_gain_lin)
+
+        # 4. Combine Phase and Magnitude
+        H_corr = (inv_mag_capped * phase_inv).astype(np.complex64)
+
+        # 5. Safety kill at exact DC (0 Hz) to prevent any baseline wander blowout
+        H_corr[0] = 0.0 + 0.0j
+
+        return H_corr
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -487,7 +494,7 @@ class DeconvolutionEngine:
         """
         self.fs = fs
 
-    def process_ir(self, mic_data: np.ndarray, inv_data: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    def process_ir(self, mic_data: np.ndarray, inv_data: np.ndarray, protection_filter: Optional[ProtectionFilter] = None) -> Tuple[np.ndarray, np.ndarray]:
         """
         Performs deconvolution to extract the Impulse Response.
         
@@ -509,30 +516,40 @@ class DeconvolutionEngine:
         Y = np.fft.rfft(mic_data, n=Nfft)
         I = np.fft.rfft(inv_data, n=Nfft)
 
+        # --- Apply HPF Correction (If active) ---
+        if protection_filter:
+            hpf_mask = protection_filter.get_correction_mask(len(I))
+            I = I * hpf_mask
+
         # --- Spectral Mask Generation ---
         freqs = np.fft.rfftfreq(Nfft, d=1.0 / self.fs)
 
-        # LF Mask - Standard Butterworth @ 5Hz (Fixed per requirement)
+        # 1. LF Mask - Standard Butterworth @ 5Hz (Fixed per requirement)
         safe_freqs = np.maximum(freqs, 1e-9)
         lf_mask = 1.0 / np.sqrt(1.0 + (5.0 / safe_freqs) ** 2)
         lf_mask[0] = 0.0
 
-        # HF Mask (Taper near Nyquist to avoid ringing)
-        nyquist = self.fs / 2.0
-        f_hf_start = 20000 if self.fs <= 48000 else 24000
-        f_hf_end = nyquist * 0.88
+        # 2. HF Mask (Taper near Nyquist to avoid ringing)
+        # 44.1kHz starts at 20kHz; 48kHz+ starts at 22kHz
+        f_hf_start = 20000 if self.fs < 48000 else 22000
 
         hf_mask = np.ones_like(freqs)
         idx_hf_start = np.searchsorted(freqs, f_hf_start)
-        idx_hf_end = np.searchsorted(freqs, f_hf_end)
+        
+        # Target the Nyquist bin directly (the last element in the rfft array)
+        idx_hf_end = len(freqs) - 1
 
         # Tapers high-frequency mask with a cosine window to suppress ringing
         if idx_hf_end > idx_hf_start:
+            # The taper reaches exactly 0.0 at the bin just before Nyquist
             n = np.linspace(0, 1, idx_hf_end - idx_hf_start)
             hf_mask[idx_hf_start: idx_hf_end] = 0.5 * (1 + np.cos(np.pi * n))
+            
+        # Ensure the Nyquist bin itself is absolute zero
         if idx_hf_end < len(hf_mask):
             hf_mask[idx_hf_end:] = 0.0
 
+        # 3. Combine Masks
         mag_mask = lf_mask * hf_mask
 
         # Minimum Phase Complex Mask Generation (Cepstrum Method)
@@ -709,9 +726,9 @@ class Audio(IAudio):
             s_composite = self.harmonic_injector.inject(s_fund, phase)
 
         # 2. Normalize Playback Signal
-        # The sweep is already generated at the correct level in sweep_gen.
-        # We only need to ensure s_play is float32 for the audio stream.
-        s_play = s_composite.astype(np.float32)
+        target_amp = DSPUtils.db_to_lin(self.cap['sweep_level_dbfs'])
+        max_val = np.max(np.abs(s_composite)) + 1e-12
+        s_play = (s_composite * (target_amp / max_val)).astype(np.float32)
 
         # Apply a 1ms Hann fade to prevent the step discontinuity "BLIP" at the end
         s_play = DSPUtils.hann_fade(s_play, 1.0, self.hw['fs'], side="both")
@@ -870,7 +887,11 @@ class Audio(IAudio):
                 self._save_wav_with_metadata(self.debug_dir / filename, slice_data, filename)
 
         # 4. Process IR (Deconvolution)
-        ir_full, ir_linear = self.deconv_engine.process_ir(result["rx_mic_conditioned"], result["inv_sweep"])
+        ir_full, ir_linear = self.deconv_engine.process_ir(
+            result["rx_mic_conditioned"], 
+            result["inv_sweep"], 
+            self.protection_filter
+        )
 
         # 5. DSP Verification
         metrics = self.verifier.calculate_metrics(ir_full, ir_linear, result.get("psr", 0.0))
@@ -1007,9 +1028,9 @@ class MockInterfaceAudio(Audio):
         if self.harmonic_injector:
             s_composite = self.harmonic_injector.inject(s_fund, phase)
 
-        # The sweep is already generated at the correct level in sweep_gen.
-        # We only need to ensure s_play is float32 for the audio stream.
-        s_play = s_composite.astype(np.float32)
+        target_amp = DSPUtils.db_to_lin(self.cap['sweep_level_dbfs'])
+        max_val = np.max(np.abs(s_composite)) + 1e-12
+        s_play = (s_composite * (target_amp / max_val)).astype(np.float32)
 
         # Apply a 1ms Hann fade to prevent the step discontinuity "BLIP" at the end
         s_play = DSPUtils.hann_fade(s_play, 1.0, self.hw['fs'], side="both")
@@ -1242,8 +1263,9 @@ class AudioFactory:
         protect_hz = AudioFactory._get_required_config(config, sweep_section, 'PROTECT_HPF_HZ', parse_optional_float)
         if protect_hz is not None and protect_hz > 0:
             order = AudioFactory._get_required_config(config, sweep_section, 'PROTECT_HPF_ORDER', int)
-            phase_mode = AudioFactory._get_required_config(config, sweep_section, 'PROTECT_HPF_PHASE', str)
-            filter_engine = ProtectionFilter(fs, protect_hz, order, phase_mode)
+            hpf_correction = config.getboolean(sweep_section, 'PROTECT_HPF_CORRECTION', fallback=False)
+            hpf_corr_db_cap = config.getfloat(sweep_section, 'PROTECT_HPF_CORR_DB_CAP', fallback=12.0)
+            filter_engine = ProtectionFilter(fs, protect_hz, order, hpf_correction, hpf_corr_db_cap)
         else:
             filter_engine = None
 
