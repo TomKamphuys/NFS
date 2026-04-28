@@ -52,7 +52,7 @@ The system can apply an inverse filter during IR generation to mathematically "u
 
 * **The Gain Limit:** Because the physical DUT receives an HPF-filtered signal, the acoustic output at low frequencies will dive into the room's noise floor. To avoid massively amplifying noise, the system applies a maximum gain limit (defaulting to **12dB**, user-adjustable). A 12dB boost provides exactly two additional octaves of fully corrected response for a 1st order (6dB/oct) filter, and one additional octave for a 2nd order (12dB/oct) filter.
 
-![Driver Protection HPF](./docu_images/driver%20protection%20hpf.png)
+![Driver Protection HPF](./driver%20protection%20hpf.png)
 
 ---
 
