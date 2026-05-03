@@ -72,9 +72,15 @@ Clone the repository
 git clone https://github.com/TomKamphuys/NFS.git
 cd NFS
 ```
+
 Install dependencies (including dev tools)
 ```
 uv sync --all-groups
+```
+
+or without dev tools
+```
+uv sync --no-dev
 ```
 
 ### Launch the UI
@@ -82,6 +88,54 @@ uv sync --all-groups
 uv run harmonic-drive
 ```
 The UI will be automatically opened. In case it isn't, it is accessible at `http://localhost:8080`.
+
+
+## Use Pycharm (currently mostly used as development is still causing rapid changes)
+
+Welcome to PyCharm! Integrating `uv` into your workflow is a great choice for fast, reliable dependency management. Since you’ve already installed PyCharm, here is the most efficient, step-by-step path to cloning your repository and setting up your environment.
+
+---
+
+### Step 1: Clone Your Repository
+1.  Open **PyCharm**.
+2.  On the Welcome screen, select **Get from VCS** (Version Control System). If you are already inside a project, go to the top menu: `File` > `New` > `Project from Version Control...`.
+3.  Paste your GitHub repository URL into the **URL** field.
+4.  Choose the local folder where you want to save the project and click **Clone**.
+5.  PyCharm will ask if you want to open the project in the current window or a new one; select the option that best fits your preference.
+
+### Step 2: Initialize the Environment with `uv`
+Once the project is open, you need to ensure your dependencies are installed. PyCharm often detects `pyproject.toml` files, but using `uv` directly in the terminal is the most reliable way to sync your environment.
+
+1.  Open the **Terminal** tab at the bottom of the PyCharm window (`Alt+F12` on Windows/Linux or `Option+F12` on macOS).
+2.  Run the following command:
+    ```bash
+    uv sync
+    ```
+    * **Why?** This command reads your `uv.lock` file and creates or updates a `.venv` folder in your project directory with all the exact package versions required.
+
+### Step 3: Configure the Interpreter in PyCharm
+After `uv sync` finishes, you need to tell PyCharm to use that environment as the "Python Interpreter" so it can provide code completion, error checking, and debugging.
+
+1.  Open **Settings** (`Ctrl+Alt+S` or `Cmd+,` on macOS).
+2.  Navigate to **Project: [Your Project Name]** > **Python Interpreter**.
+3.  Click the **Add Interpreter** link (or the gear icon) and select **Add Local Interpreter...**.
+4.  In the dialog:
+    * Select **Virtualenv Environment** on the left.
+    * Select **Existing environment**.
+    * Click the `...` button and browse to the `.venv` folder that `uv sync` created in your project directory.
+    * Select the `python` executable inside the `bin` (or `Scripts` on Windows) folder of that `.venv`.
+5.  Click **OK** to apply the changes.
+
+---
+
+### Pro-Tips for `uv` + PyCharm
+* **Automatic Detection:** Newer versions of PyCharm may automatically prompt you to "Create a uv environment" as soon as you open the project. If you see this notification in the bottom-right corner or at the top of the editor, click it! It will handle the syncing and interpreter configuration for you.
+* **Running Scripts:** Once the interpreter is set, you can run your code by right-clicking any `.py` file and selecting **Run 'filename'**. PyCharm will now correctly resolve all your dependencies.
+* **Managing Dependencies:** If you need to add a new package later, don't just run `pip install`. Use the terminal to keep your lockfile updated:
+    ```bash
+    uv add <package_name>
+    ```
+    PyCharm will automatically detect that the environment has changed and update its index.
 
 
 ## 📚 Documentation

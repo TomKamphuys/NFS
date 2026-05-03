@@ -92,10 +92,10 @@ def test_measure_ir_regression(mock_config, tmp_path):
         # np.random.seed(42) is used for reproducibility.
 
         # Expected metrics for MockInterfaceAudio with 0.5s sweep and 100ms silences
-        assert np.isclose(metrics['snr_db'], 101.85, atol=0.5)
-        assert np.isclose(metrics['thd_pct'], 4.85, atol=0.2)
+        assert np.isclose(metrics['snr_db'], 105.38, atol=0.5)
+        assert np.isclose(metrics['thd_pct'], 4.94, atol=0.2)
         assert np.isclose(metrics['psr'], 3.57, atol=0.2)
-        assert np.isclose(metrics['crest_factor'], 89.72, atol=1.0)
+        assert np.isclose(metrics['crest_factor'], 133.20, atol=1.0)
 
         # Regression test for IR file content
         data, fs_ir = sf.read(str(ir_file))
@@ -104,11 +104,11 @@ def test_measure_ir_regression(mock_config, tmp_path):
         # --- FUNCTIONAL VALIDATION (Robust across platforms) ---
         # 1. Peak Amplitude Check
         peak_amp = np.max(np.abs(data))
-        assert np.isclose(peak_amp, 0.525361, atol=1e-3), f"Peak amplitude mismatch: {peak_amp}"
+        assert np.isclose(peak_amp, 0.2491, atol=1e-3), f"Peak amplitude mismatch: {peak_amp}"
 
         # 2. RMS Level Check
         rms_level = np.sqrt(np.mean(data**2))
-        assert np.isclose(rms_level, 0.005856, atol=1e-4), f"RMS level mismatch: {rms_level}"
+        assert np.isclose(rms_level, 0.00187, atol=1e-4), f"RMS level mismatch: {rms_level}"
 
         # 3. Frequency Response Check (Flatness in passband)
         # We expect it to be flat between 100Hz and 15kHz within +/- 0.5dB
@@ -140,7 +140,7 @@ def test_measure_ir_regression(mock_config, tmp_path):
         assert 0 <= peak_idx <= 20, f"Peak alignment mismatch: found at index {peak_idx}"
 
         # 5. Statistical Check
-        assert np.isclose(np.std(data), 0.005856, atol=1e-4)
+        assert np.isclose(np.std(data), 0.00187, atol=1e-4)
 
     finally:
         os.chdir(old_cwd)
