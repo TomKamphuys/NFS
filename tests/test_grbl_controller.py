@@ -1,0 +1,239 @@
+import pytest
+from unittest.mock import Mock, patch
+from nfs.grbl_controller import (
+    EventHandler,
+    GrblControllerMock,
+    ESP32Duino,
+    GrblMachineState,
+    CylindricalPosition,
+    GrblControllerFactory,
+    GrblStreamerClientConnection
+)
+import time
+
+
+def test_event_handler_initialization():
+    handler = EventHandler()
+    assert handler.get_received_message() == ''
+    assert handler.get_current_position() is None
+    assert handler.get_state() == GrblMachineState.IDLE
+    assert handler.get_state_raw() == "Idle"
+
+
+def test_event_handler_on_rx_buffer_percent():
+    handler = EventHandler()
+    handler.on_grbl_event("on_rx_buffer_percent", 50)
+    assert handler.get_received_message() == 'ok'
+
+
+def test_event_handler_on_stateupdate():
+    handler = EventHandler()
+    # data format for on_stateupdate: (mode, submode, wpos, mpos, ...)
+    # wpos is expected at index 2, and it should be a tuple (X, Y, Z)
+    # CylindricalPosition(wpos[1], wpos[2], wpos[0]) -> (Y, Z, X)
+    wpos = (10.0, 20.0, 30.0)  # X=10, Y=20, Z=30
+    handler.on_grbl_event("on_stateupdate", "Run", 0, wpos)
+
+    assert handler.get_state() == GrblMachineState.RUN
+    assert handler.get_state_raw() == "Run"
+    pos = handler.get_current_position()
+    assert pos.r() == 20.0  # Y
+    assert pos.t() == 30.0  # Z
+    assert pos.z() == 10.0  # X
+
+
+def test_event_handler_on_stateupdate_callback_error():
+    handler = EventHandler()
+    callback = Mock(side_effect=Exception("Callback failed"))
+    handler.set_on_state_update_callback(callback)
+
+    wpos = (10.0, 20.0, 30.0)
+    # Should not raise exception because it's caught in EventHandler
+    handler.on_grbl_event("on_stateupdate", "Idle", 0, wpos)
+    callback.assert_called_once()
+
+
+def test_grbl_streamer_client_connection():
+    mock_streamer = Mock()
+    handler = EventHandler()
+    conn = GrblStreamerClientConnection(mock_streamer, handler)
+
+    conn.killalarm()
+    mock_streamer.killalarm.assert_called_once()
+
+    conn.softreset()
+    mock_streamer.softreset.assert_called_once()
+
+    conn.hold()
+    mock_streamer.send_immediately.assert_called_with('!')
+
+    conn.send("G0 X10")
+    mock_streamer.send_immediately.assert_called_with("G0 X10")
+
+    handler.set_received_message("some message")
+    assert conn.receive() == "some message"
+    assert handler.get_received_message() == ""
+
+    handler.on_grbl_event("on_stateupdate", "Idle", 0, (1, 2, 3))
+    assert conn.get_position() == CylindricalPosition(2, 3, 1)
+    assert conn.get_state() == GrblMachineState.IDLE
+    assert conn.get_state_raw() == "Idle"
+
+    callback = Mock()
+    conn.set_on_state_update_callback(callback)
+    assert handler._on_state_update_callback == callback
+
+    conn.close()
+    mock_streamer.disconnect.assert_called_once()
+
+
+def test_event_handler_on_error():
+    handler = EventHandler()
+    with pytest.raises(Exception, match="ERROR: event=on_error"):
+        handler.on_grbl_event("on_error", "Some error message")
+
+
+def test_event_handler_on_alarm():
+    handler = EventHandler()
+    handler.on_grbl_event("on_alarm")
+    assert handler.get_received_message() == 'ok'
+    assert handler.get_state() == GrblMachineState.ALARM
+    assert handler.get_state_raw() == "Alarm"
+
+
+def test_grbl_controller_mock():
+    mock = GrblControllerMock()
+    assert mock.get_state() == GrblMachineState.IDLE
+    assert mock.get_position() == CylindricalPosition(0, 0, 0)
+
+    mock.send("G0 X10")
+    mock.send_and_wait_for_move_ready("G0 Y20")
+    mock.killalarm()
+    mock.softreset()
+    mock.hold()
+    mock.shutdown()
+    mock.force_position_update()
+
+    assert mock.get_state_raw() == "Idle"
+    mock.set_on_state_update_callback(lambda p, s: None)
+
+
+def test_esp32_duino_initialization():
+    mock_conn = Mock()
+    # __init__ calls _unlock which calls send which calls _wait_for_ack which calls _receive
+    mock_conn.receive.return_value = "ok"
+
+    controller = ESP32Duino(mock_conn)
+    mock_conn.send.assert_called_with("$X\n")
+
+
+def test_esp32_duino_send():
+    mock_conn = Mock()
+    # 1. Init: _unlock calls send which calls _wait_for_ack. Need "ok".
+    # 2. Test send("G0 X10"): calls _wait_for_ack. Need "ok".
+    mock_conn.receive.side_effect = ["ok", "", "ok"]
+
+    controller = ESP32Duino(mock_conn)
+    mock_conn.send.reset_mock()
+
+    controller.send("G0 X10")
+    mock_conn.send.assert_called_with("G0 X10\n")
+    assert mock_conn.receive.call_count >= 3
+
+
+def test_esp32_duino_send_and_wait_for_move_ready():
+    mock_conn = Mock()
+    mock_conn.receive.return_value = "ok"
+    # _wait_for_idle_state will call get_state()
+    mock_conn.get_state.side_effect = [GrblMachineState.RUN, GrblMachineState.IDLE]
+
+    controller = ESP32Duino(mock_conn)
+    controller.send_and_wait_for_move_ready("G0 X10")
+
+    mock_conn.send.assert_any_call("G0 X10\n")
+    mock_conn.send.assert_any_call("G04 P0\n")
+    assert mock_conn.get_state.call_count == 2
+
+
+def test_esp32_duino_getters_and_setters():
+    mock_conn = Mock()
+    mock_conn.receive.return_value = "ok"
+    controller = ESP32Duino(mock_conn)
+
+    mock_conn.get_position.return_value = CylindricalPosition(1, 2, 3)
+    assert controller.get_position() == CylindricalPosition(1, 2, 3)
+
+    mock_conn.get_state.return_value = GrblMachineState.ALARM
+    assert controller.get_state() == GrblMachineState.ALARM
+
+    mock_conn.get_state_raw.return_value = "Alarm"
+    assert controller.get_state_raw() == "Alarm"
+
+    callback = lambda p, s: None
+    controller.set_on_state_update_callback(callback)
+    mock_conn.set_on_state_update_callback.assert_called_with(callback)
+
+
+def test_esp32_duino_control_commands():
+    mock_conn = Mock()
+    mock_conn.receive.return_value = "ok"
+    controller = ESP32Duino(mock_conn)
+
+    controller.killalarm()
+    mock_conn.killalarm.assert_called_once()
+
+    controller.softreset()
+    mock_conn.softreset.assert_called_once()
+
+    controller.hold()
+    mock_conn.hold.assert_called_once()
+
+    controller.shutdown()
+    mock_conn.close.assert_called_once()
+
+
+@patch('nfs.grbl_controller.configparser.ConfigParser')
+def test_grbl_controller_factory_mock(mock_config_class):
+    mock_config = mock_config_class.return_value
+    mock_config.get.return_value = 'Mock'
+
+    # Reset singleton
+    GrblControllerFactory._instance = None
+
+    controller = GrblControllerFactory.create('grbl', 'config.ini')
+    assert isinstance(controller, GrblControllerMock)
+
+    # Test singleton
+    controller2 = GrblControllerFactory.create('grbl', 'config.ini')
+    assert controller is controller2
+
+
+@patch('nfs.grbl_controller.GrblStreamer')
+@patch('nfs.grbl_controller.configparser.ConfigParser')
+@patch('nfs.grbl_controller.time.sleep')  # speed up test
+def test_grbl_controller_factory_arduino(mock_sleep, mock_config_class, mock_streamer_class):
+    mock_config = mock_config_class.return_value
+
+    def mock_get(section, option):
+        if option == 'type':
+            return 'Arduino'
+        if option == 'port':
+            return 'COM3'
+        if option == 'baudrate':
+            return '115200'
+        return ''
+
+    mock_config.get.side_effect = mock_get
+    mock_config.getint.return_value = 115200
+
+    # Reset singleton
+    GrblControllerFactory._instance = None
+
+    # To avoid ESP32Duino.__init__ calling _unlock -> send -> _wait_for_ack -> _receive
+    # We need to mock GrblStreamer.receive or GrblStreamer.send_immediately etc.
+    # But ESP32Duino uses GrblStreamerClientConnection.
+
+    with patch('nfs.grbl_controller.ESP32Duino') as mock_esp32:
+        controller = GrblControllerFactory.create('grbl', 'config.ini')
+        assert controller == mock_esp32.return_value
+        mock_streamer_class.return_value.cnect.assert_called()
