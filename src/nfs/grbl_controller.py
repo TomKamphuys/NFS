@@ -525,14 +525,14 @@ class ESP32Duino(IGrblController):
         Force a position update (currently just waits for push updates to catch up).
         """
         logger.trace('Forcing position update.')
-        time.sleep(0.5)
+        time.sleep(0.2)
 
     def _wait_for_idle_state(self) -> None:
         """
         Block until the machine state becomes IDLE.
         """
         while self._connection.get_state() != GrblMachineState.IDLE:
-            time.sleep(0.5)
+            time.sleep(0.2)
 
     def killalarm(self) -> None:
         """
