@@ -585,13 +585,13 @@ def update_scanner_position(pos=None, state=None):
 
 def add_jog_row(axis: str, left_label: str, right_label: str, unit: str,
                 left_moves: list, right_moves: list):
-    def _execute_move(method_name: str, value: float):
+    async def _execute_move(method_name: str, value: float):
         scanner = get_scanner()
         if not scanner:
             ui.notify("Scanner not initialized", type='warning')
             return
         method = getattr(scanner, method_name)
-        safe_move(method, value)
+        await safe_move(method, value)
 
     with ui.column().classes('w-full'):
         with ui.element('div').classes('jog-grid'):
@@ -706,7 +706,7 @@ def main_page():
                     home_button = ui.button('HOME', color='orange', on_click=log_button_click('Home', home_and_update)).classes('cmd-btn')
                     ui.button('Clear\nAlarm', on_click=log_button_click('Clear Alarm', lambda: run.io_bound(get_scanner().clear_alarm if get_scanner() else None))).classes('cmd-btn cmd-btn-blue')
                     ui.button('Soft\nReset', on_click=log_button_click('Soft Reset', lambda: run.io_bound(get_scanner().softreset if get_scanner() else None))).classes('cmd-btn cmd-btn-blue')
-                    ui.button('REHOME', on_click=log_button_click('ReHome', lambda: safe_move(rehome))).classes('cmd-btn cmd-btn-blue')
+                    ui.button('REHOME', on_click=log_button_click('ReHome', lambda: asyncio.create_task(safe_move(rehome)))).classes('cmd-btn cmd-btn-blue')
                     ui.button('HOLD', color='red', on_click=log_button_click('Hold', lambda: run.io_bound(get_scanner().hold if get_scanner() else None))).classes('cmd-btn')
 
                 with ui.button_group():
