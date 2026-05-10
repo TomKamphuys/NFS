@@ -49,7 +49,7 @@ class FileMeasurementPoints:
     def total_points(self) -> int:
         return len(self._points)
 
-    def need_to_do_evasive_move(self) -> bool: # TODO MPOT I dont think this is used
+    def need_to_do_evasive_move(self) -> bool:  # TODO MPOT I dont think this is used
         return False
 
     def _remove_point_inside_speaker_stand(self, r_cyl) -> bool:
@@ -60,6 +60,7 @@ class FileMeasurementPoints:
 
         limit = 180.0 - (self._homing_gap / 2.0)   # Calculate the boundary limit (e.g., 175 degrees if gap is 10)
         return abs(theta_cyl) > limit # Using abs() catches both the positive and negative boundaries 
+
 
 def register(factory) -> None:
     factory.register("FileMeasurementPoints", FileMeasurementPoints)
