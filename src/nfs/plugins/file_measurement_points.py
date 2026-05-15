@@ -40,6 +40,17 @@ class FileMeasurementPoints:
             return point
         raise StopIteration("No more points")
 
+    def get_radius(self) -> float:
+        """
+        Returns a safe radius for the initial move.
+        Since this is a file-based grid, we use a default or the first point's radius.
+
+        :return: A safe radius (mm).
+        """
+        if self._points:
+            return self._points[0].r()
+        return 0.0
+
     def reset(self) -> None:
         self._current_index = 0
 

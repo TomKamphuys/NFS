@@ -24,6 +24,8 @@ from typing import Callable, Dict, List, Optional, Tuple
 from loguru import logger
 from nicegui import ui
 
+from nfs.audio import get_devices_and_channels
+
 
 # ---------------------------------------------------------------------------
 # Schema
@@ -293,6 +295,9 @@ def open_config_editor(config_file: str, on_apply: Callable[[], None]) -> None:
                                     el = _build_input(key, kind, raw, options)
                                     el.tooltip(tooltip)
                                     static_inputs[(section, key)] = el
+                                if section == "audio":
+                                    ui.button("List Sound Devices", on_click=_show_sound_devices) \
+                                        .props("outline").classes("mt-4")
 
                 # motion_manager (with inlined measurement-points subsection)
                 if "motion_manager" in tab_objects:
@@ -307,6 +312,30 @@ def open_config_editor(config_file: str, on_apply: Callable[[], None]) -> None:
             ).props("color=primary")
 
     dialog.open()
+
+
+def _show_sound_devices() -> None:
+    """Show a list of available sound devices in a separate window."""
+    catalog = get_devices_and_channels()
+    # Note: 'seamless' allows interacting with the background.
+    # 'position=right' keeps it from centering over the main editor.
+    with ui.dialog().props('seamless position=right transition-show="none" transition-hide="none"') as d:
+        with ui.card().classes("w-[40vw] min-w-[400px] h-[60vh] flex flex-col shadow-2xl").style("resize: both; overflow: auto;"):
+            with ui.row().classes("w-full items-center justify-between"):
+                ui.label("Available Audio Devices").classes("text-lg font-bold")
+                ui.button(icon="close", on_click=d.close).props("flat round dense")
+            
+            with ui.scroll_area().classes("flex-1"):
+                for dev_id, info in catalog.items():
+                    with ui.column().classes("mb-4 gap-0"):
+                        # 'select-text' allows user to highlight and copy
+                        ui.label(f"ID {dev_id}: {info['name']}").classes("font-bold select-text")
+                        ui.label(f"  API: {info['hostapi']}").classes("text-xs text-gray-600 select-text")
+                        if info['input_channels']:
+                            ui.label(f"  In Channels: {info['input_channels']}").classes("text-xs select-text")
+                        if info['output_channels']:
+                            ui.label(f"  Out Channels: {info['output_channels']}").classes("text-xs select-text")
+    d.open()
 
 
 def _build_motion_manager_panel(parser, dyn) -> None:
@@ -520,13 +549,17 @@ def _on_ok(parser, path, static_inputs, dyn, dialog, on_apply: Callable[[], None
             parser.add_section(section)
         parser.set(section, key, formatted)
 
-    save_path = path.with_name("config_save.ini")
+    save_path = path
+    backup_path = path.with_suffix(".old")
     try:
+        if path.exists():
+            import shutil
+            shutil.copy2(path, backup_path)
         with open(save_path, "w") as f:
             parser.write(f)
     except OSError as exc:
-        logger.error(f"Failed to write config: {exc}")
-        ui.notify(f"Failed to write config: {exc}", type="negative")
+        logger.error(f"Failed to backup or write config: {exc}")
+        ui.notify(f"Failed to backup or write config: {exc}", type="negative")
         return
 
     dialog.close()

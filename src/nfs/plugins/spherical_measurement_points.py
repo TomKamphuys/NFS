@@ -70,6 +70,14 @@ class SphericalMeasurementPoints:
         self._phi = 2 * np.pi * self._n / self._m_phi  # phi for every point
         self._n += 1
 
+    def get_radius(self) -> float:
+        """
+        Returns the radius of the sphere.
+
+        :return: The sphere radius.
+        """
+        return self._radius
+
     def reset(self) -> None:
         pass
 

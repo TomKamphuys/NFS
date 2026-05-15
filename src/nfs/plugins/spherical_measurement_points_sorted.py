@@ -145,6 +145,14 @@ class SphericalMeasurementPointsSorted:
 
         return CylindricalPosition(r, theta, z)
 
+    def get_radius(self) -> float:
+        """
+        Returns the radius of the sphere.
+
+        :return: The sphere radius.
+        """
+        return self._radius
+
     def reset(self) -> None:
         self._current_index = 0;
 

@@ -69,7 +69,7 @@ def _log_built_object_tree(scanner, nfs, config_file: str) -> None:
                 continue
             # Strip a single leading underscore so log reads naturally.
             display_name = name[1:] if name.startswith("_") and not name.startswith("__") else name
-            if display_name.startswith("_"):
+            if display_name.startswith("_") or display_name == "points":
                 continue
             # Skip nested "big" objects we render explicitly; identify by class name.
             cls_name = type(value).__name__
