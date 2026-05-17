@@ -356,10 +356,22 @@ def _build_motion_manager_panel(parser, dyn) -> None:
 
     mp_section_name = dyn.get("mp_section_name") or ""
     current_mp_type = ""
+    # Try getting type from referenced section, or from motion_manager directly (inline)
     if mp_section_name and parser.has_section(mp_section_name):
         current_mp_type = _strip_inline_comment(
             parser.get(mp_section_name, "type", fallback="")
         )
+    else:
+        current_mp_type = _strip_inline_comment(
+            parser.get("motion_manager", "measurement_points_type", fallback="")
+        )
+        if not current_mp_type:
+            current_mp_type = _strip_inline_comment(
+                parser.get("motion_manager", "type", fallback="")
+            )
+            # Only use it if it's one of the known MP types
+            if current_mp_type not in MEASUREMENT_POINTS_TYPES:
+                current_mp_type = ""
     mp_available_types = list(MEASUREMENT_POINTS_TYPES.keys())
     if current_mp_type and current_mp_type not in mp_available_types:
         mp_available_types = [*mp_available_types, current_mp_type]
@@ -402,12 +414,12 @@ def _build_motion_manager_panel(parser, dyn) -> None:
         ui.label("Measurement points").classes("text-base font-semibold")
 
         section_input = ui.input(
-            label="measurement_points (section name)",
+            label="measurement_points section (leave empty to inline)",
             value=mp_section_name,
         ).classes("w-full").props("outlined dense")
         section_input.tooltip(
             "Name of the [section] used for the measurement-points settings. "
-            "The fields below are written under this section."
+            "If empty, settings are saved directly in [motion_manager]."
         )
         dyn["mp_section_input"] = section_input
 
@@ -424,12 +436,16 @@ def _build_motion_manager_panel(parser, dyn) -> None:
         mp_fields_container = ui.column().classes("w-full gap-2")
         dyn["mp_fields_container"] = mp_fields_container
 
-        def _rebuild_mp_fields():
+        def _rebuild_mp_fields(e=None):
+            # If e is passed, it means it's from section_input's update.
+            # We want to use the fresh value from the event if possible.
+            new_section = e.value if (e and hasattr(e, 'value')) else section_input.value
             mp_fields_container.clear()
             dyn["mp_inputs"] = {}
             t = mp_type_select.value
             entries = MEASUREMENT_POINTS_TYPES.get(t, [])
-            section_for_lookup = mp_section_name  # original section, for prefilling
+            section_for_lookup = new_section or "motion_manager"
+            
             with mp_fields_container:
                 if not entries and t:
                     ui.label(
@@ -445,7 +461,8 @@ def _build_motion_manager_panel(parser, dyn) -> None:
                     el.tooltip(tooltip)
                     dyn["mp_inputs"][key] = (el, kind)
 
-        mp_type_select.on("update:model-value", lambda _e: _rebuild_mp_fields())
+        section_input.on("update:model-value", _rebuild_mp_fields)
+        mp_type_select.on("update:model-value", _rebuild_mp_fields)
         _rebuild_mp_fields()
 
 
@@ -476,13 +493,14 @@ def _on_ok(parser, path, static_inputs, dyn, dialog, on_apply: Callable[[], None
 
         section_input = dyn.get("mp_section_input")
         new_mp_section = (section_input.value or "").strip() if section_input else ""
-        if not new_mp_section:
-            ui.notify("[motion_manager] measurement_points (section name) must be set",
-                      type="negative")
-            return
 
         new_values[("motion_manager", "type")] = mm_type
-        new_values[("motion_manager", "measurement_points")] = new_mp_section
+        if new_mp_section:
+            new_values[("motion_manager", "measurement_points")] = new_mp_section
+        else:
+            # If inlining, ensure 'measurement_points' key is removed
+            if parser.has_option("motion_manager", "measurement_points"):
+                parser.remove_option("motion_manager", "measurement_points")
 
         for key, (el, kind) in dyn["mm_inputs"].items():
             raw = getattr(el, "value", "")
@@ -518,30 +536,44 @@ def _on_ok(parser, path, static_inputs, dyn, dialog, on_apply: Callable[[], None
                     and parser.has_section(old_mp_section):
                 parser.remove_section(old_mp_section)
 
-            if not parser.has_section(new_mp_section):
+            target_section = new_mp_section or "motion_manager"
+            if new_mp_section and not parser.has_section(new_mp_section):
                 parser.add_section(new_mp_section)
 
-            new_values[(new_mp_section, "type")] = mp_type
+            if new_mp_section:
+                new_values[(new_mp_section, "type")] = mp_type
+            else:
+                # Use the alias to avoid collision with motion_manager's 'type'
+                new_values[("motion_manager", "measurement_points_type")] = mp_type
+                # Also ensure 'type' isn't overwritten by mistake if it was in mp_inputs
+                if ("motion_manager", "type") in new_values and mp_type != new_values[("motion_manager", "type")]:
+                     # This is expected, motion_manager type is different from mp type
+                     pass
+
             for key, (el, kind) in dyn["mp_inputs"].items():
                 raw = getattr(el, "value", "")
                 try:
                     typed = _coerce(kind, "" if raw is None else str(raw))
                 except Exception as exc:
-                    ui.notify(f"[{new_mp_section}] {key}: invalid value ({exc})",
+                    ui.notify(f"[{target_section}] {key}: invalid value ({exc})",
                               type="negative")
                     return
-                new_values[(new_mp_section, key)] = _format_for_ini(kind, typed)
+                new_values[(target_section, key)] = _format_for_ini(kind, typed)
 
-            # Remove stale keys (from previously selected mp types) under new section.
-            allowed_mp_keys = {"type"} | {
+            # Remove stale keys (from previously selected mp types) under target section.
+            allowed_mp_keys = {"type", "measurement_points_type"} | {
                 e[0] for e in MEASUREMENT_POINTS_TYPES.get(mp_type, [])
             }
-            all_known_mp_keys = {"type"} | {
+            all_known_mp_keys = {"type", "measurement_points_type"} | {
                 e[0] for entries in MEASUREMENT_POINTS_TYPES.values() for e in entries
             }
             for stale_key in all_known_mp_keys - allowed_mp_keys:
-                if parser.has_option(new_mp_section, stale_key):
-                    parser.remove_option(new_mp_section, stale_key)
+                if parser.has_option(target_section, stale_key):
+                    # DO NOT remove 'type' or 'safe_radius' if target is motion_manager
+                    # Also don't remove measurement_points_type if it is allowed
+                    if target_section == "motion_manager" and stale_key in {"type", "safe_radius", "measurement_points", "measurement_points_type"}:
+                        continue
+                    parser.remove_option(target_section, stale_key)
 
     # Apply to parser. Ensure sections exist and create them if needed.
     for (section, key), formatted in new_values.items():

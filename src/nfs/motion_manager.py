@@ -431,8 +431,18 @@ class MotionManagerFactory:
         config_parser = configparser.ConfigParser(inline_comment_prefixes="#")
         config_parser.read(config_file)
 
-        measurement_points_section = config_parser.get(section, 'measurement_points')
-        item = dict(config_parser.items(measurement_points_section))
+        # Try to get measurement points config from a referenced section OR directly from the current section
+        measurement_points_section_name = config_parser.get(section, 'measurement_points', fallback=None)
+        
+        if measurement_points_section_name and config_parser.has_section(measurement_points_section_name):
+            item = dict(config_parser.items(measurement_points_section_name))
+        else:
+            # If no reference or referenced section doesn't exist, use the current section
+            item = dict(config_parser.items(section))
+            # Remove keys that are specific to the motion manager itself to avoid passing them to measurement points
+            item.pop('type', None)
+            item.pop('safe_radius', None)
+        
         measurement_points = factory.create(item)
 
         motion_manager_type = config_parser.get(section, 'type')

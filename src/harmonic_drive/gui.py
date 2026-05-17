@@ -822,7 +822,6 @@ def main_page():
                     scanner_app.greyable_buttons.append(ui.button('Take single measurement', on_click=log_button_click('Take single measurement', async_single_measurement_task)))
 
                 with ui.row().classes('items-center mt-1 gap-4'):
-                    ui.button('Reload Config', icon='sync', on_click=scanner_app.reload_config_ui).classes('bg-blue-200 text-blue-900')
                     ui.button(
                         'Edit Config',
                         icon='edit',

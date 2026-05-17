@@ -146,6 +146,53 @@ def test_on_ok_motion_manager_dynamic(tmp_path):
     # Ensure old section is removed
     assert "[points]" not in content
 
+def test_on_ok_motion_manager_inline(tmp_path):
+    config_file = tmp_path / "config.ini"
+    config_file.write_text("[motion_manager]\ntype = CylindricalMeasurementMotionManager\nmeasurement_points = points\n[points]\ntype = FileMeasurementPoints\nfilename = old.csv\n")
+    
+    parser = configparser.ConfigParser()
+    parser.read(config_file)
+    
+    # Mock UI elements for motion_manager (Cylindrical)
+    mm_type_sel = MagicMock()
+    mm_type_sel.value = "CylindricalMeasurementMotionManager"
+    
+    # Empty section input -> INLINE
+    mp_section_input = MagicMock()
+    mp_section_input.value = ""
+    
+    mp_type_sel = MagicMock()
+    mp_type_sel.value = "FileMeasurementPoints"
+    
+    # Mock some MP fields
+    filename_el = MagicMock()
+    filename_el.value = "new.csv"
+    
+    dyn = {
+        "mm_type_select": mm_type_sel,
+        "mp_section_input": mp_section_input,
+        "mp_type_select": mp_type_sel,
+        "mm_inputs": {},
+        "mp_inputs": {"filename": (filename_el, "str")},
+        "mp_section_name": "points"
+    }
+    
+    static_inputs = {}
+    dialog = MagicMock()
+    on_apply = MagicMock()
+    
+    _on_ok(parser, config_file, static_inputs, dyn, dialog, on_apply)
+    
+    content = config_file.read_text()
+    assert "[motion_manager]" in content
+    assert "type = CylindricalMeasurementMotionManager" in content
+    assert "measurement_points_type = FileMeasurementPoints" in content
+    assert "filename = new.csv" in content
+    # Ensure reference is removed
+    assert "measurement_points =" not in content
+    # Ensure old section is removed
+    assert "[points]" not in content
+
 # --- Test for open_config_editor (structure check) ---
 
 @patch("harmonic_drive.config_editor.ui.dialog")
