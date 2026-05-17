@@ -59,6 +59,55 @@ import sounddevice as sd  # noqa: E402
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+def clean_device_name(name: str) -> str:
+    """Removes messy Windows driver paths and registry strings from device names."""
+    if "@System32" in name or ".sys" in name:
+        # Splits by semicolon and takes the last part, usually the readable name
+        parts = name.split(";")
+        clean = parts[-1].replace("%0", "").replace("%1", "").strip()
+        return clean if clean else "Bluetooth Audio Device"
+    return name
+
+
+def get_devices_and_channels() -> dict:
+    """
+    Queries audio devices and returns a dict indexed by Device ID.
+    ASIO uses 0-based channel indices; others use 1-based channel indices.
+    """
+    # Hard refresh PortAudio state to catch any recent device changes
+    sd._terminate()
+    sd._initialize()
+
+    apis = sd.query_hostapis()
+    devs = sd.query_devices()
+
+    device_catalog = {}
+
+    for api_idx, a in enumerate(apis):
+        api_name = a['name']
+        is_asio = "ASIO" in api_name.upper()
+        base_idx = 0 if is_asio else 1
+
+        for dev_idx, d in enumerate(devs):
+            if d['hostapi'] == api_idx:
+                max_in = d['max_input_channels']
+                max_out = d['max_output_channels']
+
+                in_ch_indices = list(range(base_idx, max_in + base_idx)) if max_in > 0 else []
+                out_ch_indices = list(range(base_idx, max_out + base_idx)) if max_out > 0 else []
+
+                display_name = clean_device_name(d['name'])
+
+                device_catalog[dev_idx] = {
+                    'name': display_name,
+                    'hostapi': api_name,
+                    'input_channels': in_ch_indices,
+                    'output_channels': out_ch_indices
+                }
+
+    return device_catalog
+
+
 class DSPVerificationTool:
     """
     Calculates Quality Metrics from Impulse Responses and Alignment data.

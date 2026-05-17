@@ -22,6 +22,8 @@ from loguru import logger
 from nfs import NearFieldScannerFactory, ScannerFactory, Scanner, NearFieldScanner
 from nfs.logging_config import setup_logging
 
+from harmonic_drive.config_editor import open_config_editor
+
 # --- 7-segment look: load digital-ish font ---
 ui.add_head_html('<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap" rel="stylesheet">', shared=True)
 ui.add_head_html('<link rel="icon" type="image/png" href="/images/icon.png">', shared=True)
@@ -43,6 +45,105 @@ fig = None
 home_button = None
 ir_fr_plot = None
 fig_ir_fr = None
+
+
+def _log_built_object_tree(scanner, nfs, config_file: str) -> None:
+    """Log a nicely formatted INFO-level summary of the freshly built objects.
+
+    Walks the just-constructed Scanner / NearFieldScanner graph and prints a
+    tree of the relevant components (motion manager, measurement points, audio,
+    grbl controller) together with their key configuration attributes. All
+    attribute access is best-effort so this can never break configuration
+    reloading.
+    """
+
+    # Public-looking attrs we are interested in (skip dunder, callables, private)
+    def _public_attrs(obj) -> list:
+        out = []
+        for name in sorted(vars(obj).keys()) if hasattr(obj, "__dict__") else []:
+            try:
+                value = getattr(obj, name)
+            except Exception:
+                continue
+            if callable(value):
+                continue
+            # Strip a single leading underscore so log reads naturally.
+            display_name = name[1:] if name.startswith("_") and not name.startswith("__") else name
+            if display_name.startswith("_") or display_name == "points":
+                continue
+            # Skip nested "big" objects we render explicitly; identify by class name.
+            cls_name = type(value).__name__
+            if cls_name in {
+                "Scanner", "NearFieldScanner",
+                "CylindricalMeasurementMotionManager",
+                "SphericalMeasurementMotionManager",
+            } or "MeasurementPoints" in cls_name or "GrblController" in cls_name \
+                    or "Audio" in cls_name and not isinstance(value, (str, int, float, bool)):
+                continue
+            out.append((display_name, value))
+        return out
+
+    def _fmt_value(v) -> str:
+        if isinstance(v, float):
+            return f"{v:g}"
+        # For long sequences, render one item per line, indented, so the
+        # output stays readable without truncating any data.
+        if isinstance(v, (list, tuple, set, frozenset)):
+            items = list(v)
+            if len(items) <= 6:
+                inner = ", ".join(_fmt_value(x) for x in items)
+                bracket = ("[", "]") if isinstance(v, list) else \
+                          ("(", ")") if isinstance(v, tuple) else ("{", "}")
+                return f"{bracket[0]}{inner}{bracket[1]}"
+            lines = [_fmt_value(x) for x in items]
+            joined = ",\n          ".join(lines)
+            bracket = ("[", "]") if isinstance(v, list) else \
+                      ("(", ")") if isinstance(v, tuple) else ("{", "}")
+            return f"{bracket[0]}\n          {joined}\n        {bracket[1]}"
+        if isinstance(v, dict):
+            if len(v) <= 6:
+                inner = ", ".join(f"{k!r}: {_fmt_value(val)}" for k, val in v.items())
+                return "{" + inner + "}"
+            lines = [f"{k!r}: {_fmt_value(val)}" for k, val in v.items()]
+            joined = ",\n          ".join(lines)
+            return "{\n          " + joined + "\n        }"
+        return repr(v)
+
+    lines: list = []
+    lines.append("Configuration reloaded — built object tree:")
+    lines.append(f"  config_file: {config_file}")
+
+    def _emit(obj, label: str, indent: str) -> None:
+        if obj is None:
+            lines.append(f"{indent}{label}: <none>")
+            return
+        lines.append(f"{indent}{label}: {type(obj).__name__}")
+        for name, value in _public_attrs(obj):
+            lines.append(f"{indent}  - {name} = {_fmt_value(value)}")
+
+    # Scanner branch
+    _emit(scanner, "Scanner", "  ")
+    grbl = getattr(scanner, "_grbl_controller", None)
+    _emit(grbl, "GrblController", "    ")
+
+    # NFS branch
+    _emit(nfs, "NearFieldScanner", "  ")
+    audio = getattr(nfs, "_audio", None)
+    _emit(audio, "Audio", "    ")
+    mm = getattr(nfs, "_measurement_motion_manager", None)
+    _emit(mm, "MotionManager", "    ")
+    mp = getattr(mm, "_measurement_points", None) if mm is not None else None
+    _emit(mp, "MeasurementPoints", "      ")
+    total = None
+    try:
+        if mp is not None and hasattr(mp, "total_points"):
+            total = mp.total_points()
+    except Exception:
+        total = None
+    if total is not None:
+        lines.append(f"        - total_points = {total}")
+
+    logger.info("\n".join(lines))
 
 
 class ScannerApp:
@@ -80,7 +181,9 @@ class ScannerApp:
             # Re-register callback to the new scanner instance
             if self.scanner:
                 self.scanner.set_on_state_update_callback(update_scanner_position)
-            
+
+            _log_built_object_tree(self.scanner, self.nfs, self.config_file)
+
             self._is_loaded = True
 
     def reload_config_ui(self):
@@ -719,7 +822,14 @@ def main_page():
                     scanner_app.greyable_buttons.append(ui.button('Take single measurement', on_click=log_button_click('Take single measurement', async_single_measurement_task)))
 
                 with ui.row().classes('items-center mt-1 gap-4'):
-                    ui.button('Reload Config', icon='sync', on_click=scanner_app.reload_config_ui).classes('bg-blue-200 text-blue-900')
+                    ui.button(
+                        'Edit Config',
+                        icon='edit',
+                        on_click=lambda: open_config_editor(
+                            scanner_app.config_file,
+                            scanner_app.reload_config_ui,
+                        ),
+                    ).classes('bg-blue-200 text-blue-900')
                     with ui.row().classes('items-center gap-2'):
                         level_input = ui.number('Level (dBFS)', value=-20, format='%.1f').props('dense outlined').classes('w-32')
                         freq_input = ui.number('Frequency (Hz)', value=1000, format='%d').props('dense outlined').classes('w-32')

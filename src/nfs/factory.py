@@ -21,6 +21,10 @@ def create(arguments: dict[str, Any]) -> MeasurementPoints:
     Create an instance of `MeasurementPoints` based on the provided arguments.
     """
     args_copy = arguments.copy()
-    measurement_points_type = args_copy.pop("type")
+    # Support 'measurement_points_type' or 'type'
+    measurement_points_type = args_copy.pop("measurement_points_type", None)
+    if measurement_points_type is None:
+        measurement_points_type = args_copy.pop("type")
+        
     creator_func = registry.measurement_points.get(measurement_points_type)
     return creator_func(**args_copy)

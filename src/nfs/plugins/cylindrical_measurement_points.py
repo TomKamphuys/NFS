@@ -118,6 +118,14 @@ class CylindricalMeasurementPoints:
             self._current_angle,
             self._current_height)
 
+    def get_radius(self) -> float:
+        """
+        Returns the radius of the cylinder.
+
+        :return: The cylinder radius.
+        """
+        return self._radius
+
     def reset(self) -> None:
         pass
 
