@@ -9,8 +9,8 @@ class FileMeasurementPoints:
     """Base class for file measurement points plugins."""
 
     def __init__(self, filename: str,
-                 homing_gap: float,
-                 pole_gap: float):
+                 homing_gap: float = 0.0,
+                 pole_gap: float = 0.0):
         self._homing_gap = float(homing_gap)
         self._pole_gap = float(pole_gap)
         self._points: list[CylindricalPosition] = []
@@ -42,10 +42,10 @@ class FileMeasurementPoints:
 
     def get_radius(self) -> float:
         """
-        Returns a safe radius for the initial move.
-        Since this is a file-based grid, we use a default or the first point's radius.
+        Returns the first loaded radius for compatibility with motion managers
+        that ask measurement-points objects for a nominal radius.
 
-        :return: A safe radius (mm).
+        :return: A radius (mm).
         """
         if self._points:
             return self._points[0].r()
