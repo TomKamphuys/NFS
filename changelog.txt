@@ -1,6 +1,26 @@
 --------
 19/05/26
 --------
+Renamed the right-pane Acoustic Analysis view to Live Capture and moved the
+code from acoustic_analysis.py into live_capture.py.
+
+Moved the measurement positions azimuth-vs-elevation plot out of control.py and
+into live_capture.py, so the left pane stays focused on user controls and live
+position readouts.
+
+Split the old combined acoustic plot into separate Frequency Response and
+Impulse Response plots. Added lozenge buttons on the Live Capture title row to
+choose which plots are shown:
+
+Files touched:
+src/harmonic_drive/live_capture.py
+src/harmonic_drive/gui.py
+src/harmonic_drive/control.py
+src/harmonic_drive/acoustic_analysis.py
+
+--------
+19/05/26
+--------
 Made the grid generator file auto-load into the measurement session after it is
 generated. Added set_file_measurement_points_filename() to config_editor.py to
 update the FileMeasurementPoints filename in config.ini and trigger a reload.

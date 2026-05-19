@@ -20,6 +20,8 @@ classifiers = [
 
 dependencies = [
   "numpy",
+  "pandas",
+  "plotly",
   "scipy",
   "matplotlib",
   "loguru",
@@ -52,11 +54,12 @@ spherical = "nfs.motion_manager:SphericalMeasurementMotionManager"
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["nfs*", "harmonic_drive*"]
+include = ["nfs*", "harmonic_drive*", "grid_generator*"]
 exclude = ["tests*"]
 
 [tool.setuptools.package-data]
 nfs = ["config.ini"]
+grid_generator = ["images_grid_gen/*.png"]
 
 [tool.setuptools.exclude-package-data]
 "*" = ["*.log", "*.gcode"]

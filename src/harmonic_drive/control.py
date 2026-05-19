@@ -5,10 +5,8 @@ import queue
 import sys
 import threading
 import time
-from pathlib import Path
 from typing import TYPE_CHECKING
 
-import numpy as np
 from loguru import logger
 from nicegui import app, run, ui
 
@@ -36,8 +34,6 @@ pos_t = None
 pos_z = None
 pos_state = None
 home_button = None
-plot = None
-fig = None
 
 on_config_loaded = None
 
@@ -390,108 +386,6 @@ async def zero_nfs_then_apply_height_offset(height_value: float):
     )
 
 
-def load_measurement_data():
-    measurement_dir = Path('./measurements')
-    if not measurement_dir.exists():
-        return None, None
-
-    all_csv_files = list(measurement_dir.glob('*/measurement_points.csv'))
-    if not all_csv_files:
-        file_path = Path('measurement_points.csv')
-        if not file_path.exists():
-            file_path = Path('measurement_positions.csv')
-            if not file_path.exists():
-                return None, None
-    else:
-        file_path = max(all_csv_files, key=lambda f: f.stat().st_mtime)
-
-    try:
-        data = np.loadtxt(file_path, delimiter=',', skiprows=1)
-        data = np.atleast_2d(data)
-        if data.size == 0:
-            return None, None
-
-        r = data[:, 0]
-        phi = data[:, 1]
-        z = data[:, 2]
-        elevation = np.degrees(np.arctan2(z, r))
-        azimuth = phi
-        return azimuth, elevation
-    except Exception as exc:
-        logger.error(f"Error loading data: {exc}")
-        return None, None
-
-
-def update_plot():
-    if fig is None or plot is None:
-        return
-    azimuth, elevation = load_measurement_data()
-    fig.clear()
-    fig.set_layout_engine('constrained')
-    ax = fig.add_subplot(111)
-    if azimuth is not None and elevation is not None:
-        scatter = ax.scatter(
-            azimuth,
-            elevation,
-            c=elevation,
-            cmap='viridis',
-            marker='o',
-            s=20,
-        )
-        ax.set_title('Measurement Points (Azimuth vs Elevation)')
-        fig.colorbar(scatter, ax=ax, label='Elevation (degrees)')
-    else:
-        ax.text(
-            0,
-            0,
-            'No data available',
-            horizontalalignment='center',
-            verticalalignment='center',
-        )
-        ax.set_title('Waiting for data...')
-    ax.set_xlabel('Azimuth (degrees)')
-    ax.set_ylabel('Elevation (degrees)')
-    ax.set_xlim(-180, 180)
-    ax.set_ylim(-90, 90)
-    ax.grid(True, alpha=0.3)
-    plot.update()
-
-
-async def watch_measurement_points():
-    measurement_dir = Path('./measurements')
-    last_mtime = 0
-    last_file_path = None
-
-    while True:
-        try:
-            all_csv_files = list(measurement_dir.glob('*/measurement_points.csv'))
-            root_csv = Path('measurement_points.csv')
-            if root_csv.exists():
-                all_csv_files.append(root_csv)
-            root_pos_csv = Path('measurement_positions.csv')
-            if root_pos_csv.exists():
-                all_csv_files.append(root_pos_csv)
-
-            if all_csv_files:
-                current_file_path = max(
-                    all_csv_files,
-                    key=lambda file: file.stat().st_mtime,
-                )
-                current_mtime = current_file_path.stat().st_mtime
-                if current_mtime != last_mtime \
-                        or current_file_path != last_file_path:
-                    last_mtime = current_mtime
-                    last_file_path = current_file_path
-                    update_plot()
-
-            await asyncio.sleep(1)
-        except asyncio.CancelledError:
-            break
-        except Exception as exc:
-            logger.error(f"Error watching measurement points: {exc}")
-            await asyncio.sleep(1)
-
-
 def _scanner_has_alarm() -> bool:
     try:
         state = get_scanner().get_state()
@@ -642,7 +536,7 @@ def build_log_dialog():
 
 def build_control_pane(log_dialog):
     global play_button, level_input, freq_input, dur_input
-    global pos_r, pos_t, pos_z, pos_state, home_button, plot, fig
+    global pos_r, pos_t, pos_z, pos_state, home_button
 
     with ui.column().classes('w-full h-full min-w-0 overflow-auto px-2 py-2'):
         with ui.row().classes('w-full items-start gap-4 mb-4'):
@@ -852,13 +746,6 @@ def build_control_pane(log_dialog):
                 _build_position_card('P (Phi)', ' 888.88', ' 000.00', 'Deg', 't')
                 _build_position_card('Z (Height)', ' 888.88', ' 000.00', 'mm', 'z')
                 _build_position_card('Status', 'XXXXXXXX', '   -   ', 'Mode', 'state')
-
-        plot = ui.matplotlib(figsize=(16, 7)).classes('w-full flex-1')
-        with plot.figure as figure:
-            fig = figure
-            update_plot()
-
-    ui.timer(0, watch_measurement_points, once=True)
 
 
 def _build_position_card(title, ghost, value, unit, target):

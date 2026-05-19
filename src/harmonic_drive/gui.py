@@ -4,7 +4,7 @@ import os
 from nicegui import app, ui
 
 from grid_generator.grid_gen_gui import build_grid_gen_ui
-from harmonic_drive import acoustic_analysis, control
+from harmonic_drive import control, live_capture
 
 
 ui.add_head_html(
@@ -142,8 +142,8 @@ def main_page():
                     'w-56 h-full bg-gray-100 border-r border-gray-300 p-2 gap-2'
                 ) as menu:
                     ui.label('Views').classes('text-sm font-bold text-gray-600')
-                    acoustic_button = ui.button(
-                        'Acoustic Analysis',
+                    live_capture_button = ui.button(
+                        'Live Capture',
                         icon='graphic_eq',
                     ).props('flat align=left').classes('w-full justify-start')
                     grid_button = ui.button(
@@ -167,11 +167,11 @@ def main_page():
 
         with splitter.after:
             with ui.element('div').classes('w-full h-full min-w-0'):
-                acoustic_panel = ui.column().classes('w-full h-full')
+                live_capture_panel = ui.column().classes('w-full h-full')
                 grid_panel = ui.column().classes('w-full h-full overflow-auto')
 
-                with acoustic_panel:
-                    acoustic_analysis.build_acoustic_analysis()
+                with live_capture_panel:
+                    live_capture.build_live_capture()
 
                 with grid_panel:
                     build_grid_gen_ui(
@@ -180,26 +180,26 @@ def main_page():
                     )
                     grid_panel.set_visibility(False)
 
-                def show_acoustic():
-                    acoustic_panel.set_visibility(True)
+                def show_live_capture():
+                    live_capture_panel.set_visibility(True)
                     grid_panel.set_visibility(False)
                     menu_visible['value'] = False
                     menu.set_visibility(False)
-                    acoustic_button.props('color=primary')
+                    live_capture_button.props('color=primary')
                     grid_button.props(remove='color')
-                    acoustic_analysis.update_ir_fr_plots()
+                    live_capture.update_live_capture_plots()
 
                 def show_grid():
-                    acoustic_panel.set_visibility(False)
+                    live_capture_panel.set_visibility(False)
                     grid_panel.set_visibility(True)
                     menu_visible['value'] = False
                     menu.set_visibility(False)
                     grid_button.props('color=primary')
-                    acoustic_button.props(remove='color')
+                    live_capture_button.props(remove='color')
 
-                acoustic_button.on('click', show_acoustic)
+                live_capture_button.on('click', show_live_capture)
                 grid_button.on('click', show_grid)
-                show_acoustic()
+                show_live_capture()
 
 
 def main():
@@ -212,7 +212,7 @@ def main():
     args, _ = parser.parse_known_args()
 
     control.initialize_app(args.config)
-    control.set_on_config_loaded(acoustic_analysis.update_ir_fr_plots)
+    control.set_on_config_loaded(live_capture.update_live_capture_plots)
 
     static_images_path = os.path.join(os.getcwd(), 'images')
     if os.path.exists(static_images_path):
