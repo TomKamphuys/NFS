@@ -12,14 +12,22 @@ Features:
 - Drop-in replacement API (methods like `play()`, `pause()`, `set_speed()`).
 """
 
+import json
+import time
+import colorsys
+
 import numpy as np
 import pandas as pd
 from nicegui import ui
-import matplotlib.pyplot as plt
-import matplotlib.colors as mcolors
 import plotly.graph_objects as go
-import json
-import time
+
+
+def _hsv_slider_to_hex(value):
+    value = max(0.0, min(1.0, float(value)))
+    if value <= 0.0:
+        return '#000000'
+    r, g, b = colorsys.hsv_to_rgb(value % 1.0, 1.0, 1.0)
+    return f'#{round(r * 255):02x}{round(g * 255):02x}{round(b * 255):02x}'
 
 class CoordViewerEngine:
     """
@@ -52,15 +60,10 @@ class CoordViewerEngine:
         self.rot_target_angle = 22.5
         self.rot_dir = 1
         self.rot_accumulated = 0.0
-        self.rot_step_deg = 0.25        # Degrees to rotate per update
+        self.rot_speed_dps = 5.0        # Degrees to rotate per second
+        self.rot_step_deg = 0.25        # Legacy default at ~60 FPS
         
         self.cam_radius = 2.0 
-
-        # --- Custom Colormap ---
-        self.custom_cmap = mcolors.LinearSegmentedColormap.from_list(
-            'black_hsv', 
-            ['black'] + [plt.get_cmap('hsv')(i) for i in np.linspace(0, 1, 256)]
-        )
 
         # --- Setup Plotly Figure ---
         self.fig = go.Figure()
@@ -132,6 +135,7 @@ class CoordViewerEngine:
 
         self.N = 0 
         self.x = self.y = self.z = self.phi_arr = np.array([]) 
+        self._has_loaded_data = False
 
         if input_data is not None:
             self.load_data(input_data)
@@ -160,7 +164,7 @@ class CoordViewerEngine:
         self.z = self.z_m
 
         # Update the base points trace
-        hex_color = mcolors.to_hex(self.custom_cmap(self.current_color_val))
+        hex_color = _hsv_slider_to_hex(self.current_color_val)
         self.fig.data[0].x = self.x
         self.fig.data[0].y = self.y
         self.fig.data[0].z = self.z
@@ -305,16 +309,67 @@ class CoordViewerEngine:
             self.fig.data[3].y = [float(self.y[self.curr_idx])]
             self.fig.data[3].z = [float(self.z[self.curr_idx])]
 
-        self.plot.update() 
+        is_reload = self._has_loaded_data
+        if is_reload:
+            self._replace_browser_figure_preserving_camera()
+        else:
+            self.plot.update()
+        self._has_loaded_data = True
         
         if self.N > 0:
-            self._init_browser_loop()
+            if not is_reload:
+                self._init_browser_loop()
             self._update_readout()
 
     def _set_axes_equal(self):
         if self.N == 0: return
         self.fig.update_layout(scene=dict(aspectmode='data'))
-        self.plot.update()
+
+    def _replace_browser_figure_preserving_camera(self):
+        if not hasattr(self, 'plot') or not self.plot.id:
+            return
+        figure_json = self.fig.to_json()
+        state = {
+            'curr_idx': self.curr_idx,
+            'displayed_idx': self.curr_idx,
+            'N': self.N,
+            'full_x': self.x.tolist(),
+            'full_y': self.y.tolist(),
+            'full_z': self.z.tolist(),
+            'rot_speed_dps': self.rot_speed_dps,
+            'forceRedraw': True,
+        }
+        js = f"""
+        var el = getElement({self.plot.id});
+        if (el && el.$el && window.Plotly) {{
+            var plotDiv = el.$el;
+            var currentCamera = (
+                plotDiv.layout &&
+                plotDiv.layout.scene &&
+                plotDiv.layout.scene.camera
+            ) ? JSON.parse(JSON.stringify(plotDiv.layout.scene.camera)) : null;
+            var figure = {figure_json};
+            if (currentCamera) {{
+                figure.layout = figure.layout || {{}};
+                figure.layout.scene = figure.layout.scene || {{}};
+                figure.layout.scene.camera = currentCamera;
+            }}
+            window.Plotly.react(
+                plotDiv,
+                figure.data,
+                figure.layout,
+                figure.config || {{responsive: true}}
+            ).then(() => {{
+                if (currentCamera) {{
+                    window.Plotly.relayout(plotDiv, {{'scene.camera': currentCamera}});
+                }}
+                if (plotDiv._viewerState) {{
+                    Object.assign(plotDiv._viewerState, {json.dumps(state)});
+                }}
+            }});
+        }}
+        """
+        self._safe_run_javascript(js)
 
     # --- External Control API ---
 
@@ -365,6 +420,23 @@ class CoordViewerEngine:
         self.use_history_fading = enabled
         self._push_state()
 
+    def set_rotation_speed(self, deg_per_sec):
+        try:
+            speed = float(deg_per_sec)
+        except (TypeError, ValueError):
+            return
+        if speed <= 0:
+            return
+        self.rot_speed_dps = speed
+        if hasattr(self, 'plot') and self.plot.id:
+            js = f"""
+            var el = getElement({self.plot.id});
+            if (el && el.$el && el.$el._viewerState) {{
+                el.$el._viewerState.rot_speed_dps = {json.dumps(self.rot_speed_dps)};
+            }}
+            """
+            self._safe_run_javascript(js)
+
     def set_ortho(self, enabled: bool):
         self.use_ortho = enabled
         proj_type = 'orthographic' if self.use_ortho else 'perspective'
@@ -396,7 +468,7 @@ class CoordViewerEngine:
 
     def set_color(self, val):
         self.current_color_val = float(val)
-        hex_color = mcolors.to_hex(self.custom_cmap(self.current_color_val))
+        hex_color = _hsv_slider_to_hex(self.current_color_val)
         self.fig.data[0].marker.color = hex_color
         js = f"var el = getElement({self.plot.id}); if (el && el.$el && window.Plotly) window.Plotly.restyle(el.$el, {json.dumps({'marker.color': hex_color})}, [0]);"
         self._safe_run_javascript(js)
@@ -430,7 +502,8 @@ class CoordViewerEngine:
             'rot_full_angle': self.rot_full_angle,
             'rot_target_angle': self.rot_target_angle,
             'rot_dir': self.rot_dir,
-            'rot_accumulated': 0.0
+            'rot_accumulated': 0.0,
+            'rot_speed_dps': self.rot_speed_dps
         }
         if hasattr(self, 'plot') and self.plot.id:
             js = f"""
@@ -466,6 +539,7 @@ class CoordViewerEngine:
         state = {
             'curr_idx': self.curr_idx,
             'rotating': self.is_rotating,
+            'rot_speed_dps': self.rot_speed_dps,
             'tail_length': self.tail_length,
             'use_history_fading': self.use_history_fading
         }
@@ -508,11 +582,49 @@ class CoordViewerEngine:
 
             if (el && el.$el && window.Plotly) {{
                 var plotDiv = el.$el;
+
+                function ensureViewerInteractionHandlers() {{
+                    function markCameraInteraction() {{
+                        if (!plotDiv._viewerState) return;
+                        plotDiv._viewerState.isUserDragging = true;
+                        plotDiv._viewerState.lastCameraInteractionMs = performance.now();
+                    }}
+
+                    function releaseCameraInteraction(delayMs) {{
+                        setTimeout(() => {{
+                            if (plotDiv._viewerState) {{
+                                plotDiv._viewerState.isUserDragging = false;
+                                plotDiv._viewerState.lastCameraInteractionMs = performance.now();
+                            }}
+                        }}, delayMs);
+                    }}
+
+                    if (plotDiv._viewerInteractionHandlersReady) {{
+                        return;
+                    }}
+                    plotDiv._viewerInteractionHandlersReady = true;
+
+                    plotDiv.addEventListener('mousedown', markCameraInteraction, true);
+                    window.addEventListener('mouseup', () => releaseCameraInteraction(150), true);
+                    plotDiv.addEventListener('touchstart', markCameraInteraction, true);
+                    window.addEventListener('touchend', () => releaseCameraInteraction(150), true);
+                    if (window.PointerEvent) {{
+                        plotDiv.addEventListener('pointerdown', markCameraInteraction, true);
+                        window.addEventListener('pointerup', () => releaseCameraInteraction(150), true);
+                    }}
+                    plotDiv.addEventListener('wheel', () => {{
+                        markCameraInteraction();
+                        if (plotDiv.wheelTimeout) clearTimeout(plotDiv.wheelTimeout);
+                        plotDiv.wheelTimeout = setTimeout(() => releaseCameraInteraction(0), 250);
+                    }}, true);
+                }}
+
                 if (!plotDiv._viewerState) {{
                     plotDiv._viewerState = {{
                         curr_idx: {self.curr_idx},
                         displayed_idx: {self.curr_idx},
                         rotating: {str(self.is_rotating).lower()},
+                        rot_speed_dps: {self.rot_speed_dps},
                         rot_step_deg: {self.rot_step_deg},
                         rot_dir: {self.rot_dir},
                         rot_accumulated: {self.rot_accumulated},
@@ -524,31 +636,73 @@ class CoordViewerEngine:
                         isUserDragging: false,
                         forceRedraw: false,
                         pendingRedraw: false,
+                        lastRenderMs: 0,
+                        lastCameraInteractionMs: 0,
+                        lastTraceRedrawMs: 0,
+                        lastTraceIdx: -1,
+                        traceRedrawIntervalMs: 100,
                         full_x: {json.dumps(self.x.tolist())},
                         full_y: {json.dumps(self.y.tolist())},
                         full_z: {json.dumps(self.z.tolist())}
                     }};
+                    ensureViewerInteractionHandlers();
 
-                    plotDiv.addEventListener('mousedown', () => plotDiv._viewerState.isUserDragging = true, true);
-                    window.addEventListener('mouseup', () => setTimeout(() => {{ if (plotDiv._viewerState) plotDiv._viewerState.isUserDragging = false; }}, 150), true);
-                    plotDiv.addEventListener('touchstart', () => plotDiv._viewerState.isUserDragging = true, true);
-                    window.addEventListener('touchend', () => setTimeout(() => {{ if (plotDiv._viewerState) plotDiv._viewerState.isUserDragging = false; }}, 150), true);
-                    if (window.PointerEvent) {{
-                        plotDiv.addEventListener('pointerdown', () => plotDiv._viewerState.isUserDragging = true, true);
-                        window.addEventListener('pointerup', () => setTimeout(() => {{ if (plotDiv._viewerState) plotDiv._viewerState.isUserDragging = false; }}, 150), true);
+                    function rebuildViewerTraces(i) {{
+                        var st = plotDiv._viewerState;
+                        var s_act = st.use_history_fading ? Math.max(0, i - st.tail_length) : 0;
+                        if (plotDiv.data && plotDiv.data.length >= 4) {{
+                            plotDiv.data[3].x = [st.full_x[i]];
+                            plotDiv.data[3].y = [st.full_y[i]];
+                            plotDiv.data[3].z = [st.full_z[i]];
+                            
+                            plotDiv.data[2].x = st.full_x.slice(s_act, i + 1);
+                            plotDiv.data[2].y = st.full_y.slice(s_act, i + 1);
+                            plotDiv.data[2].z = st.full_z.slice(s_act, i + 1);
+                            
+                            if (st.use_history_fading && s_act > 0) {{
+                                plotDiv.data[1].x = st.full_x.slice(0, s_act);
+                                plotDiv.data[1].y = st.full_y.slice(0, s_act);
+                                plotDiv.data[1].z = st.full_z.slice(0, s_act);
+                            }} else {{
+                                plotDiv.data[1].x = [];
+                                plotDiv.data[1].y = [];
+                                plotDiv.data[1].z = [];
+                            }}
+                        }}
                     }}
-                    plotDiv.addEventListener('wheel', () => {{ 
-                        plotDiv._viewerState.isUserDragging = true; 
-                        if (plotDiv.wheelTimeout) clearTimeout(plotDiv.wheelTimeout); 
-                        plotDiv.wheelTimeout = setTimeout(() => {{ if (plotDiv._viewerState) plotDiv._viewerState.isUserDragging = false; }}, 250); 
-                    }}, true);
+
+                    function applyViewerUpdate(cameraChanged) {{
+                        window.Plotly.restyle(plotDiv, {{
+                            x: [plotDiv.data[1].x, plotDiv.data[2].x, plotDiv.data[3].x],
+                            y: [plotDiv.data[1].y, plotDiv.data[2].y, plotDiv.data[3].y],
+                            z: [plotDiv.data[1].z, plotDiv.data[2].z, plotDiv.data[3].z]
+                        }}, [1, 2, 3]);
+                        if (cameraChanged) {{
+                            window.Plotly.relayout(plotDiv, {{
+                                'scene.camera.eye': plotDiv.layout.scene.camera.eye
+                            }});
+                        }}
+                    }}
 
                     function renderLoop() {{
                         requestAnimationFrame(renderLoop);
                         var st = plotDiv._viewerState;
                         if (st.N === 0) return;
                         
+                        var nowMs = performance.now();
+                        var frameDeltaMs = st.lastRenderMs > 0 ? nowMs - st.lastRenderMs : (1000.0 / 60.0);
+                        st.lastRenderMs = nowMs;
+                        frameDeltaMs = Math.max(0, Math.min(frameDeltaMs, 100));
+                        var cameraChanged = false;
+                        var forceRedraw = false;
                         var needsRedraw = false;
+                        var userCameraBusy = (
+                            st.isUserDragging ||
+                            (
+                                st.lastCameraInteractionMs &&
+                                (nowMs - st.lastCameraInteractionMs) < 300
+                            )
+                        );
                         
                         if (Math.abs(st.curr_idx - st.displayed_idx) > 0.01) {{
                             st.displayed_idx += (st.curr_idx - st.displayed_idx) * 0.3;
@@ -562,14 +716,25 @@ class CoordViewerEngine:
                         
                         if (st.forceRedraw) {{
                             needsRedraw = true;
+                            forceRedraw = true;
                             st.forceRedraw = false;
                         }}
                         
                         var i = Math.floor(st.displayed_idx);
                         i = Math.max(0, Math.min(i, st.N - 1));
+
+                        var canRedrawTraces = (
+                            !st.rotating ||
+                            forceRedraw ||
+                            (
+                                i !== st.lastTraceIdx &&
+                                (nowMs - st.lastTraceRedrawMs) >= st.traceRedrawIntervalMs
+                            )
+                        );
                         
-                        if (st.rotating && !st.isUserDragging && plotDiv.layout && plotDiv.layout.scene && plotDiv.layout.scene.camera) {{
-                            st.rot_accumulated += st.rot_step_deg;
+                        if (st.rotating && !userCameraBusy && plotDiv.layout && plotDiv.layout.scene && plotDiv.layout.scene.camera) {{
+                            var rotStepDeg = st.rot_speed_dps !== undefined ? st.rot_speed_dps * frameDeltaMs / 1000.0 : st.rot_step_deg;
+                            st.rot_accumulated += rotStepDeg;
                             if (st.rot_accumulated >= st.rot_target_angle) {{
                                 st.rot_dir *= -1;
                                 st.rot_accumulated = 0.0;
@@ -577,48 +742,46 @@ class CoordViewerEngine:
                             }}
                             var eye = plotDiv.layout.scene.camera.eye;
                             if (eye && eye.x !== undefined) {{
-                                var rad = st.rot_step_deg * st.rot_dir * Math.PI / 180.0;
+                                var rad = rotStepDeg * st.rot_dir * Math.PI / 180.0;
                                 var new_x = eye.x * Math.cos(rad) - eye.y * Math.sin(rad);
                                 var new_y = eye.x * Math.sin(rad) + eye.y * Math.cos(rad);
                                 eye.x = new_x;
                                 eye.y = new_y;
-                                needsRedraw = true;
+                                cameraChanged = true;
                             }}
                         }}
                         
-                        if (needsRedraw) {{
-                            var s_act = st.use_history_fading ? Math.max(0, i - st.tail_length) : 0;
-                            if (plotDiv.data && plotDiv.data.length >= 4) {{
-                                plotDiv.data[3].x = [st.full_x[i]];
-                                plotDiv.data[3].y = [st.full_y[i]];
-                                plotDiv.data[3].z = [st.full_z[i]];
-                                
-                                plotDiv.data[2].x = st.full_x.slice(s_act, i + 1);
-                                plotDiv.data[2].y = st.full_y.slice(s_act, i + 1);
-                                plotDiv.data[2].z = st.full_z.slice(s_act, i + 1);
-                                
-                                if (st.use_history_fading && s_act > 0) {{
-                                    plotDiv.data[1].x = st.full_x.slice(0, s_act);
-                                    plotDiv.data[1].y = st.full_y.slice(0, s_act);
-                                    plotDiv.data[1].z = st.full_z.slice(0, s_act);
-                                }} else {{
-                                    plotDiv.data[1].x = [];
-                                    plotDiv.data[1].y = [];
-                                    plotDiv.data[1].z = [];
-                                }}
-                            }}
-                            if (st.isUserDragging) {{
+                        if (needsRedraw && canRedrawTraces) {{
+                            st.lastTraceRedrawMs = nowMs;
+                            st.lastTraceIdx = i;
+                            rebuildViewerTraces(i);
+                            if (userCameraBusy) {{
                                 // Let Plotly own the camera interaction while the user is dragging.
                                 // Repeated redraws during playback interrupt the drag gesture.
                                 st.pendingRedraw = true;
                             }} else {{
-                                window.Plotly.react(plotDiv, plotDiv.data, plotDiv.layout);
+                                applyViewerUpdate(cameraChanged);
                                 st.pendingRedraw = false;
                             }}
-                        }} else if (!st.isUserDragging && st.pendingRedraw) {{
+                        }} else if (needsRedraw) {{
+                            st.pendingRedraw = true;
+
+                            if (cameraChanged && !userCameraBusy) {{
+                                window.Plotly.relayout(plotDiv, {{
+                                    'scene.camera.eye': plotDiv.layout.scene.camera.eye
+                                }});
+                            }}
+                        }} else if (cameraChanged && !userCameraBusy) {{
+                            window.Plotly.relayout(plotDiv, {{
+                                'scene.camera.eye': plotDiv.layout.scene.camera.eye
+                            }});
+                        }} else if (!userCameraBusy && st.pendingRedraw) {{
                             // Playback may have advanced while the camera was being moved.
                             // Apply the latest frame once the interaction finishes.
-                            window.Plotly.react(plotDiv, plotDiv.data, plotDiv.layout);
+                            rebuildViewerTraces(i);
+                            applyViewerUpdate(false);
+                            st.lastTraceRedrawMs = nowMs;
+                            st.lastTraceIdx = i;
                             st.pendingRedraw = false;
                         }}
                     }}
@@ -630,6 +793,13 @@ class CoordViewerEngine:
                     plotDiv._viewerState.full_z = {json.dumps(self.z.tolist())};
                     plotDiv._viewerState.curr_idx = {self.curr_idx};
                     plotDiv._viewerState.displayed_idx = {self.curr_idx};
+                    plotDiv._viewerState.rot_speed_dps = {self.rot_speed_dps};
+                    if (plotDiv._viewerState.lastRenderMs === undefined) plotDiv._viewerState.lastRenderMs = 0;
+                    if (plotDiv._viewerState.lastCameraInteractionMs === undefined) plotDiv._viewerState.lastCameraInteractionMs = 0;
+                    if (plotDiv._viewerState.lastTraceRedrawMs === undefined) plotDiv._viewerState.lastTraceRedrawMs = 0;
+                    if (plotDiv._viewerState.lastTraceIdx === undefined) plotDiv._viewerState.lastTraceIdx = -1;
+                    if (plotDiv._viewerState.traceRedrawIntervalMs === undefined) plotDiv._viewerState.traceRedrawIntervalMs = 100;
+                    ensureViewerInteractionHandlers();
                     plotDiv._viewerState.forceRedraw = true;
                 }}
             }}

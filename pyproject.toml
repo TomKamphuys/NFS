@@ -23,11 +23,10 @@ dependencies = [
   "pandas",
   "plotly",
   "scipy",
-  "matplotlib",
   "loguru",
   "grbl-streamer>=2.0.2",
-  "pyfar>=0.7.3",
   "sounddevice>=0.5.3",
+  "soundfile>=0.13.1",
   "scipy-stubs~=1.16.3",
   "nicegui[highcharts]>=2.24.2",
 ]

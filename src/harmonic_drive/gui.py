@@ -142,13 +142,13 @@ def main_page():
                     'w-56 h-full bg-gray-100 border-r border-gray-300 p-2 gap-2'
                 ) as menu:
                     ui.label('Views').classes('text-sm font-bold text-gray-600')
-                    live_capture_button = ui.button(
-                        'Live Capture',
-                        icon='graphic_eq',
-                    ).props('flat align=left').classes('w-full justify-start')
                     grid_button = ui.button(
                         'Grid Generator',
                         icon='grid_on',
+                    ).props('flat align=left').classes('w-full justify-start')
+                    live_capture_button = ui.button(
+                        'Live Capture',
+                        icon='graphic_eq',
                     ).props('flat align=left').classes('w-full justify-start')
                 menu_visible = {'value': True}
 
@@ -166,12 +166,14 @@ def main_page():
                     control.build_control_pane(log_dialog)
 
         with splitter.after:
-            with ui.element('div').classes('w-full h-full min-w-0'):
-                live_capture_panel = ui.column().classes('w-full h-full')
-                grid_panel = ui.column().classes('w-full h-full overflow-auto')
+            with ui.element('div').classes('w-full h-full min-h-0 min-w-0 overflow-hidden'):
+                live_capture_panel = ui.column().classes(
+                    'w-full h-full min-h-0 min-w-0 overflow-hidden'
+                )
+                grid_panel = ui.column().classes('w-full h-full min-h-0 overflow-auto')
 
                 with live_capture_panel:
-                    live_capture.build_live_capture()
+                    live_capture.build_live_capture(control.scanner_app.config_file)
 
                 with grid_panel:
                     build_grid_gen_ui(

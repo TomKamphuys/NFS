@@ -271,6 +271,10 @@ def build_grid_gen_ui(get_current_pos_callback=None, on_grid_saved_callback=None
                                 ui.slider(min=10, max=200, value=50, on_change=lambda e: engine.set_tail_length(e.value)).props('dense').classes('w-24')
                                 
                             ui.checkbox('Fade History', value=False, on_change=lambda e: engine.set_history_mode(e.value)).props('dense size=sm').classes('text-sm text-gray-700')
+
+                            with ui.row().classes('items-center gap-2'):
+                                ui.label('Rot Speed:').classes('text-sm font-semibold text-gray-700 w-16')
+                                ui.number(value=5, min=1, max=180, step=1, on_change=lambda e: engine.set_rotation_speed(e.value)).props('dense outlined bg-color=white size=sm suffix="deg/s"').classes('w-28')
                             
                             with ui.row().classes('items-center gap-2'):
                                 ui.label('Color:').classes('text-sm font-semibold text-gray-700 w-16')

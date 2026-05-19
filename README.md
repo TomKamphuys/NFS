@@ -20,9 +20,9 @@ For a detailed walkthrough of the system and the graphical interface, please ref
 - **Automated scanning** — define a set of measurement positions and let the scanner work through them unattended.
 - **Real-time Progress Monitoring** — stay informed with point-by-point updates (e.g., "Measuring point 10 of 200... 5% complete") logged during long-running scans.
 - **Cylindrical & spherical grids** — built-in plugins for cylindrical, spherical, arc-based, and file-based measurement point generation.
-- **Impulse response capture** — uses exponential sweep excitation with [pyfar](https://pyfar.org/) for high-quality IR measurements.
+- **Impulse response capture** — uses an in-project exponential sine sweep engine with loopback-marker alignment and FFT deconvolution for high-quality IR measurements.
 - **GRBL / FluidNC motion control** — communicates with Arduino or ESP32-based CNC controllers over serial.
-- **DSP Backend** — Includes deconvolution of sweeps, time-alignment based on loopback markers, and windowing.
+- **DSP Backend** — Includes custom sweep generation, Barker-code loopback alignment, multi-sweep averaging, FFT deconvolution, driver-protection filtering, linear/distortion IR separation, and windowing.
 - **DSP Verification Tooling** — Automated real-time verification of measurement quality, including SNR estimation, THD calculation, and alignment Peak Sharpness Ratio (PSR) monitoring.
 - **Pluggable architecture** — measurement-point generators are loaded as plugins; easy to add your own.
 - **Configurable via INI file** — all hardware, audio, and motion parameters live in a single `config.ini`.
@@ -303,10 +303,18 @@ The `config.ini` file controls all hardware and software parameters.
 - `safe_radius`: Minimum distance maintained to prevent collisions.
 
 ### `[audio]` & `[sweep]`
-- `mode`: Set to `hardware` for real measurements or `mock` for testing without hardware.
+- `mode`: Audio backend entry point, for example `mock_interface` for testing without hardware.
 - `in_dev` / `out_dev`: Audio interface device indices.
-- `sweep_dur_s`: Length of the exponential sweep.
+- `in_ch_mic` / `in_ch_loop`: Input channels for the microphone and loopback marker.
+- `out_ch_spkr` / `out_ch_ref`: Output channels for the speaker sweep and reference marker.
+- `fs`: Sample rate in Hz.
+- `sweep_dur_s`: Length of the exponential sine sweep.
+- `sweep_level_dbfs`: Playback level for the sweep and marker.
 - `num_sweeps`: Number of captures to average per point to improve SNR.
+- `align_to_first_marker`: If true, aligns subsequent sweeps from the first marker; if false, re-syncs every sweep.
+- `pre_sil_ms` / `post_sil_ms`: Silence around the sweep for settling and decay capture.
+- `mic_tail_taper_ms`: Fade applied to the captured tail.
+- `protect_hpf_hz` / `protect_hpf_order`: Optional playback high-pass filter for driver protection.
 - `naming_convention`: File naming format for recordings (`tom` or `dimitri`).
 
 ---
@@ -336,9 +344,9 @@ The UI is divided into two main panels: **Controls (Left)** and **Plots (Right)*
 - **Take single measurement**: Captures a single sweep at the current position.
 
 ### Live Displays
-- **Position Dials**: Real-time readout of Radius (R), Theta (PHI), and Height (Z).
+- **Position Dials**: Real-time readout of Radius (R), Phi (P), and Height (Z).
 - **Status**: Current machine state (Idle, Run, Alarm, etc.).
-- **Live Plot**: A scatter plot showing measured points in Azimuth vs. Elevation space.
+- **Live Capture**: Plotly panels for measurement progress, measured positions, frequency response, and impulse response. Panels can be reordered, shown/hidden, and saved as defaults.
 - **Log View**: Accessible via **Show Logs**. Displays real-time system events and errors.
 
 ---
