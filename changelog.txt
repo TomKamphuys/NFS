@@ -48,7 +48,7 @@ Added alignment_debug.npz export when debug_saves is enabled. Includes raw loopb
 Added user variable for wav file naming convention. Tom for method compatible with Tom's processing code. Dimitri for the method compatible with Dimitri's processing code.
 
 20/05/26
-Updated the config.ini and GUI config editor to reflect the protection HPF correction settings. Added PROTECT_HPF_CORRECTION and PROTECT_HPF_CORR_DB_CAP to the sweep settings and removed the redundant protect_hpf_phase field.
+Updated the config.ini and GUI config editor to reflect the protection HPF correction settings. Added protect_hpf_correction and protect_hpf_corr_db_cap to the sweep settings and removed the redundant protect_hpf_phase field.
 
 Updated tests to match.
 

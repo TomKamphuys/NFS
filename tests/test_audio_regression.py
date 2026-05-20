@@ -36,10 +36,10 @@ def mock_config(tmp_path):
         'debug_saves': 'True',
         'H2_TEST_DB': 'None',
         'H3_TEST_DB': 'None',
-        'PROTECT_HPF_HZ': '0',
-        'PROTECT_HPF_ORDER': '4',
-        'PROTECT_HPF_CORRECTION': 'False',
-        'PROTECT_HPF_CORR_DB_CAP': '12.0',
+        'protect_hpf_hz': '0',
+        'protect_hpf_order': '4',
+        'protect_hpf_correction': 'False',
+        'protect_hpf_corr_db_cap': '12.0',
     }
 
     config_path = tmp_path / "regression_test_config.ini"
