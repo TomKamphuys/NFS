@@ -249,7 +249,10 @@ def test_integration_with_mock_audio(tmp_path):
         'pre_sil_ms': '50', 'post_sil_ms': '50', 'mic_tail_taper_ms': '10',
         'align_to_first_marker': 'True', 'debug_saves': 'True',
         'H2_TEST_DB': 'None', 'H3_TEST_DB': 'None',
-        'PROTECT_HPF_HZ': '0', 'PROTECT_HPF_ORDER': '4', 'PROTECT_HPF_PHASE': 'min'
+        'protect_hpf_hz': '0',
+        'protect_hpf_order': '4',
+        'protect_hpf_correction': 'False',
+        'protect_hpf_corr_db_cap': '12.0',
     }
 
     config_path = tmp_path / "dsp_test_config.ini"
