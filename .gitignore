@@ -33,3 +33,5 @@ tests/measurement_positions.txt
 /measurement_positions.csv
 docs/_build/
 /measurements/
+/config.old
+/tests/Recordings/
