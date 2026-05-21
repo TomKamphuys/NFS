@@ -3,7 +3,7 @@ import os
 
 from nicegui import app, ui
 
-from grid_generator.grid_gen_gui import build_grid_gen_ui
+from grid_generator.grid_gen_gui import build_grid_gen_ui, register_grid_image_files
 from harmonic_drive import control, live_capture
 
 
@@ -219,6 +219,7 @@ def main():
     static_images_path = os.path.join(os.getcwd(), 'images')
     if os.path.exists(static_images_path):
         app.add_static_files('/images', static_images_path)
+    register_grid_image_files()
 
     favicon = os.path.join(static_images_path, 'icon.png')
     ui.run(

@@ -7,6 +7,7 @@ Run this script directly to launch the web UI:
 """
 
 import os
+from pathlib import Path
 
 try:
     from .grid_gen import generate_measurement_grid
@@ -17,9 +18,27 @@ except ImportError:
     from path_plan import plan_path
     from coord_viewer_core import CoordViewerEngine
 
-from nicegui import ui
+from nicegui import app, ui
 
 GRID_OUTPUT_FILENAME = 'grid1.csv'
+GRID_IMAGE_ROUTE = '/grid-gen-images'
+GRID_IMAGE_DIR = Path(__file__).resolve().parent / 'images_grid_gen'
+_grid_image_route_registered = False
+
+
+def register_grid_image_files() -> None:
+    """Expose bundled grid-generator diagrams through stable browser URLs."""
+    global _grid_image_route_registered
+    if _grid_image_route_registered:
+        return
+    if GRID_IMAGE_DIR.exists():
+        app.add_static_files(GRID_IMAGE_ROUTE, GRID_IMAGE_DIR)
+        _grid_image_route_registered = True
+
+
+def grid_image_url(filename: str) -> str:
+    register_grid_image_files()
+    return f'{GRID_IMAGE_ROUTE}/{filename}'
 
 
 def build_grid_gen_ui(get_current_pos_callback=None, on_grid_saved_callback=None):
@@ -30,6 +49,7 @@ def build_grid_gen_ui(get_current_pos_callback=None, on_grid_saved_callback=None
     :param on_grid_saved_callback: Optional callback receiving the generated grid
                                    filename after a successful save.
     """
+    register_grid_image_files()
     
     def set_position_from_callback(r_input, phi_input, z_input, btn, default_r, default_phi, default_z):
         if get_current_pos_callback:
@@ -77,7 +97,7 @@ def build_grid_gen_ui(get_current_pos_callback=None, on_grid_saved_callback=None
                                 ui.icon('help_outline', size='14px')
                                 ui.label('diagram').classes('text-[10px] font-bold uppercase tracking-wider')
                                 with ui.tooltip().props('content-class="bg-white p-1 border border-gray-300 shadow-xl"'):
-                                    ui.image(os.path.join(os.path.dirname(__file__), 'images_grid_gen', 'waypoint_top.png')).classes('w-64 rounded')
+                                    ui.image(grid_image_url('waypoint_top.png')).classes('w-64 rounded')
                         wp_top_r = ui.number('Radius', format='%.1f').classes('w-20').props('dense')
                         wp_top_phi = ui.number('Phi', format='%.1f').classes('w-20').props('dense')
                         wp_top_z = ui.number('Height', format='%.1f').classes('w-20').props('dense')
@@ -92,7 +112,7 @@ def build_grid_gen_ui(get_current_pos_callback=None, on_grid_saved_callback=None
                                 ui.icon('help_outline', size='14px')
                                 ui.label('diagram').classes('text-[10px] font-bold uppercase tracking-wider')
                                 with ui.tooltip().props('content-class="bg-white p-1 border border-gray-300 shadow-xl"'):
-                                    ui.image(os.path.join(os.path.dirname(__file__), 'images_grid_gen', 'waypoint_bottom.png')).classes('w-64 rounded')
+                                    ui.image(grid_image_url('waypoint_bottom.png')).classes('w-64 rounded')
                         wp_bot_r = ui.number('Radius', format='%.1f').classes('w-20').props('dense')
                         wp_bot_phi = ui.number('Phi', format='%.1f').classes('w-20').props('dense')
                         wp_bot_z = ui.number('Height', format='%.1f').classes('w-20').props('dense')
@@ -107,7 +127,7 @@ def build_grid_gen_ui(get_current_pos_callback=None, on_grid_saved_callback=None
                                 ui.icon('help_outline', size='14px')
                                 ui.label('diagram').classes('text-[10px] font-bold uppercase tracking-wider')
                                 with ui.tooltip().props('content-class="bg-white p-1 border border-gray-300 shadow-xl"'):
-                                    ui.image(os.path.join(os.path.dirname(__file__), 'images_grid_gen', 'tweeter_point.png')).classes('w-64 rounded')
+                                    ui.image(grid_image_url('tweeter_point.png')).classes('w-64 rounded')
                         wp_twt_r = ui.number('Radius', format='%.1f').classes('w-20').props('dense')
                         wp_twt_phi = ui.number('Phi', format='%.1f').classes('w-20').props('dense')
                         wp_twt_z = ui.number('Height', format='%.1f').classes('w-20').props('dense')
@@ -301,6 +321,8 @@ def build_grid_gen_ui(get_current_pos_callback=None, on_grid_saved_callback=None
 
 
 if __name__ in {"__main__", "__mp_main__"}:
+    register_grid_image_files()
+
     @ui.page('/')
     def main_page():
         ui.page_title("3D Replay Viewer (Plotly)")
