@@ -1,8 +1,33 @@
 
 --------
+22/05/26
+--------
+Added a compact "Drag to reorder" hint to the Live Capture header so the panel
+drag handles are discoverable without taking much screen space.
+
+Files touched:
+live_capture.py
+changelog.txt
+
+--------
+22/05/26
+--------
+Fixed Live Capture 3D Progress so switching back after generating a grid reloads
+the latest grid file automatically.
+
+Files touched:
+live_capture.py
+changelog.txt
+
+--------
 21/05/26
 --------
 Fixed: image loading by serving images through a stable NiceGUI static route instead of relying on auto-generated local file URLs.
+
+Files touched:
+grid_gen_gui.py
+gui.py
+changelog.txt
 
 --------
 19/05/26
@@ -282,17 +307,3 @@ Added alignment_debug.npz export when debug_saves is enabled. Includes raw loopb
 
 28/02/26
 Added user variable for wav file naming convention. Tom for method compatible with Tom's processing code. Dimitri for the method compatible with Dimitri's processing code.
-
-20/05/26
-Updated the config.ini and GUI config editor to reflect the protection HPF correction settings. Added protect_hpf_correction and protect_hpf_corr_db_cap to the sweep settings and removed the redundant protect_hpf_phase field.
-
-Updated tests to match.
-
-Files touched:
-config.ini
-config_editor.py
-test_audio_engine.py
-test_config_editor.py
-test_dsp_verification.py
-
-

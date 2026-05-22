@@ -29,6 +29,9 @@ ui.add_css("""
 
 
 grid_progress_engine = None
+grid_progress_title_label = None
+grid_progress_grid_path = None
+grid_progress_grid_mtime = None
 measurement_position_plot = None
 impulse_response_plot = None
 frequency_response_plot = None
@@ -462,8 +465,28 @@ def _save_panel_layout(
 
 
 def update_grid_progress_viewer():
+    global grid_progress_grid_path, grid_progress_grid_mtime
     if grid_progress_engine is None:
         return
+
+    grid_file = _find_grid_file()
+    grid_path = str(grid_file.resolve()) if grid_file is not None else None
+    grid_mtime = grid_file.stat().st_mtime if grid_file is not None else None
+
+    if grid_path != grid_progress_grid_path or grid_mtime != grid_progress_grid_mtime:
+        if grid_file is None:
+            return
+        try:
+            grid_progress_engine.load_data(str(grid_file))
+            grid_progress_grid_path = grid_path
+            grid_progress_grid_mtime = grid_mtime
+            if grid_progress_title_label is not None:
+                grid_progress_title_label.set_text(
+                    f'Measurement Progress: {grid_file.name}'
+                )
+        except Exception as exc:
+            logger.error(f"Error reloading grid progress file: {exc}")
+            return
 
     measurement_file = _find_latest_measurement_positions_file()
     measured_count = _count_measurement_rows(measurement_file)
@@ -571,7 +594,10 @@ def _build_plot_panel(title, update_callback):
 
 
 def _build_grid_progress_panel():
+    global grid_progress_title_label, grid_progress_grid_path, grid_progress_grid_mtime
     grid_file = _find_grid_file()
+    grid_progress_grid_path = str(grid_file.resolve()) if grid_file is not None else None
+    grid_progress_grid_mtime = grid_file.stat().st_mtime if grid_file is not None else None
 
     with ui.element('div').classes(
         'w-full shrink-0 border border-gray-300 rounded bg-white p-2'
@@ -584,7 +610,9 @@ def _build_grid_progress_panel():
                 ui.icon('drag_indicator').classes(
                     'live-capture-drag-handle text-gray-500'
                 )
-                ui.label(title).classes('text-sm font-bold text-gray-700')
+                grid_progress_title_label = ui.label(title).classes(
+                    'text-sm font-bold text-gray-700'
+                )
 
         if grid_file is None:
             ui.label('No planned grid file found. Generate a grid first.').classes(
@@ -810,6 +838,9 @@ def build_live_capture(config_file='config.ini'):
     ):
         with ui.row().classes('w-full shrink-0 items-center gap-3 flex-wrap') as header_bar:
             ui.label('Live Capture').classes('text-xl font-bold')
+            with ui.row().classes('items-center gap-1 text-gray-500'):
+                ui.icon('drag_indicator').classes('text-sm')
+                ui.label('Drag to reorder').classes('text-xs')
             plot_button_bar = ui.row().classes('items-center gap-2 flex-wrap')
 
         with ui.column().classes(
