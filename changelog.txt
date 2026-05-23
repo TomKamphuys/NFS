@@ -1,5 +1,19 @@
 
 --------
+23/05/26
+--------
+Added optional user-position fields to the grid generator UI for marking extra
+speaker reference points such as woofer, midrange or port locations. These
+positions are saved into the generated CSV metadata as user_position_* entries.
+Can be referenced in post-processing as a visual assist.
+
+Files touched:
+src/grid_generator/grid_gen.py
+src/grid_generator/grid_gen_gui.py
+src/grid_generator/config_grid.py
+changelog.txt
+
+--------
 22/05/26
 --------
 Added a compact "Drag to reorder" hint to the Live Capture header so the panel

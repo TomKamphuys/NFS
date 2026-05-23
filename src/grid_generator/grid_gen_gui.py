@@ -70,6 +70,38 @@ def build_grid_gen_ui(get_current_pos_callback=None, on_grid_saved_callback=None
             z_input.set_value(default_z)
             btn.props('color=green')
 
+    extra_position_fields = []
+
+    def add_extra_position_field():
+        with extra_positions_container:
+            with ui.row().classes('items-center w-fit gap-2 border border-gray-200 rounded p-1 bg-gray-50') as row_container:
+                with ui.column().classes('w-32 gap-0 leading-tight'):
+                    name_input = ui.input('Name').classes('w-full').props('dense')
+                r_input = ui.number('Radius', format='%.1f').classes('w-20').props('dense')
+                phi_input = ui.number('Phi', format='%.1f').classes('w-20').props('dense')
+                z_input = ui.number('Height', format='%.1f').classes('w-20').props('dense')
+                set_btn = ui.button(
+                    'Set',
+                    on_click=lambda e: set_position_from_callback(
+                        r_input, phi_input, z_input, e.sender,
+                        150.0, 0.0, 200.0
+                    )
+                ).props('size=sm')
+        extra_position_fields.append({
+            'name': name_input,
+            'r': r_input,
+            'phi': phi_input,
+            'z': z_input,
+            'row': row_container,
+            'set_button': set_btn,
+        })
+
+    def remove_latest_extra_position_field():
+        if not extra_position_fields:
+            return
+        field = extra_position_fields.pop()
+        field['row'].delete()
+
     # Main container (vertical stacking)
     with ui.column().classes('w-full max-w-4xl mx-auto p-4 items-center gap-4'):
         
@@ -119,20 +151,25 @@ def build_grid_gen_ui(get_current_pos_callback=None, on_grid_saved_callback=None
                         ui.button('Set', on_click=lambda e: set_position_from_callback(wp_bot_r, wp_bot_phi, wp_bot_z, e.sender, 40.0, 0.0, -50.0)).props('size=sm')
                     g_az_dens = ui.number('Azimuth Density Ratio', value=1.0, format='%.2f').classes('flex-1').props('dense outlined bg-color=white')
 
-                with ui.row().classes('w-full items-stretch gap-4'):
-                    with ui.row().classes('items-center w-fit gap-2 border border-gray-200 rounded p-1 bg-gray-50'):
-                        with ui.column().classes('w-32 gap-0 leading-tight'):
-                            ui.label('Tweeter Point:').classes('font-semibold text-sm')
-                            with ui.row().classes('items-center gap-1 text-blue-500 hover:text-blue-700 cursor-help transition-colors'):
-                                ui.icon('help_outline', size='14px')
-                                ui.label('diagram').classes('text-[10px] font-bold uppercase tracking-wider')
-                                with ui.tooltip().props('content-class="bg-white p-1 border border-gray-300 shadow-xl"'):
-                                    ui.image(grid_image_url('tweeter_point.png')).classes('w-64 rounded')
-                        wp_twt_r = ui.number('Radius', format='%.1f').classes('w-20').props('dense')
-                        wp_twt_phi = ui.number('Phi', format='%.1f').classes('w-20').props('dense')
-                        wp_twt_z = ui.number('Height', format='%.1f').classes('w-20').props('dense')
-                        ui.button('Set', on_click=lambda e: set_position_from_callback(wp_twt_r, wp_twt_phi, wp_twt_z, e.sender, 150.0, 0.0, 250.0)).props('size=sm')
-                    with ui.row().classes('flex-1 items-center justify-between bg-gray-100 hover:bg-gray-200 cursor-pointer rounded border border-gray-200 p-1 px-2 transition-colors').on('click', toggle_adv):
+                with ui.row().classes('w-full items-end gap-4'):
+                    with ui.column().classes('w-fit gap-1'):
+                        with ui.row().classes('items-center w-fit gap-2 border border-gray-200 rounded p-1 bg-gray-50'):
+                            with ui.column().classes('w-32 gap-0 leading-tight'):
+                                ui.label('Tweeter Point:').classes('font-semibold text-sm')
+                                with ui.row().classes('items-center gap-1 text-blue-500 hover:text-blue-700 cursor-help transition-colors'):
+                                    ui.icon('help_outline', size='14px')
+                                    ui.label('diagram').classes('text-[10px] font-bold uppercase tracking-wider')
+                                    with ui.tooltip().props('content-class="bg-white p-1 border border-gray-300 shadow-xl"'):
+                                        ui.image(grid_image_url('tweeter_point.png')).classes('w-64 rounded')
+                            wp_twt_r = ui.number('Radius', format='%.1f').classes('w-20').props('dense')
+                            wp_twt_phi = ui.number('Phi', format='%.1f').classes('w-20').props('dense')
+                            wp_twt_z = ui.number('Height', format='%.1f').classes('w-20').props('dense')
+                            ui.button('Set', on_click=lambda e: set_position_from_callback(wp_twt_r, wp_twt_phi, wp_twt_z, e.sender, 150.0, 0.0, 250.0)).props('size=sm')
+                        extra_positions_container = ui.column().classes('w-fit gap-1')
+                        with ui.row().classes('items-center gap-1 self-start'):
+                            ui.button(icon='add', on_click=add_extra_position_field).props('flat round dense color=primary')
+                            ui.button(icon='remove', on_click=remove_latest_extra_position_field).props('flat round dense color=negative')
+                    with ui.row().classes('flex-1 h-fit items-center justify-between bg-gray-100 hover:bg-gray-200 cursor-pointer rounded border border-gray-200 p-1 px-2 transition-colors').on('click', toggle_adv):
                         with ui.row().classes('items-center gap-2'):
                             ui.icon('settings', size='sm').classes('text-gray-700')
                             ui.label('Advanced Settings').classes('text-gray-800 text-sm font-medium')
@@ -168,6 +205,16 @@ def build_grid_gen_ui(get_current_pos_callback=None, on_grid_saved_callback=None
                         if r.value is None or phi.value is None or z.value is None:
                             return None
                         return (float(r.value), float(phi.value), float(z.value))
+
+                    def get_additional_positions():
+                        positions = []
+                        for index, field in enumerate(extra_position_fields, start=1):
+                            pos = get_wp(field['r'], field['phi'], field['z'])
+                            if pos is None:
+                                continue
+                            name = str(field['name'].value or '').strip() or f"point_{index}"
+                            positions.append((name, pos))
+                        return positions
                         
                     cf_val = None if str(g_cap_frac.value).strip().lower() in ('auto', 'none', '') else float(g_cap_frac.value)
                     
@@ -189,6 +236,7 @@ def build_grid_gen_ui(get_current_pos_callback=None, on_grid_saved_callback=None
                         azimuth_density_ratio=g_az_dens.value,
                         azimuth_weight_center_deg=g_az_wc.value,
                         tweeter_pos=get_wp(wp_twt_r, wp_twt_phi, wp_twt_z),
+                        additional_positions=get_additional_positions(),
                         top_crit_pos=get_wp(wp_top_r, wp_top_phi, wp_top_z),
                         bot_crit_pos=get_wp(wp_bot_r, wp_bot_phi, wp_bot_z)
                     )

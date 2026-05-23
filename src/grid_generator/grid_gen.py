@@ -169,6 +169,7 @@ def generate_measurement_grid(
     azimuth_density_ratio=1.0,
     azimuth_weight_center_deg=0.0,
     tweeter_pos=None,
+    additional_positions=None,
     top_crit_pos=None,
     bot_crit_pos=None
 ):
@@ -291,6 +292,12 @@ def generate_measurement_grid(
     # Append Generation Settings
     # ===============================
     cyl_radius_working = cyl_radius + (wall_thickness_mm / 1000.0)
+    additional_positions = additional_positions or []
+
+    def safe_position_name(name, index):
+        cleaned = "".join(ch if ch.isalnum() else "_" for ch in str(name or "").strip().lower())
+        cleaned = "_".join(part for part in cleaned.split("_") if part)
+        return cleaned or f"point_{index}"
 
     settings_list = [
         f"cyl_radius_internal={cyl_radius:.3f}",
@@ -313,6 +320,10 @@ def generate_measurement_grid(
         f"azimuth_density_ratio={azimuth_density_ratio}",
         f"azimuth_weight_center_deg={azimuth_weight_center_deg}",
         f"tweeter_pos={tweeter_pos}",
+        *[
+            f"user_position_{safe_position_name(name, index)}={pos}"
+            for index, (name, pos) in enumerate(additional_positions, start=1)
+        ],
         f"top_crit_pos={top_crit_pos}",
         f"bot_crit_pos={bot_crit_pos}",
         f"z_offset_mm={z_offset_mm}",
@@ -352,6 +363,7 @@ if __name__ == "__main__":
         azimuth_density_ratio,
         azimuth_weight_center_deg,
         tweeter_pos,
+        additional_positions,
         top_crit_pos,
         bot_crit_pos
     )
@@ -374,6 +386,7 @@ if __name__ == "__main__":
         azimuth_density_ratio=azimuth_density_ratio,
         azimuth_weight_center_deg=azimuth_weight_center_deg,
         tweeter_pos=tweeter_pos,
+        additional_positions=additional_positions,
         top_crit_pos=top_crit_pos,
         bot_crit_pos=bot_crit_pos
     )
