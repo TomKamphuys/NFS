@@ -49,8 +49,9 @@ SchemaEntry = Tuple[str, str, str, Optional[List[str]]]
 # ---------------------------------------------------------------------------
 MOTION_MANAGER_TYPES: Dict[str, List[SchemaEntry]] = {
     "CylindricalMeasurementMotionManager": [
-        ("safe_radius", "float",
-         "Minimum safe radius (mm) the motion manager retracts to before slewing.", None),
+        ("safe_radius", "optional_float",
+         "Optional extra-safe radius (mm) the motion manager retracts to before slewing. "
+         "Leave empty to default to 0 and avoid extra safe-radius intervention.", None),
     ],
     "SphericalMeasurementMotionManager": [
         # No extra parameters beyond the base ones.
@@ -61,8 +62,10 @@ MEASUREMENT_POINTS_TYPES: Dict[str, List[SchemaEntry]] = {
     "FileMeasurementPoints": [
         ("filename", "str",
          "CSV file containing the measurement grid points.", None),
-        ("homing_gap", "float", "Extra gap (mm) added at the homing position.", None),
-        ("pole_gap", "float", "Extra gap (mm) added at the pole position.", None),
+        ("homing_gap", "optional_float",
+         "Optional extra gap (degrees) excluded around the homing position.", None),
+        ("pole_gap", "optional_float",
+         "Optional extra gap (mm) excluded around the speaker stand/pole.", None),
     ],
     "CylindricalMeasurementPoints": [
         ("nr_of_angular_points", "int", "Number of angular sample points.", None),
@@ -87,8 +90,10 @@ MEASUREMENT_POINTS_TYPES: Dict[str, List[SchemaEntry]] = {
         ("nr_of_points", "int", "Total number of measurement points.", None),
         ("wall_spacing", "float", "Spacing between points and the wall (mm).", None),
         ("radius", "float", "Sphere radius (mm).", None),
-        ("homing_gap", "float", "Extra gap (mm) added at the homing position.", None),
-        ("pole_gap", "float", "Extra gap (mm) added at the pole position.", None),
+        ("homing_gap", "optional_float",
+         "Optional extra gap (degrees) excluded around the homing position.", None),
+        ("pole_gap", "optional_float",
+         "Optional extra gap (mm) excluded around the speaker stand/pole.", None),
     ],
     "SphericalMeasurementPointsSorted": [
         ("nr_of_points", "int", "Total number of measurement points.", None),
@@ -190,7 +195,7 @@ def _coerce(kind: str, raw: str):
         return int(float(raw))
     if kind == "float":
         return float(raw)
-    if kind == "opt_float":
+    if kind in ("opt_float", "optional_float"):
         if raw == "" or raw.lower() == "none":
             return None
         return float(raw)
@@ -200,7 +205,7 @@ def _coerce(kind: str, raw: str):
 def _format_for_ini(kind: str, value) -> str:
     if kind == "bool":
         return "True" if value else "False"
-    if kind == "opt_float" and value is None:
+    if kind in ("opt_float", "optional_float") and value is None:
         return "None"
     return str(value)
 
@@ -221,6 +226,61 @@ def _build_input(key: str, kind: str, current: str, options: Optional[List[str]]
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+def set_file_measurement_points_filename(
+    config_file: str,
+    filename: str,
+    on_apply: Callable[[], None] | None = None,
+) -> str:
+    """
+    Point the configured FileMeasurementPoints source at ``filename``.
+
+    This is the non-dialog counterpart to saving the measurement-points filename
+    through the config editor. It preserves whether the config uses inline
+    measurement-points settings or a referenced measurement-points section.
+
+    :return: The section updated with the filename.
+    """
+    path = Path(config_file)
+    if not path.exists():
+        raise FileNotFoundError(f"Config file not found: {path}")
+
+    parser = configparser.ConfigParser(inline_comment_prefixes=("#", ";"))
+    parser.optionxform = str  # type: ignore[assignment]
+    parser.read(path)
+
+    if not parser.has_section("motion_manager"):
+        raise KeyError("Config file missing [motion_manager] section")
+
+    mp_section = _strip_inline_comment(
+        parser.get("motion_manager", "measurement_points", fallback="")
+    )
+    target_section = mp_section or "motion_manager"
+    if mp_section and not parser.has_section(mp_section):
+        parser.add_section(mp_section)
+
+    if mp_section:
+        parser.set(mp_section, "type", "FileMeasurementPoints")
+        parser.set(mp_section, "filename", filename)
+    else:
+        parser.set("motion_manager", "measurement_points_type", "FileMeasurementPoints")
+        parser.set("motion_manager", "filename", filename)
+
+    backup_path = path.with_suffix(".old")
+    try:
+        import shutil
+        shutil.copy2(path, backup_path)
+        with open(path, "w") as f:
+            parser.write(f)
+    except OSError as exc:
+        logger.error(f"Failed to backup or write config: {exc}")
+        raise
+
+    logger.info(f"Updated [{target_section}] filename to {filename}; reloading config.")
+    if on_apply is not None:
+        on_apply()
+    return target_section
+
+
 def open_config_editor(config_file: str, on_apply: Callable[[], None]) -> None:
     path = Path(config_file)
     if not path.exists():
@@ -482,6 +542,10 @@ def _on_ok(parser, path, static_inputs, dyn, dialog, on_apply: Callable[[], None
         except Exception as exc:
             ui.notify(f"[{section}] {key}: invalid value ({exc})", type="negative")
             return
+        if kind == "optional_float" and typed is None:
+            if parser.has_option(section, key):
+                parser.remove_option(section, key)
+            continue
         new_values[(section, key)] = _format_for_ini(kind, typed)
 
     # motion_manager + inlined measurement-points
@@ -510,6 +574,10 @@ def _on_ok(parser, path, static_inputs, dyn, dialog, on_apply: Callable[[], None
             except Exception as exc:
                 ui.notify(f"[motion_manager] {key}: invalid value ({exc})", type="negative")
                 return
+            if kind == "optional_float" and typed is None:
+                if parser.has_option("motion_manager", key):
+                    parser.remove_option("motion_manager", key)
+                continue
             new_values[("motion_manager", key)] = _format_for_ini(kind, typed)
 
         # Remove now-stale extra keys belonging to *other* motion-manager types.
@@ -559,6 +627,10 @@ def _on_ok(parser, path, static_inputs, dyn, dialog, on_apply: Callable[[], None
                     ui.notify(f"[{target_section}] {key}: invalid value ({exc})",
                               type="negative")
                     return
+                if kind == "optional_float" and typed is None:
+                    if parser.has_option(target_section, key):
+                        parser.remove_option(target_section, key)
+                    continue
                 new_values[(target_section, key)] = _format_for_ini(kind, typed)
 
             # Remove stale keys (from previously selected mp types) under target section.

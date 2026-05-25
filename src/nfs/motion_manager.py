@@ -455,7 +455,14 @@ class MotionManagerFactory:
             pass
 
         if motion_manager_type == 'CylindricalMeasurementMotionManager':
-            safe_radius = config_parser.getfloat(section, 'safe_radius')
+            safe_radius_raw = config_parser.get(section, 'safe_radius', fallback='').strip()
+            if safe_radius_raw and safe_radius_raw.lower() != 'none':
+                safe_radius = float(safe_radius_raw)
+            else:
+                safe_radius = 0.0
+                logger.info(
+                    f"No safe_radius configured for [{section}]; defaulting to 0.0mm"
+                )
             return CylindricalMeasurementMotionManager(scanner, measurement_points, safe_radius)
         elif motion_manager_type == 'SphericalMeasurementMotionManager':
             return SphericalMeasurementMotionManager(scanner, measurement_points)

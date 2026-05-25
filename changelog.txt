@@ -1,3 +1,278 @@
+
+--------
+23/05/26
+--------
+Added optional user-position fields to the grid generator UI for marking extra
+speaker reference points such as woofer, midrange or port locations. These
+positions are saved into the generated CSV metadata as user_position_* entries.
+Can be referenced in post-processing as a visual assist.
+
+Files touched:
+src/grid_generator/grid_gen.py
+src/grid_generator/grid_gen_gui.py
+src/grid_generator/config_grid.py
+changelog.txt
+
+--------
+22/05/26
+--------
+Added a compact "Drag to reorder" hint to the Live Capture header so the panel
+drag handles are discoverable without taking much screen space.
+
+Files touched:
+live_capture.py
+changelog.txt
+
+--------
+22/05/26
+--------
+Fixed Live Capture 3D Progress so switching back after generating a grid reloads
+the latest grid file automatically.
+
+Files touched:
+live_capture.py
+changelog.txt
+
+--------
+21/05/26
+--------
+Fixed: image loading by serving images through a stable NiceGUI static route instead of relying on auto-generated local file URLs.
+
+Files touched:
+grid_gen_gui.py
+gui.py
+changelog.txt
+
+--------
+19/05/26
+--------
+Fixed generated-grid reloads in the Plotly 3D coordinate viewer so playback and
+auto-rotate do not snap back to a stale camera after a new grid is generated.
+Generated-grid updates now preserve the browser's current Plotly camera while
+refreshing the trace data, instead of pushing the Python-side figure layout with
+an old camera value.
+
+Files touched:
+src/grid_generator/coord_viewer_core.py
+changelog.txt
+
+--------
+19/05/26
+--------
+Removed stale pyfar and matplotlib dependencies now that audio.py uses the
+in-project sweep generation, alignment and FFT deconvolution pipeline. Added
+soundfile as an explicit dependency because audio.py and Live Capture read/write
+WAV files directly. Updated README audio descriptions to match the current
+custom DSP backend.
+
+Files touched:
+pyproject.toml
+uv.lock
+README.md
+changelog.txt
+
+--------
+19/05/26
+--------
+Refined Live Capture Frequency Response smoothing controls. The header now uses
+common fractional-octave presets (Off, 1/3, 1/6, 1/12, 1/24, 1/48), with the
+selected value saved by the Save as Default button. Optimized the smoothing
+calculation so long impulse responses no longer block initial page loading.
+
+Files touched:
+src/harmonic_drive/live_capture.py
+changelog.txt
+
+--------
+19/05/26
+--------
+Added a Live Capture guard for empty measurement_positions.csv files so the
+Measurement Positions plot stays in its waiting state without NumPy loadtxt
+warnings while a new measurement session has no logged positions yet.
+
+Files touched:
+src/harmonic_drive/live_capture.py
+changelog.txt
+
+--------
+19/05/26
+--------
+Switched the Live Capture acoustic analysis plots from matplotlib to Plotly,
+including the Measurement Positions, Impulse Response and Frequency Response
+panels. Removed the direct matplotlib dependency from pyproject.toml; matplotlib
+may still be installed transitively by pyfar.
+
+Added fractional-octave smoothing to the Live Capture Frequency Response plot.
+The smoothing amount is adjustable from the Live Capture header with the
+FR Smooth 1/ control, and is saved to config.ini under [live_capture] with
+frequency_smoothing_fraction = 24. A value of 24 means 1/24-octave smoothing,
+and 0 disables smoothing.
+
+Files touched:
+src/harmonic_drive/live_capture.py
+pyproject.toml
+uv.lock
+config.ini
+changelog.txt
+
+--------
+19/05/26
+--------
+Removed redundant matplotlib usage from the Plotly-based grid viewer and grid
+generator modules. coord_viewer_core.py now uses a small colorsys HSV-to-hex
+helper for the color slider, and grid_gen.py no longer imports stale pyplot or
+Axes3D dependencies.
+
+Files touched:
+src/grid_generator/coord_viewer_core.py
+src/grid_generator/grid_gen.py
+changelog.txt
+
+--------
+19/05/26
+--------
+Added user-draggable ordering for Live Capture panels, with persistent saved
+panel order and visibility settings in config.ini. Saved/restored layouts now
+also reorder the Live Capture visibility buttons so the buttons follow the same
+order as the panels.
+
+Changed the Frequency Response x-axis tick labels to standard audio-style
+frequency labels such as 1k, 2k, 5k and 10k instead of scientific notation.
+
+Files touched:
+src/harmonic_drive/live_capture.py
+changelog.txt
+
+--------
+19/05/26
+--------
+Improved Plotly 3D viewer rotate/play performance when bounds are visible.
+The browser render loop now avoids full Plotly.react calls during normal
+animation, using camera-only relayout updates for rotation and targeted restyle
+updates for the snake, head and history traces.
+
+Added a rotation speed setting to the More dropdown, in degrees per second,
+with a default of 5 deg/s. Rotation timing now uses elapsed browser frame time
+so the selected speed is independent of frame rate.
+
+Files touched:
+src/grid_generator/coord_viewer_core.py
+src/grid_generator/grid_gen_gui.py
+src/harmonic_drive/live_capture.py
+changelog.txt
+
+--------
+19/05/26
+--------
+Added a 3D Measurement Progress viewer to Live Capture using
+coord_viewer_core.py. It loads the full planned grid file and advances the
+snake/current-point marker from the number of completed rows in the measurement
+position log, rather than playing points back manually.
+
+The Live Capture 3D viewer includes view/display controls such as Top,
+Front, Side, Ortho, Bounds, Rotate and display settings.
+
+Files touched:
+src/harmonic_drive/live_capture.py
+changelog.txt
+
+--------
+19/05/26
+--------
+Renamed the right-pane Acoustic Analysis view to Live Capture and moved the
+code from acoustic_analysis.py into live_capture.py.
+
+Moved the measurement positions azimuth-vs-elevation plot out of control.py and
+into live_capture.py, so the left pane stays focused on user controls and live
+position readouts.
+
+Split the old combined acoustic plot into separate Frequency Response and
+Impulse Response plots. Added lozenge buttons on the Live Capture title row to
+choose which plots are shown:
+
+Files touched:
+src/harmonic_drive/live_capture.py
+src/harmonic_drive/gui.py
+src/harmonic_drive/control.py
+src/harmonic_drive/acoustic_analysis.py
+
+--------
+19/05/26
+--------
+Made the grid generator file auto-load into the measurement session after it is
+generated. Added set_file_measurement_points_filename() to config_editor.py to
+update the FileMeasurementPoints filename in config.ini and trigger a reload.
+Added an on_grid_saved_callback to grid_gen_gui.py to pass the generated filename
+back to the main Harmonic Drive app.
+
+Files touched:
+src/grid_generator/grid_gen_gui.py
+src/harmonic_drive/gui.py
+src/harmonic_drive/control.py
+src/harmonic_drive/config_editor.py
+tests/test_config_editor.py
+config.ini
+
+--------
+19/05/26
+--------
+Renamed the control.py position readout from Theta to Phi so the GUI matches
+the phi_deg naming used by generated measurement files. Kept the internal
+CylindricalPosition t() accessor unchanged because it is still the existing
+angular coordinate API used by the scanner and motion code.
+
+Files touched:
+src/harmonic_drive/control.py
+
+--------
+19/05/26
+--------
+Split the main Harmonic Drive GUI into smaller modules so gui.py is mostly
+layout and navigation. Added a left side bar menu to select what is displayed
+in the right hand pane.
+
+Moved the main scanner controls into control.py. This is always visible in the
+left hand pane.
+
+Moved the acoustic analysis into acoustic_analysis.py.
+
+Added grid_generator directory with grid_gen.py, path_plan.py, coord_viewer_core.py
+and a NiceGUI UI.
+
+The right pane mview can switch with the menu between Acoustic Analysis and
+the Grid Generator (and future features).
+
+Connected grid_gen_gui.py waypoint Set-position buttons to the live scanner position
+via a callback.
+
+Other changes needed:
+- Added grid_generator as a package with __init__.py.
+- Added pandas and plotly to pyproject.toml and regenerated uv.lock.
+
+Files touched:
+src/harmonic_drive/gui.py
+src/harmonic_drive/control.py
+src/harmonic_drive/acoustic_analysis.py
+src/grid_generator/grid_gen_gui.py
+src/grid_generator/__init__.py
+pyproject.toml
+uv.lock
+
+--------
+19/05/26
+--------
+Made homing_gap, pole_gap and safe_radius optional, defaulting to. These settings are
+mostly redundant for grids generated by the new d.fapinov built grid
+generator, since path planning is handled up front, but they remain
+available as extra safety margins when needed.
+
+Files touched:
+- src/nfs/plugins/file_measurement_points.py
+- src/nfs/motion_manager.py
+- src/harmonic_drive/config_editor.py
+- tests/test_config_editor.py
+- tests/test_optional_motion_and_file_points.py
+
 file_measurement_points.py
 ---------------------------------
 
@@ -46,17 +321,3 @@ Added alignment_debug.npz export when debug_saves is enabled. Includes raw loopb
 
 28/02/26
 Added user variable for wav file naming convention. Tom for method compatible with Tom's processing code. Dimitri for the method compatible with Dimitri's processing code.
-
-20/05/26
-Updated the config.ini and GUI config editor to reflect the protection HPF correction settings. Added protect_hpf_correction and protect_hpf_corr_db_cap to the sweep settings and removed the redundant protect_hpf_phase field.
-
-Updated tests to match.
-
-Files touched:
-config.ini
-config_editor.py
-test_audio_engine.py
-test_config_editor.py
-test_dsp_verification.py
-
-

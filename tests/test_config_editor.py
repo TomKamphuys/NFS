@@ -4,7 +4,7 @@ import pytest
 from unittest.mock import MagicMock, patch
 from harmonic_drive.config_editor import (
     _coerce, _format_for_ini, _on_ok, _strip_inline_comment, _parse_bool,
-    open_config_editor
+    open_config_editor, set_file_measurement_points_filename
 )
 
 # --- Unit tests for helper functions ---
@@ -36,6 +36,9 @@ def test_coerce():
     assert _coerce("opt_float", "None") is None
     assert _coerce("opt_float", "") is None
     assert _coerce("opt_float", "1.2") == 1.2
+    assert _coerce("optional_float", "None") is None
+    assert _coerce("optional_float", "") is None
+    assert _coerce("optional_float", "1.2") == 1.2
     
     with pytest.raises(ValueError, match="Unknown kind"):
         _coerce("unknown", "val")
@@ -47,6 +50,7 @@ def test_format_for_ini():
     assert _format_for_ini("bool", True) == "True"
     assert _format_for_ini("bool", False) == "False"
     assert _format_for_ini("opt_float", None) == "None"
+    assert _format_for_ini("optional_float", None) == "None"
     assert _format_for_ini("float", 1.2) == "1.2"
     assert _format_for_ini("str", "val") == "val"
 
@@ -192,6 +196,89 @@ def test_on_ok_motion_manager_inline(tmp_path):
     assert "measurement_points =" not in content
     # Ensure old section is removed
     assert "[points]" not in content
+
+
+def test_on_ok_optional_float_blank_removes_key(tmp_path):
+    config_file = tmp_path / "config.ini"
+    config_file.write_text(
+        "[motion_manager]\n"
+        "type = CylindricalMeasurementMotionManager\n"
+        "safe_radius = 300\n"
+    )
+
+    parser = configparser.ConfigParser()
+    parser.read(config_file)
+
+    mm_type_sel = MagicMock()
+    mm_type_sel.value = "CylindricalMeasurementMotionManager"
+
+    safe_radius_el = MagicMock()
+    safe_radius_el.value = ""
+
+    dyn = {
+        "mm_type_select": mm_type_sel,
+        "mp_section_input": None,
+        "mp_type_select": None,
+        "mm_inputs": {"safe_radius": (safe_radius_el, "optional_float")},
+        "mp_inputs": {},
+        "mp_section_name": None,
+    }
+
+    dialog = MagicMock()
+    on_apply = MagicMock()
+
+    _on_ok(parser, config_file, {}, dyn, dialog, on_apply)
+
+    content = config_file.read_text()
+    assert "safe_radius" not in content
+    dialog.close.assert_called_once()
+    on_apply.assert_called_once()
+
+
+def test_set_file_measurement_points_filename_inline(tmp_path):
+    config_file = tmp_path / "config.ini"
+    config_file.write_text(
+        "[motion_manager]\n"
+        "type = CylindricalMeasurementMotionManager\n"
+        "measurement_points_type = FileMeasurementPoints\n"
+        "filename = old.csv\n"
+    )
+    on_apply = MagicMock()
+
+    section = set_file_measurement_points_filename(
+        str(config_file),
+        "grid1.csv",
+        on_apply,
+    )
+
+    content = config_file.read_text()
+    assert section == "motion_manager"
+    assert "measurement_points_type = FileMeasurementPoints" in content
+    assert "filename = grid1.csv" in content
+    assert config_file.with_suffix(".old").exists()
+    on_apply.assert_called_once()
+
+
+def test_set_file_measurement_points_filename_referenced_section(tmp_path):
+    config_file = tmp_path / "config.ini"
+    config_file.write_text(
+        "[motion_manager]\n"
+        "type = CylindricalMeasurementMotionManager\n"
+        "measurement_points = grid_points\n"
+        "\n"
+        "[grid_points]\n"
+        "type = CylindricalMeasurementPoints\n"
+        "radius = 200\n"
+    )
+
+    section = set_file_measurement_points_filename(str(config_file), "grid1.csv")
+
+    content = config_file.read_text()
+    assert section == "grid_points"
+    assert "measurement_points = grid_points" in content
+    assert "[grid_points]" in content
+    assert "type = FileMeasurementPoints" in content
+    assert "filename = grid1.csv" in content
 
 # --- Test for open_config_editor (structure check) ---
 
