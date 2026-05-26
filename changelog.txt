@@ -1,6 +1,16 @@
 --------
 24/05/26
 --------
+Moved output level control from 'Sine Tone' section to the main audio settings
+section to make it clear this is a global control.
+
+Files touched:
+src/harmonic_drive/audio_setup.py
+
+
+--------
+24/05/26
+--------
 Bug fix: SPL calibration now stores the calculated offset from the measured mic
 input RMS to the entered SPL value, instead of only saving the entered value.
 

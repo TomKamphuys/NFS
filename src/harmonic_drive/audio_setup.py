@@ -224,8 +224,14 @@ def build_audio_setup_pane(config_file: str, show_live_capture=None):
         fs_options = get_supported_sample_rates(selected_device_id("in"), selected_device_id("out")) or [fs_value]
         if fs_value not in fs_options:
             fs_value = fs_options[0]
-        fs_select = ui.select(_sample_rate_options(fs_options), value=fs_value, label="FS").classes("w-full").props("outlined dense")
-        inputs[("audio", "fs")] = fs_select
+        with ui.row().classes("w-full gap-3"):
+            level_input = ui.number(
+                "Output level (dBFS)",
+                value=_float_value(parser, "sweep", "sweep_level_dbfs", -20.0),
+                format="%.1f",
+            ).classes("flex-1").props("outlined dense")
+            fs_select = ui.select(_sample_rate_options(fs_options), value=fs_value, label="FS").classes("flex-1").props("outlined dense")
+            inputs[("audio", "fs")] = fs_select
 
         with ui.expansion("Advanced audio settings", icon="tune").classes("w-full"):
             with ui.row().classes("w-full gap-3"):
@@ -236,21 +242,21 @@ def build_audio_setup_pane(config_file: str, show_live_capture=None):
 
         ui.separator()
         ui.label("Sine Tone").classes("text-base font-bold")
-        with ui.row().classes("w-full items-center gap-2"):
-            level_input = ui.number("Output level (dBFS)", value=_float_value(parser, "sweep", "sweep_level_dbfs", -20.0), format="%.1f").classes("w-40").props("outlined dense")
-            freq_input = ui.number("Frequency (Hz)", value=1000, format="%d").classes("w-36").props("outlined dense")
-            dur_input = ui.number("Duration (s)", value=None, format="%.1f").classes("w-36").props('outlined dense placeholder="Optional"')
-            play_button = ui.button(icon="play_arrow").props("round")
-            control.register_sine_controls(level_input, freq_input, dur_input, play_button)
-            play_button.on("click", control.log_button_click("Play Sine", control.async_play_sine_task))
-
         current_calibration = project.get_project_data().get("spl_calibration")
         current_spl = (
             current_calibration.get("spl_db")
             if isinstance(current_calibration, dict)
             else None
         )
-        spl_input = ui.number("Calibrate (dB SPL)", value=current_spl, format="%.1f").classes("w-44").props("outlined dense")
+        with ui.row().classes("w-full items-center gap-2"):
+            freq_input = ui.number("Frequency (Hz)", value=1000, format="%d").classes("w-36").props("outlined dense")
+            dur_input = ui.number("Duration (s)", value=None, format="%.1f").classes("w-36").props('outlined dense placeholder="Optional"')
+            play_button = ui.button(icon="play_arrow").props("round")
+            control.register_sine_controls(level_input, freq_input, dur_input, play_button)
+            play_button.on("click", control.log_button_click("Play Sine", control.async_play_sine_task))
+            ui.element("div").classes("w-4")
+            spl_input = ui.number("Calibrate (dB SPL)", value=current_spl, format="%.1f").classes("w-44").props("outlined dense")
+            ui.label("use save").classes("text-xs text-gray-500")
 
         ui.separator()
         ui.label("Sweep Settings").classes("text-base font-bold")
