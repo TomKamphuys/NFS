@@ -1,4 +1,5 @@
 from unittest.mock import Mock, patch, mock_open
+from pathlib import Path
 import pytest
 from nfs.datatypes import CylindricalPosition
 from nfs.nfs import NearFieldScanner
@@ -22,6 +23,9 @@ def test_take_single_measurement(mocks):
         nfs.take_single_measurement()
 
     mocks['scanner'].get_position.assert_called_once()
+    mocks['audio'].set_session_directory.assert_called_once_with(
+        Path.cwd() / "single_measurements"
+    )
     mocks['audio'].measure_ir.assert_called_once_with(position)
 
 
@@ -58,8 +62,33 @@ def test_take_measurement_set(mocks):
     mocks['scanner'].angular_move_to.assert_called_once_with(0.0)
     
     # measure_ir called once (first point). Second point loop breaks before measure_ir.
+    mocks['audio'].set_session_directory.assert_called_with(Path.cwd() / "measurement_set")
+    assert (Path.cwd() / "logs").exists()
     assert mocks['audio'].measure_ir.call_count == 1
     mocks['audio'].measure_ir.assert_called_once_with(pos1)
+
+
+def test_take_measurement_set_can_overwrite_existing_outputs(mocks, tmp_path):
+    measurement_dir = tmp_path / "measurement_set"
+    measurement_dir.mkdir(parents=True)
+    stale_file = measurement_dir / "stale.txt"
+    stale_file.write_text("old")
+
+    mocks['motion_manager'].ready.return_value = True
+    mocks['motion_manager'].total_points.return_value = 0
+
+    with patch("builtins.open", mock_open()):
+        nfs = NearFieldScanner(
+            mocks['scanner'],
+            mocks['audio'],
+            mocks['motion_manager'],
+            position_log_file=str(tmp_path / "measurement_positions.csv"),
+        )
+        nfs.set_project_directory(tmp_path)
+        nfs.take_measurement_set("Woofer", overwrite=True)
+
+    assert measurement_dir.exists()
+    assert not stale_file.exists()
 
 
 def test_shutdown(mocks):

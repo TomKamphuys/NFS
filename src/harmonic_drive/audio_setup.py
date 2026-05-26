@@ -1,0 +1,390 @@
+from __future__ import annotations
+
+import asyncio
+import configparser
+from typing import Any, Dict
+
+from nicegui import ui
+
+from harmonic_drive import control, project
+from harmonic_drive.config_editor import (
+    _channel_options,
+    _device_options,
+    _parse_bool,
+    _sample_rate_options,
+    _set_select_options,
+    _strip_inline_comment,
+    save_config_values,
+)
+from nfs.audio import get_devices_and_channels, get_supported_sample_rates
+
+
+def _read_config(config_file: str) -> configparser.ConfigParser:
+    parser = configparser.ConfigParser(inline_comment_prefixes=("#", ";"))
+    parser.optionxform = str  # type: ignore[assignment]
+    parser.read(config_file)
+    return parser
+
+
+def _value(parser: configparser.ConfigParser, section: str, key: str, fallback: str = "") -> str:
+    return _strip_inline_comment(parser.get(section, key, fallback=fallback))
+
+
+def _int_value(parser, section: str, key: str, fallback: int = 0) -> int:
+    try:
+        return int(float(_value(parser, section, key, str(fallback))))
+    except ValueError:
+        return fallback
+
+
+def _float_value(parser, section: str, key: str, fallback: float = 0.0) -> float:
+    try:
+        return float(_value(parser, section, key, str(fallback)))
+    except ValueError:
+        return fallback
+
+
+def _optional_float_text(parser, section: str, key: str, fallback: str = "") -> str:
+    raw = _value(parser, section, key, fallback)
+    if raw.strip().lower() in ("", "none"):
+        return ""
+    return raw
+
+
+def _section_dict(parser: configparser.ConfigParser, section: str) -> Dict[str, str]:
+    if not parser.has_section(section):
+        return {}
+    return {key: _strip_inline_comment(value) for key, value in parser.items(section)}
+
+
+def _audio_api_options(catalog: dict) -> list[str]:
+    return sorted({
+        str(info.get("hostapi", ""))
+        for info in catalog.values()
+        if info.get("hostapi")
+    })
+
+
+def _device_options_for_api(catalog: dict, capability: str, audio_api: str) -> Dict[int, str]:
+    return {
+        dev_id: label
+        for dev_id, label in _device_options(catalog, capability).items()
+        if not audio_api or catalog.get(dev_id, {}).get("hostapi") == audio_api
+    }
+
+
+def build_audio_setup_pane(config_file: str, show_live_capture=None):
+    parser = _read_config(config_file)
+    catalog = get_devices_and_channels()
+    inputs: Dict[tuple[str, str], Any] = {}
+    fs_select = None
+    auto_apply_task = None
+
+    with ui.column().classes("w-full h-full min-w-0 overflow-auto px-3 py-3 gap-4"):
+        with ui.row().classes("w-full items-center justify-between"):
+            ui.label("Audio Setup").classes("text-xl font-bold")
+
+        device_selects = {}
+        channel_selects = {}
+
+        api_options = _audio_api_options(catalog)
+        saved_in_api = _value(parser, "audio", "in_dev_hostapi", "")
+        saved_out_api = _value(parser, "audio", "out_dev_hostapi", "")
+        in_dev_id = _int_value(parser, "audio", "in_dev")
+        out_dev_id = _int_value(parser, "audio", "out_dev")
+        current_api = saved_in_api or saved_out_api
+        if current_api not in api_options:
+            current_api = catalog.get(in_dev_id, {}).get("hostapi") or catalog.get(out_dev_id, {}).get("hostapi") or ""
+        if current_api not in api_options and api_options:
+            current_api = api_options[0]
+
+        api_select = ui.select(
+            api_options,
+            value=current_api,
+            label="Audio API",
+        ).classes("w-full").props("outlined dense")
+
+        def selected_device_id(role: str):
+            try:
+                return int(device_selects[role].value)
+            except (KeyError, TypeError, ValueError):
+                return None
+
+        def sync_device_metadata(role: str) -> None:
+            try:
+                dev_id = int(device_selects[role].value)
+            except (KeyError, TypeError, ValueError):
+                dev_id = None
+            info = catalog.get(dev_id, {}) if dev_id is not None else {}
+            inputs[("audio", f"{role}_dev_name")] = info.get("name", "")
+            inputs[("audio", f"{role}_dev_hostapi")] = info.get("hostapi", "")
+
+        def refresh_channels(role: str) -> None:
+            capability = "input" if role == "in" else "output"
+            opts = _channel_options(catalog, device_selects[role].value, capability)
+            keys = ("in_ch_mic", "in_ch_loop") if role == "in" else ("out_ch_spkr", "out_ch_ref")
+            for key in keys:
+                select = channel_selects.get(key)
+                if select is None:
+                    continue
+                current = select.value if select.value in opts else (opts[0] if opts else None)
+                _set_select_options(select, opts, current)
+            sync_device_metadata(role)
+
+        def refresh_sample_rates() -> None:
+            if fs_select is None:
+                return
+            rates = get_supported_sample_rates(selected_device_id("in"), selected_device_id("out"))
+            current = fs_select.value
+            if not rates and current:
+                rates = [int(current)]
+            elif rates and current not in rates:
+                current = rates[0]
+            _set_select_options(fs_select, _sample_rate_options(rates), current)
+
+        def refresh_devices_for_api() -> None:
+            selected_api = api_select.value or ""
+            for role, capability in (("in", "input"), ("out", "output")):
+                select = device_selects.get(role)
+                if select is None:
+                    continue
+                opts = _device_options_for_api(catalog, capability, selected_api)
+                current = select.value if select.value in opts else (next(iter(opts), None))
+                _set_select_options(select, opts, current)
+                refresh_channels(role)
+            refresh_sample_rates()
+            schedule_auto_apply()
+
+        with ui.row().classes("w-full gap-3 items-start"):
+            with ui.column().classes(
+                "flex-1 gap-2 rounded border border-pink-200 bg-pink-50/60 p-2"
+            ):
+                ui.label("Input").classes("text-sm font-bold text-gray-600")
+                in_options = _device_options_for_api(catalog, "input", current_api)
+                in_value = in_dev_id
+                if in_value not in in_options and in_options:
+                    in_value = next(iter(in_options))
+                in_select = ui.select(in_options, value=in_value, label="Input device").classes("w-full").props("outlined dense")
+                device_selects["in"] = in_select
+                inputs[("audio", "in_dev")] = in_select
+
+                for key, label in (("in_ch_mic", "Mic input channel"), ("in_ch_loop", "Loopback input channel")):
+                    opts = _channel_options(catalog, in_value, "input")
+                    value = _int_value(parser, "audio", key)
+                    if value not in opts and opts:
+                        value = opts[0]
+                    el = ui.select(opts, value=value, label=label).classes("w-full").props("outlined dense")
+                    channel_selects[key] = el
+                    inputs[("audio", key)] = el
+
+            with ui.column().classes(
+                "flex-1 gap-2 rounded border border-blue-200 bg-blue-50/60 p-2"
+            ):
+                ui.label("Output").classes("text-sm font-bold text-gray-600")
+                out_options = _device_options_for_api(catalog, "output", current_api)
+                out_value = out_dev_id
+                if out_value not in out_options and out_options:
+                    out_value = next(iter(out_options))
+                out_select = ui.select(out_options, value=out_value, label="Output device").classes("w-full").props("outlined dense")
+                device_selects["out"] = out_select
+                inputs[("audio", "out_dev")] = out_select
+
+                for key, label in (("out_ch_spkr", "Speaker output channel"), ("out_ch_ref", "Loopback output channel")):
+                    opts = _channel_options(catalog, out_value, "output")
+                    value = _int_value(parser, "audio", key)
+                    if value not in opts and opts:
+                        value = opts[0]
+                    el = ui.select(opts, value=value, label=label).classes("w-full").props("outlined dense")
+                    channel_selects[key] = el
+                    inputs[("audio", key)] = el
+
+        def on_device_change(role: str) -> None:
+            refresh_channels(role)
+            refresh_sample_rates()
+            schedule_auto_apply()
+
+        for role in ("in", "out"):
+            device_selects[role].on("update:model-value", lambda _e, r=role: on_device_change(r))
+            sync_device_metadata(role)
+
+        api_select.on("update:model-value", lambda _e: refresh_devices_for_api())
+
+        fs_value = _int_value(parser, "audio", "fs", 48000)
+        fs_options = get_supported_sample_rates(selected_device_id("in"), selected_device_id("out")) or [fs_value]
+        if fs_value not in fs_options:
+            fs_value = fs_options[0]
+        fs_select = ui.select(_sample_rate_options(fs_options), value=fs_value, label="FS").classes("w-full").props("outlined dense")
+        inputs[("audio", "fs")] = fs_select
+
+        with ui.expansion("Advanced audio settings", icon="tune").classes("w-full"):
+            with ui.row().classes("w-full gap-3"):
+                blocksize = ui.number("Blocksize", value=_int_value(parser, "audio", "blocksize", 2048), format="%d").classes("flex-1").props("outlined dense")
+                wasapi = ui.switch("WASAPI exclusive", value=_parse_bool(_value(parser, "audio", "wasapi_exclusive", "False")))
+                inputs[("audio", "blocksize")] = blocksize
+                inputs[("audio", "wasapi_exclusive")] = wasapi
+
+        ui.separator()
+        ui.label("Sine Tone").classes("text-base font-bold")
+        with ui.row().classes("w-full items-center gap-2"):
+            level_input = ui.number("Output level (dBFS)", value=_float_value(parser, "sweep", "sweep_level_dbfs", -20.0), format="%.1f").classes("w-40").props("outlined dense")
+            freq_input = ui.number("Frequency (Hz)", value=1000, format="%d").classes("w-36").props("outlined dense")
+            dur_input = ui.number("Duration (s)", value=None, format="%.1f").classes("w-36").props('outlined dense placeholder="Optional"')
+            play_button = ui.button(icon="play_arrow").props("round")
+            control.register_sine_controls(level_input, freq_input, dur_input, play_button)
+            play_button.on("click", control.log_button_click("Play Sine", control.async_play_sine_task))
+
+        spl_input = ui.number("Calibrate (dB SPL)", value=None, format="%.1f").classes("w-44").props("outlined dense")
+
+        ui.separator()
+        ui.label("Sweep Settings").classes("text-base font-bold")
+        with ui.row().classes("w-full gap-3"):
+            sweep_dur = ui.number("Sweep duration (s)", value=_float_value(parser, "sweep", "sweep_dur_s", 5.0), format="%.2f").classes("flex-1").props("outlined dense")
+            num_sweeps = ui.number("No. sweeps", value=_int_value(parser, "sweep", "num_sweeps", 1), format="%d").classes("flex-1").props("outlined dense")
+        hpf_raw = _value(parser, "sweep", "protect_hpf_hz", "None")
+        hpf_enabled = hpf_raw.strip().lower() not in ("", "none", "0")
+        with ui.row().classes("w-full gap-3 items-start"):
+            with ui.column().classes("flex-1 gap-2"):
+                hpf_enable = ui.switch("Protection HPF", value=hpf_enabled)
+                hpf = ui.input(
+                    "Protection HPF Hz",
+                    value=_optional_float_text(parser, "sweep", "protect_hpf_hz"),
+                ).classes("w-full").props('outlined dense placeholder="500Hz"')
+                hpf_order = ui.number(
+                    "HPF Order",
+                    value=_int_value(parser, "sweep", "protect_hpf_order", 1),
+                    format="%d",
+                ).classes("w-full").props("outlined dense")
+            with ui.column().classes("flex-1 gap-2 pt-10"):
+                hpf_corr = ui.switch(
+                    "HPF Inverse Correction",
+                    value=_parse_bool(_value(parser, "sweep", "protect_hpf_correction", "False")),
+                )
+                hpf_cap = ui.number(
+                    "HPF Correction Gain Cap",
+                    value=_float_value(parser, "sweep", "protect_hpf_corr_db_cap", 12.0),
+                    format="%.1f",
+                ).classes("w-full").props("outlined dense")
+
+        def update_hpf_field_state():
+            hpf.set_enabled(bool(hpf_enable.value))
+            hpf_order.set_enabled(bool(hpf_enable.value))
+            hpf_corr.set_enabled(bool(hpf_enable.value))
+            hpf_cap.set_enabled(bool(hpf_enable.value and hpf_corr.value))
+
+        hpf_enable.on("update:model-value", lambda _e: update_hpf_field_state())
+        hpf_corr.on("update:model-value", lambda _e: update_hpf_field_state())
+        update_hpf_field_state()
+
+        with ui.expansion("Advanced sweep settings", icon="tune").classes("w-full"):
+            with ui.row().classes("w-full gap-3"):
+                naming = ui.select(["tom", "dimitri"], value=_value(parser, "sweep", "naming_convention", "dimitri"), label="Naming").classes("flex-1").props("outlined dense")
+                align = ui.switch("Align to first marker", value=_parse_bool(_value(parser, "sweep", "align_to_first_marker", "False")))
+                debug = ui.switch("Debug saves", value=_parse_bool(_value(parser, "sweep", "debug_saves", "False")))
+            with ui.row().classes("w-full gap-3"):
+                pre_sil = ui.number("Pre silence (ms)", value=_float_value(parser, "sweep", "pre_sil_ms", 500.0), format="%.1f").classes("flex-1").props("outlined dense")
+                post_sil = ui.number("Post silence (ms)", value=_float_value(parser, "sweep", "post_sil_ms", 500.0), format="%.1f").classes("flex-1").props("outlined dense")
+                taper = ui.number("Mic tail taper (ms)", value=_float_value(parser, "sweep", "mic_tail_taper_ms", 20.0), format="%.1f").classes("flex-1").props("outlined dense")
+            with ui.row().classes("w-full gap-3"):
+                h2 = ui.input("H2 test dB", value=_value(parser, "sweep", "h2_test_db", "None")).classes("flex-1").props("outlined dense")
+                h3 = ui.input("H3 test dB", value=_value(parser, "sweep", "h3_test_db", "None")).classes("flex-1").props("outlined dense")
+
+        def save_audio_setup(notify: bool = False):
+            values = {
+                ("audio", "in_dev"): in_select.value,
+                ("audio", "out_dev"): out_select.value,
+                ("audio", "in_ch_mic"): channel_selects["in_ch_mic"].value,
+                ("audio", "in_ch_loop"): channel_selects["in_ch_loop"].value,
+                ("audio", "out_ch_spkr"): channel_selects["out_ch_spkr"].value,
+                ("audio", "out_ch_ref"): channel_selects["out_ch_ref"].value,
+                ("audio", "in_dev_name"): inputs[("audio", "in_dev_name")],
+                ("audio", "in_dev_hostapi"): inputs[("audio", "in_dev_hostapi")],
+                ("audio", "out_dev_name"): inputs[("audio", "out_dev_name")],
+                ("audio", "out_dev_hostapi"): inputs[("audio", "out_dev_hostapi")],
+                ("audio", "fs"): fs_select.value,
+                ("audio", "blocksize"): blocksize.value,
+                ("audio", "wasapi_exclusive"): wasapi.value,
+                ("sweep", "naming_convention"): naming.value,
+                ("sweep", "sweep_dur_s"): sweep_dur.value,
+                ("sweep", "sweep_level_dbfs"): level_input.value,
+                ("sweep", "num_sweeps"): num_sweeps.value,
+                ("sweep", "protect_hpf_hz"): hpf.value if hpf_enable.value else "None",
+                ("sweep", "protect_hpf_order"): hpf_order.value,
+                ("sweep", "protect_hpf_correction"): hpf_corr.value,
+                ("sweep", "protect_hpf_corr_db_cap"): hpf_cap.value,
+                ("sweep", "align_to_first_marker"): align.value,
+                ("sweep", "pre_sil_ms"): pre_sil.value,
+                ("sweep", "post_sil_ms"): post_sil.value,
+                ("sweep", "mic_tail_taper_ms"): taper.value,
+                ("sweep", "debug_saves"): debug.value,
+                ("sweep", "h2_test_db"): h2.value,
+                ("sweep", "h3_test_db"): h3.value,
+            }
+            save_config_values(
+                config_file,
+                values,
+                lambda: control.scanner_app.reload_config_ui(notify=False),
+            )
+            fresh = _read_config(config_file)
+            project.update_audio_setup(
+                _section_dict(fresh, "audio"),
+                _section_dict(fresh, "sweep"),
+                {
+                    "spl_db_at_1m": spl_input.value,
+                    "reference_input_rms_dbfs": None,
+                },
+            )
+            if notify:
+                ui.notify("Audio setup saved", type="positive")
+            if show_live_capture is not None:
+                show_live_capture()
+
+        def schedule_auto_apply() -> None:
+            nonlocal auto_apply_task
+            if auto_apply_task is not None:
+                auto_apply_task.cancel()
+
+            async def apply_later():
+                try:
+                    await asyncio.sleep(0.6)
+                    save_audio_setup(notify=False)
+                except asyncio.CancelledError:
+                    pass
+
+            auto_apply_task = asyncio.create_task(apply_later())
+
+        auto_apply_controls = [
+            *device_selects.values(),
+            *channel_selects.values(),
+            fs_select,
+            blocksize,
+            wasapi,
+            level_input,
+            sweep_dur,
+            num_sweeps,
+            hpf,
+            hpf_enable,
+            hpf_order,
+            hpf_corr,
+            hpf_cap,
+            naming,
+            align,
+            debug,
+            pre_sil,
+            post_sil,
+            taper,
+            h2,
+            h3,
+            spl_input,
+        ]
+        for element in auto_apply_controls:
+            element.on("update:model-value", lambda _e: schedule_auto_apply())
+
+        with ui.row().classes("w-full justify-start"):
+            ui.button(
+                "Test Sweep",
+                icon="graphic_eq",
+                on_click=control.log_button_click(
+                    "Audio Setup Test Sweep",
+                    control.async_test_sweep_task,
+                ),
+            ).props("color=primary")

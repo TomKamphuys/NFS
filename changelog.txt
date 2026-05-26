@@ -1,5 +1,60 @@
 
 --------
+26/05/26
+--------
+Added session-folder workflow to the HarmonicDrive UI. The top bar now lets the
+user choose a Session Folder with the native folder picker, set a Save Name, and
+save session state to <SaveName>_project.json. If no folder has been chosen, the
+UI defaults to <default_project_dir>\HALS_Project, but only creates that folder
+when the user saves, generates a grid, or starts a session.
+
+Session files now store sweep setup data, SPL calibration if present, plus the
+Grid Generator settings and waypoints needed to reopen or regenerate a grid.
+
+Generated grids are saved into the active Session Folder as <SaveName>_grid.csv.
+
+Full measurement output is routed to Session Folder\measurement_set,
+Single measurements are routed separately to Session Folder\single_measurements.
+The measurement position log stays at Session Folder\measurement_positions.csv,
+and Scanner.log is saved under Session Folder\logs.
+
+The Settings button now lives in the left sidebar and opens the
+config editor. The config editor includes a default project directory and a
+Restore Defaults action that restores default_config.ini
+
+Added a dedicated Audio Setup pane and moved user-facing audio/sweep controls out
+of the general config editor. The config editor remains the backend responsible
+for validating, writing, and reloading config.ini, while its visible Audio tab now
+only exposes the debug/test audio mode.
+
+Audio Setup now includes:
+- API-filtered device selectors
+- sine tone generator for level setting
+- SPL calibration field
+- Test Sweep button
+- All audio settings and sweep settings
+
+Test Sweep uses the active audio/sweep settings, including protection HPF and
+sweep level, but returns the processed IR to Live Capture in memory rather than
+writing permanent WAV, IR, or debug files.
+
+Added real-time audio meters to Live Capture. Live Capture opens by default when
+Audio Setup is opened so levels and Test Sweep results can be viewed while
+adjusting the setup.
+
+Files touched:
+src/harmonic_drive/gui.py
+src/harmonic_drive/audio_setup.py
+src/harmonic_drive/project.py
+src/harmonic_drive/control.py
+src/harmonic_drive/config_editor.py
+src/harmonic_drive/live_capture.py
+src/grid_generator/grid_gen_gui.py
+src/nfs/audio.py
+src/nfs/nfs.py
+changelog.txt
+
+--------
 23/05/26
 --------
 Added optional user-position fields to the grid generator UI for marking extra

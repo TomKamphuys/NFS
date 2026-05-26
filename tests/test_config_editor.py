@@ -4,7 +4,7 @@ import pytest
 from unittest.mock import MagicMock, patch
 from harmonic_drive.config_editor import (
     _coerce, _format_for_ini, _on_ok, _strip_inline_comment, _parse_bool,
-    open_config_editor, set_file_measurement_points_filename
+    open_config_editor, restore_default_config, set_file_measurement_points_filename
 )
 
 # --- Unit tests for helper functions ---
@@ -279,6 +279,22 @@ def test_set_file_measurement_points_filename_referenced_section(tmp_path):
     assert "[grid_points]" in content
     assert "type = FileMeasurementPoints" in content
     assert "filename = grid1.csv" in content
+
+
+def test_restore_default_config(tmp_path):
+    config_file = tmp_path / "config.ini"
+    default_file = tmp_path / "default_config.ini"
+    config_file.write_text("[audio]\nmode = hardware\n")
+    default_file.write_text("[audio]\nmode = mock\n")
+    on_apply = MagicMock()
+
+    with patch("harmonic_drive.config_editor.ui.notify") as mock_notify:
+        assert restore_default_config(config_file, on_apply) is True
+
+    assert config_file.read_text() == "[audio]\nmode = mock\n"
+    assert config_file.with_suffix(".old").exists()
+    on_apply.assert_called_once()
+    mock_notify.assert_called_once_with("Default configuration restored", type="positive")
 
 # --- Test for open_config_editor (structure check) ---
 

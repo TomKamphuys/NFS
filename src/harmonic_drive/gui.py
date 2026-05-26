@@ -1,10 +1,13 @@
 import argparse
 import os
+import tempfile
+from pathlib import Path
 
-from nicegui import app, ui
+from nicegui import app, run, ui
 
 from grid_generator.grid_gen_gui import build_grid_gen_ui, register_grid_image_files
-from harmonic_drive import control, live_capture
+from harmonic_drive import audio_setup, control, live_capture, project
+from harmonic_drive.config_editor import open_config_editor
 
 
 ui.add_head_html(
@@ -76,6 +79,27 @@ ui.add_css("""
   color: #0b1220 !important;
   border: 1px solid #5d6b86 !important;
 }
+.side-menu-button .q-btn__content {
+  display: flex;
+  flex-wrap: nowrap;
+  justify-content: flex-start;
+  gap: 10px;
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+  white-space: nowrap;
+  width: 100%;
+  min-width: 0;
+}
+.side-menu-button .q-icon {
+  width: 24px;
+  min-width: 24px;
+  font-size: 20px;
+}
+.side-menu-button .block {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 """, shared=True)
 
 
@@ -124,6 +148,69 @@ def _get_current_position():
         return None
 
 
+def _default_measurement_folder(config_file: str, save_name: str | None = None) -> Path:
+    name = project.sanitize_project_name(save_name or project.get_project_name())
+    return project.get_default_project_root(config_file) / name
+
+
+def _native_folder_picker(initial_dir: str) -> str:
+    import tkinter as tk
+    from tkinter import filedialog
+
+    root = tk.Tk()
+    root.withdraw()
+    root.attributes('-topmost', True)
+    try:
+        return filedialog.askdirectory(
+            title='Select Session Folder',
+            initialdir=initial_dir,
+            mustexist=False,
+        )
+    finally:
+        root.destroy()
+
+
+async def _browse_measurement_folder(path_input, title_input, on_project_loaded=None):
+    initial_dir = str(Path(path_input.value or project.get_default_project_root()).expanduser().resolve())
+    try:
+        selected = await run.io_bound(_native_folder_picker, initial_dir)
+    except Exception as exc:
+        ui.notify(f'Could not open folder browser: {exc}', type='negative')
+        return
+    if selected:
+        path_input.set_value(selected)
+        project.set_project_dir(selected, control.scanner_app.config_file)
+        live_capture.reset_live_capture_session()
+        project.apply_to_config(control.scanner_app.config_file)
+        control.scanner_app.reload_config_ui()
+        title_input.set_value(project.get_project_name())
+        if on_project_loaded is not None:
+            on_project_loaded()
+        ui.notify('Measurement folder loaded', type='positive')
+
+
+async def _browse_project_folder(path_input, title_input, on_project_loaded=None):
+    initial_dir = str(Path(path_input.value or os.getcwd()).expanduser().resolve())
+    try:
+        selected = await run.io_bound(_native_folder_picker, initial_dir)
+    except Exception as exc:
+        ui.notify(f'Could not open folder browser: {exc}', type='negative')
+        return
+
+    if not selected:
+        return
+
+    path_input.set_value(selected)
+    project.set_project_dir(selected, control.scanner_app.config_file)
+    live_capture.reset_live_capture_session()
+    project.apply_to_config(control.scanner_app.config_file)
+    control.scanner_app.reload_config_ui()
+    title_input.set_value(project.get_project_name())
+    if on_project_loaded is not None:
+        on_project_loaded()
+    ui.notify('Project folder loaded', type='positive')
+
+
 @ui.page('/')
 def main_page():
     status_label, finish_splash = _build_splash()
@@ -135,73 +222,205 @@ def main_page():
 
     log_dialog = control.build_log_dialog()
 
-    with ui.splitter(value=50).classes('w-full h-screen items-stretch') as splitter:
-        with splitter.before:
-            with ui.row().classes('w-full h-full min-w-0 flex-nowrap'):
-                with ui.column().classes(
-                    'w-56 h-full bg-gray-100 border-r border-gray-300 p-2 gap-2'
-                ) as menu:
-                    ui.label('Views').classes('text-sm font-bold text-gray-600')
-                    grid_button = ui.button(
-                        'Grid Generator',
-                        icon='grid_on',
-                    ).props('flat align=left').classes('w-full justify-start')
-                    live_capture_button = ui.button(
-                        'Live Capture',
-                        icon='graphic_eq',
-                    ).props('flat align=left').classes('w-full justify-start')
-                menu_visible = {'value': True}
+    with ui.column().classes('w-full h-screen min-h-0 gap-0'):
+        with ui.row().classes('w-full h-14 shrink-0 items-center gap-3 px-3 bg-gray-100 border-b border-gray-300'):
+            menu_button = ui.button(icon='menu').props('flat round dense')
+            ui.label('HALS Control').classes('text-lg font-bold text-gray-800')
+            ui.element('div').classes('w-6')
+            ui.label('Session Folder').classes('text-sm font-semibold text-gray-600')
+            project_path_input = ui.input(
+                value=str(_default_measurement_folder(control.scanner_app.config_file)),
+            ).props('dense outlined').classes('w-[360px] max-w-[34vw]')
+            ui.button(
+                'Browse',
+                icon='folder_open',
+                on_click=lambda: _browse_measurement_folder(
+                    project_path_input,
+                    project_title_input,
+                    on_project_loaded=lambda: rebuild_grid_panel(),
+                ),
+            ).props('color=primary dense')
+            ui.label('Save Name').classes('text-sm font-semibold text-gray-600')
+            project_title_input = ui.input(value=project.get_project_name()).props('dense outlined').classes('w-48')
 
-                def toggle_menu():
-                    menu_visible['value'] = not menu_visible['value']
-                    menu.set_visibility(menu_visible['value'])
-
-                with ui.column().classes('w-full h-full min-w-0'):
-                    with ui.row().classes('w-full items-center'):
-                        ui.button(
-                            icon='menu',
-                            on_click=toggle_menu,
-                        ).props('flat round dense').classes('m-1')
-                        ui.label('Control').classes('text-sm font-bold text-gray-600')
-                    control.build_control_pane(log_dialog)
-
-        with splitter.after:
-            with ui.element('div').classes('w-full h-full min-h-0 min-w-0 overflow-hidden'):
-                live_capture_panel = ui.column().classes(
-                    'w-full h-full min-h-0 min-w-0 overflow-hidden'
+            def save_project_snapshot():
+                project.set_project_name(project_title_input.value)
+                saved_dir = project.save_project_to(
+                    project_path_input.value,
+                    project_title_input.value,
+                    control.scanner_app.config_file,
                 )
-                grid_panel = ui.column().classes('w-full h-full min-h-0 overflow-auto')
+                project_path_input.set_value(str(saved_dir))
+                rebuild_grid_panel()
+                ui.notify(f'Measurement set saved to {saved_dir}', type='positive')
 
-                with live_capture_panel:
-                    live_capture.build_live_capture(control.scanner_app.config_file)
+            control.set_measurement_set_context(
+                lambda: project_title_input.value,
+                lambda: project_path_input.value,
+            )
 
-                with grid_panel:
-                    build_grid_gen_ui(
-                        get_current_pos_callback=_get_current_position,
-                        on_grid_saved_callback=control.use_generated_grid_file,
+            with ui.button(
+                'Save',
+                icon='save',
+                on_click=save_project_snapshot,
+            ).props('color=primary dense'):
+                ui.tooltip('Saves: current project settings, measurement grid.')
+            ui.element('div').classes('flex-grow')
+
+        with ui.splitter(value=50).classes('w-full flex-1 min-h-0 items-stretch') as splitter:
+            with splitter.before:
+                with ui.row().classes('w-full h-full min-w-0 flex-nowrap'):
+                    with ui.column().classes(
+                        'w-56 h-full bg-gray-100 border-r border-gray-300 p-2 gap-2'
+                    ) as menu:
+                        ui.label('Views').classes('text-sm font-bold text-gray-600')
+                        audio_button = ui.button(
+                            'Audio Setup',
+                            icon='settings_voice',
+                        ).props('flat align=left no-caps').classes('side-menu-button w-full h-10 justify-start text-sm')
+                        grid_button = ui.button(
+                            'Grid Generator',
+                            icon='grid_on',
+                        ).props('flat align=left no-caps').classes('side-menu-button w-full h-10 justify-start text-sm')
+                        machine_button = ui.button(
+                            'Machine Control',
+                            icon='precision_manufacturing',
+                        ).props('flat align=left no-caps').classes('side-menu-button w-full h-10 justify-start text-sm')
+                        live_capture_button = ui.button(
+                            'Live Capture',
+                            icon='graphic_eq',
+                        ).props('flat align=left no-caps').classes('side-menu-button w-full h-10 justify-start text-sm')
+                        ui.element('div').classes('h-4 shrink-0')
+                        settings_button = ui.button(
+                            'Settings',
+                            icon='settings',
+                        ).props('flat align=left no-caps').classes('side-menu-button w-full h-10 justify-start text-sm')
+                    menu_visible = {'value': True}
+
+                    def toggle_menu():
+                        menu_visible['value'] = not menu_visible['value']
+                        menu.set_visibility(menu_visible['value'])
+
+                    def hide_menu():
+                        menu_visible['value'] = False
+                        menu.set_visibility(False)
+
+                    menu_button.on('click', toggle_menu)
+
+                    with ui.column().classes('w-full h-full min-w-0'):
+                        machine_panel = ui.column().classes('w-full h-full min-w-0 overflow-auto')
+                        audio_panel = ui.column().classes('w-full h-full min-w-0 overflow-auto')
+
+                        with machine_panel:
+                            control.build_control_pane(log_dialog)
+                        with audio_panel:
+                            audio_setup.build_audio_setup_pane(
+                                control.scanner_app.config_file,
+                                show_live_capture=lambda: show_live_capture(),
+                            )
+                            audio_panel.set_visibility(False)
+
+            with splitter.after:
+                with ui.element('div').classes('w-full h-full min-h-0 min-w-0 overflow-hidden'):
+                    live_capture_panel = ui.column().classes(
+                        'w-full h-full min-h-0 min-w-0 overflow-hidden'
                     )
-                    grid_panel.set_visibility(False)
+                    grid_panel = ui.column().classes('w-full h-full min-h-0 overflow-auto')
 
-                def show_live_capture():
-                    live_capture_panel.set_visibility(True)
-                    grid_panel.set_visibility(False)
-                    menu_visible['value'] = False
-                    menu.set_visibility(False)
-                    live_capture_button.props('color=primary')
-                    grid_button.props(remove='color')
-                    live_capture.update_live_capture_plots()
+                    with live_capture_panel:
+                        live_capture.build_live_capture(control.scanner_app.config_file)
 
-                def show_grid():
-                    live_capture_panel.set_visibility(False)
-                    grid_panel.set_visibility(True)
-                    menu_visible['value'] = False
-                    menu.set_visibility(False)
-                    grid_button.props('color=primary')
-                    live_capture_button.props(remove='color')
+                    def current_grid_filename():
+                        grid_vars = project.get_project_data().get('grid_vars', {})
+                        if isinstance(grid_vars, dict) and grid_vars.get('output_filename'):
+                            return grid_vars['output_filename']
+                        return project.get_grid_filename()
 
-                live_capture_button.on('click', show_live_capture)
-                grid_button.on('click', show_grid)
-                show_live_capture()
+                    def activate_measurement_folder(create=True):
+                        path = Path(
+                            project_path_input.value
+                            or _default_measurement_folder(
+                                control.scanner_app.config_file,
+                                project_title_input.value,
+                            )
+                        ).expanduser().resolve()
+                        project_path_input.set_value(str(path))
+                        if create:
+                            project.set_project_dir(path, control.scanner_app.config_file)
+                            project.set_project_name(project_title_input.value)
+                        return path
+
+                    def rebuild_grid_panel():
+                        was_visible = grid_panel.visible
+                        grid_panel.clear()
+                        with grid_panel:
+                            build_grid_gen_ui(
+                                get_current_pos_callback=_get_current_position,
+                                on_grid_saved_callback=control.use_generated_grid_file,
+                                initial_grid_vars=project.get_project_data().get('grid_vars', {}),
+                                output_directory=activate_measurement_folder,
+                                output_filename=current_grid_filename,
+                            )
+                        grid_panel.set_visibility(False)
+                        grid_panel.set_visibility(was_visible)
+
+                    with grid_panel:
+                        rebuild_grid_panel()
+
+                    def clear_button_colors():
+                        for button in (machine_button, audio_button, grid_button, live_capture_button, settings_button):
+                            button.props(remove='color')
+
+                    def show_machine():
+                        machine_panel.set_visibility(True)
+                        audio_panel.set_visibility(False)
+                        clear_button_colors()
+                        machine_button.props('color=primary')
+                        hide_menu()
+
+                    def show_audio_setup():
+                        machine_panel.set_visibility(False)
+                        audio_panel.set_visibility(True)
+                        show_live_capture()
+                        clear_button_colors()
+                        audio_button.props('color=primary')
+                        hide_menu()
+
+                    def show_live_capture():
+                        live_capture_panel.set_visibility(True)
+                        grid_panel.set_visibility(False)
+                        live_capture_button.props('color=primary')
+                        grid_button.props(remove='color')
+                        live_capture.update_live_capture_plots()
+                        hide_menu()
+
+                    def show_grid():
+                        machine_panel.set_visibility(True)
+                        audio_panel.set_visibility(False)
+                        live_capture_panel.set_visibility(False)
+                        grid_panel.set_visibility(True)
+                        machine_button.props('color=primary')
+                        grid_button.props('color=primary')
+                        audio_button.props(remove='color')
+                        live_capture_button.props(remove='color')
+                        hide_menu()
+
+                    def show_settings():
+                        clear_button_colors()
+                        settings_button.props('color=primary')
+                        hide_menu()
+                        open_config_editor(
+                            control.scanner_app.config_file,
+                            control.scanner_app.reload_config_ui,
+                        )
+
+                    live_capture_button.on('click', show_live_capture)
+                    grid_button.on('click', show_grid)
+                    machine_button.on('click', show_machine)
+                    audio_button.on('click', show_audio_setup)
+                    settings_button.on('click', show_settings)
+                    show_machine()
+                    show_live_capture()
 
 
 def main():
@@ -214,6 +433,7 @@ def main():
     args, _ = parser.parse_known_args()
 
     control.initialize_app(args.config)
+    project.set_project_dir(Path(tempfile.gettempdir()) / "HALS_working_project", args.config)
     control.set_on_config_loaded(live_capture.update_live_capture_plots)
 
     static_images_path = os.path.join(os.getcwd(), 'images')

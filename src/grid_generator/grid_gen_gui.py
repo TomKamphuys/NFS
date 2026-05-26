@@ -41,7 +41,13 @@ def grid_image_url(filename: str) -> str:
     return f'{GRID_IMAGE_ROUTE}/{filename}'
 
 
-def build_grid_gen_ui(get_current_pos_callback=None, on_grid_saved_callback=None):
+def build_grid_gen_ui(
+    get_current_pos_callback=None,
+    on_grid_saved_callback=None,
+    initial_grid_vars=None,
+    output_directory=None,
+    output_filename=None,
+):
     """
     Builds the Grid Generator UI.
     :param get_current_pos_callback: A function that returns a CylindricalPosition
@@ -50,6 +56,52 @@ def build_grid_gen_ui(get_current_pos_callback=None, on_grid_saved_callback=None
                                    filename after a successful save.
     """
     register_grid_image_files()
+    initial_grid_vars = initial_grid_vars or {}
+
+    def gv(key, default):
+        return initial_grid_vars.get(key, default)
+
+    def gv_float(key, default=None):
+        value = gv(key, default)
+        if value in (None, ''):
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    def gv_int(key, default=0):
+        value = gv(key, default)
+        if value in (None, ''):
+            return default
+        try:
+            return int(float(value))
+        except (TypeError, ValueError):
+            return default
+
+    def gv_bool(key, default=False):
+        value = gv(key, default)
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return value.strip().lower() in ('1', 'true', 'yes', 'on')
+        return bool(value)
+
+    def resolve_output_root(create=False):
+        if callable(output_directory):
+            try:
+                return output_directory(create=create)
+            except TypeError:
+                return output_directory()
+        return output_directory
+
+    def as_float(value):
+        if value in (None, ''):
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
     
     def set_position_from_callback(r_input, phi_input, z_input, btn, default_r, default_phi, default_z):
         if get_current_pos_callback:
@@ -72,14 +124,15 @@ def build_grid_gen_ui(get_current_pos_callback=None, on_grid_saved_callback=None
 
     extra_position_fields = []
 
-    def add_extra_position_field():
+    def add_extra_position_field(initial=None):
+        initial = initial or {}
         with extra_positions_container:
             with ui.row().classes('items-center w-fit gap-2 border border-gray-200 rounded p-1 bg-gray-50') as row_container:
                 with ui.column().classes('w-32 gap-0 leading-tight'):
-                    name_input = ui.input('Name').classes('w-full').props('dense')
-                r_input = ui.number('Radius', format='%.1f').classes('w-20').props('dense')
-                phi_input = ui.number('Phi', format='%.1f').classes('w-20').props('dense')
-                z_input = ui.number('Height', format='%.1f').classes('w-20').props('dense')
+                    name_input = ui.input('Name', value=initial.get('name', '')).classes('w-full').props('dense')
+                r_input = ui.number('Radius', value=as_float(initial.get('r')), format='%.1f').classes('w-20').props('dense')
+                phi_input = ui.number('Phi', value=as_float(initial.get('phi')), format='%.1f').classes('w-20').props('dense')
+                z_input = ui.number('Height', value=as_float(initial.get('z')), format='%.1f').classes('w-20').props('dense')
                 set_btn = ui.button(
                     'Set',
                     on_click=lambda e: set_position_from_callback(
@@ -130,11 +183,11 @@ def build_grid_gen_ui(get_current_pos_callback=None, on_grid_saved_callback=None
                                 ui.label('diagram').classes('text-[10px] font-bold uppercase tracking-wider')
                                 with ui.tooltip().props('content-class="bg-white p-1 border border-gray-300 shadow-xl"'):
                                     ui.image(grid_image_url('waypoint_top.png')).classes('w-64 rounded')
-                        wp_top_r = ui.number('Radius', format='%.1f').classes('w-20').props('dense')
-                        wp_top_phi = ui.number('Phi', format='%.1f').classes('w-20').props('dense')
-                        wp_top_z = ui.number('Height', format='%.1f').classes('w-20').props('dense')
+                        wp_top_r = ui.number('Radius', value=gv_float('wp_top_r'), format='%.1f').classes('w-20').props('dense')
+                        wp_top_phi = ui.number('Phi', value=gv_float('wp_top_phi'), format='%.1f').classes('w-20').props('dense')
+                        wp_top_z = ui.number('Height', value=gv_float('wp_top_z'), format='%.1f').classes('w-20').props('dense')
                         ui.button('Set', on_click=lambda e: set_position_from_callback(wp_top_r, wp_top_phi, wp_top_z, e.sender, 200.0, 45.0, 350.0)).props('size=sm')
-                    g_pts = ui.number('Total Points', value=1000, format='%d').classes('flex-1').props('dense outlined bg-color=white')
+                    g_pts = ui.number('Total Points', value=gv_int('num_points', 1000), format='%d').classes('flex-1').props('dense outlined bg-color=white')
 
                 with ui.row().classes('w-full items-center gap-4'):
                     with ui.row().classes('items-center w-fit gap-2 border border-gray-200 rounded p-1 bg-gray-50'):
@@ -145,11 +198,11 @@ def build_grid_gen_ui(get_current_pos_callback=None, on_grid_saved_callback=None
                                 ui.label('diagram').classes('text-[10px] font-bold uppercase tracking-wider')
                                 with ui.tooltip().props('content-class="bg-white p-1 border border-gray-300 shadow-xl"'):
                                     ui.image(grid_image_url('waypoint_bottom.png')).classes('w-64 rounded')
-                        wp_bot_r = ui.number('Radius', format='%.1f').classes('w-20').props('dense')
-                        wp_bot_phi = ui.number('Phi', format='%.1f').classes('w-20').props('dense')
-                        wp_bot_z = ui.number('Height', format='%.1f').classes('w-20').props('dense')
+                        wp_bot_r = ui.number('Radius', value=gv_float('wp_bot_r'), format='%.1f').classes('w-20').props('dense')
+                        wp_bot_phi = ui.number('Phi', value=gv_float('wp_bot_phi'), format='%.1f').classes('w-20').props('dense')
+                        wp_bot_z = ui.number('Height', value=gv_float('wp_bot_z'), format='%.1f').classes('w-20').props('dense')
                         ui.button('Set', on_click=lambda e: set_position_from_callback(wp_bot_r, wp_bot_phi, wp_bot_z, e.sender, 40.0, 0.0, -50.0)).props('size=sm')
-                    g_az_dens = ui.number('Azimuth Density Ratio', value=1.0, format='%.2f').classes('flex-1').props('dense outlined bg-color=white')
+                    g_az_dens = ui.number('Azimuth Density Ratio', value=gv_float('azimuth_density_ratio', 1.0), format='%.2f').classes('flex-1').props('dense outlined bg-color=white')
 
                 with ui.row().classes('w-full items-end gap-4'):
                     with ui.column().classes('w-fit gap-1'):
@@ -161,14 +214,17 @@ def build_grid_gen_ui(get_current_pos_callback=None, on_grid_saved_callback=None
                                     ui.label('diagram').classes('text-[10px] font-bold uppercase tracking-wider')
                                     with ui.tooltip().props('content-class="bg-white p-1 border border-gray-300 shadow-xl"'):
                                         ui.image(grid_image_url('tweeter_point.png')).classes('w-64 rounded')
-                            wp_twt_r = ui.number('Radius', format='%.1f').classes('w-20').props('dense')
-                            wp_twt_phi = ui.number('Phi', format='%.1f').classes('w-20').props('dense')
-                            wp_twt_z = ui.number('Height', format='%.1f').classes('w-20').props('dense')
+                            wp_twt_r = ui.number('Radius', value=gv_float('wp_tw_r'), format='%.1f').classes('w-20').props('dense')
+                            wp_twt_phi = ui.number('Phi', value=gv_float('wp_tw_phi'), format='%.1f').classes('w-20').props('dense')
+                            wp_twt_z = ui.number('Height', value=gv_float('wp_tw_z'), format='%.1f').classes('w-20').props('dense')
                             ui.button('Set', on_click=lambda e: set_position_from_callback(wp_twt_r, wp_twt_phi, wp_twt_z, e.sender, 150.0, 0.0, 250.0)).props('size=sm')
                         extra_positions_container = ui.column().classes('w-fit gap-1')
                         with ui.row().classes('items-center gap-1 self-start'):
-                            ui.button(icon='add', on_click=add_extra_position_field).props('flat round dense color=primary')
+                            ui.button(icon='add', on_click=lambda: add_extra_position_field()).props('flat round dense color=primary')
                             ui.button(icon='remove', on_click=remove_latest_extra_position_field).props('flat round dense color=negative')
+                        for saved_position in gv('additional_positions', []) or []:
+                            if isinstance(saved_position, dict):
+                                add_extra_position_field(saved_position)
                     with ui.row().classes('flex-1 h-fit items-center justify-between bg-gray-100 hover:bg-gray-200 cursor-pointer rounded border border-gray-200 p-1 px-2 transition-colors').on('click', toggle_adv):
                         with ui.row().classes('items-center gap-2'):
                             ui.icon('settings', size='sm').classes('text-gray-700')
@@ -178,26 +234,26 @@ def build_grid_gen_ui(get_current_pos_callback=None, on_grid_saved_callback=None
             with ui.column().classes('w-full bg-gray-50 rounded border border-gray-200 p-4 gap-2 mt-2') as adv_container:
                 adv_container.set_visibility(False)
                 with ui.row().classes('w-full gap-4'):
-                    g_rad = ui.number('Cyl Radius (mm)', value=200.0, format='%.1f').classes('flex-1')
-                    g_ht = ui.number('Cyl Height (mm)', value=500.0, format='%.1f').classes('flex-1')
-                    g_phi_min = ui.number('Phi Min (deg)', value=-170.0, format='%.1f').classes('flex-1')
-                    g_phi_max = ui.number('Phi Max (deg)', value=170.0, format='%.1f').classes('flex-1')
+                    g_rad = ui.number('Cyl Radius (mm)', value=gv_float('cyl_radius_mm', 200.0), format='%.1f').classes('flex-1')
+                    g_ht = ui.number('Cyl Height (mm)', value=gv_float('cyl_height_mm', 500.0), format='%.1f').classes('flex-1')
+                    g_phi_min = ui.number('Phi Min (deg)', value=gv_float('phi_min_deg', -170.0), format='%.1f').classes('flex-1')
+                    g_phi_max = ui.number('Phi Max (deg)', value=gv_float('phi_max_deg', 170.0), format='%.1f').classes('flex-1')
                 with ui.row().classes('w-full gap-4'):
-                    g_bot_cut = ui.number('Bottom Cutoff (mm)', value=30.0, format='%.1f').classes('flex-1')
-                    g_d_theta = ui.number('Delta Theta (deg)', value=7.5, format='%.1f').classes('flex-1')
-                    g_wall_th = ui.number('Wall Thickness (mm)', value=50.0).classes('flex-1')
-                    g_cap_frac = ui.input('Cap Fraction', value='Auto').classes('flex-1')
+                    g_bot_cut = ui.number('Bottom Cutoff (mm)', value=gv_float('bottom_cutoff_mm', 30.0), format='%.1f').classes('flex-1')
+                    g_d_theta = ui.number('Delta Theta (deg)', value=gv_float('delta_theta_deg', 7.5), format='%.1f').classes('flex-1')
+                    g_wall_th = ui.number('Wall Thickness (mm)', value=gv_float('wall_thickness_mm', 50.0)).classes('flex-1')
+                    g_cap_frac = ui.input('Cap Fraction', value=gv('cap_fraction', 'Auto')).classes('flex-1')
                 with ui.row().classes('w-full gap-4'):
-                    g_p_side = ui.number('P_side', value=0.5).classes('flex-1')
-                    g_p_caps = ui.number('P_caps', value=0.8).classes('flex-1')
-                    g_cap_tol = ui.input('Cap Tol (mm)', value='Auto').classes('flex-1')
-                    g_az_wc = ui.number('Az Weight Center', value=0.0).classes('flex-1')
+                    g_p_side = ui.number('P_side', value=gv_float('P_side', 0.5)).classes('flex-1')
+                    g_p_caps = ui.number('P_caps', value=gv_float('P_caps', 0.8)).classes('flex-1')
+                    g_cap_tol = ui.input('Cap Tol (mm)', value=gv('cap_tol_mm', 'Auto')).classes('flex-1')
+                    g_az_wc = ui.number('Az Weight Center', value=gv_float('azimuth_weight_center_deg', 0.0)).classes('flex-1')
                 with ui.row().classes('w-full gap-4 items-center'):
-                    g_z_rot = ui.number('Z Rot 2nd Spiral', value=90.0).classes('flex-1')
-                    g_snake = ui.select(['up', 'down'], value='up', label='Side Snake Start').classes('flex-1')
-                    g_rev_sp = ui.checkbox('Generate Reverse Spiral', value=True)
-                    g_flip_p = ui.checkbox('Flip Poles', value=False)
-                    g_z_mid = ui.checkbox('Z Midpoint = 0', value=True)
+                    g_z_rot = ui.number('Z Rot 2nd Spiral', value=gv_float('z_rotation_deg', 90.0)).classes('flex-1')
+                    g_snake = ui.select(['up', 'down'], value=gv('side_snake_start', 'up'), label='Side Snake Start').classes('flex-1')
+                    g_rev_sp = ui.checkbox('Generate Reverse Spiral', value=gv_bool('generate_reverse_spiral', True))
+                    g_flip_p = ui.checkbox('Flip Poles', value=gv_bool('flip_poles', False))
+                    g_z_mid = ui.checkbox('Z Midpoint = 0', value=gv_bool('z_midpoint_zero', True))
 
             def do_generate_and_plan():
                 try:
@@ -244,7 +300,12 @@ def build_grid_gen_ui(get_current_pos_callback=None, on_grid_saved_callback=None
                     ct_val_str = str(g_cap_tol.value).strip().lower()
                     cap_tol = g_wall_th.value + 1.0 if ct_val_str in ('auto', '') else float(g_cap_tol.value)
                     
-                    output_csv = os.path.abspath(os.path.join(os.getcwd(), GRID_OUTPUT_FILENAME))
+                    output_root = resolve_output_root(create=True)
+                    output_root = output_root or os.getcwd()
+                    os.makedirs(output_root, exist_ok=True)
+                    filename = output_filename() if callable(output_filename) else output_filename
+                    filename = filename or GRID_OUTPUT_FILENAME
+                    output_csv = os.path.abspath(os.path.join(str(output_root), filename))
                     
                     planned_data = plan_path(
                         input_data=grid_data,
@@ -259,7 +320,47 @@ def build_grid_gen_ui(get_current_pos_callback=None, on_grid_saved_callback=None
                     scrub_slider.props(f'max={max(0, engine.N - 1)}')
                     scrub_slider.set_value(0)
                     if on_grid_saved_callback:
-                        on_grid_saved_callback(GRID_OUTPUT_FILENAME)
+                        grid_vars = {
+                            'cyl_radius_mm': str(g_rad.value),
+                            'cyl_height_mm': str(g_ht.value),
+                            'num_points': str(g_pts.value),
+                            'azimuth_density_ratio': str(g_az_dens.value),
+                            'phi_min_deg': str(g_phi_min.value),
+                            'phi_max_deg': str(g_phi_max.value),
+                            'bottom_cutoff_mm': str(g_bot_cut.value),
+                            'delta_theta_deg': str(g_d_theta.value),
+                            'wall_thickness_mm': str(g_wall_th.value),
+                            'cap_fraction': str(g_cap_frac.value),
+                            'P_side': str(g_p_side.value),
+                            'P_caps': str(g_p_caps.value),
+                            'cap_tol_mm': str(g_cap_tol.value),
+                            'azimuth_weight_center_deg': str(g_az_wc.value),
+                            'z_rotation_deg': str(g_z_rot.value),
+                            'side_snake_start': str(g_snake.value),
+                            'generate_reverse_spiral': bool(g_rev_sp.value),
+                            'flip_poles': bool(g_flip_p.value),
+                            'z_midpoint_zero': bool(g_z_mid.value),
+                            'wp_top_r': '' if wp_top_r.value is None else str(wp_top_r.value),
+                            'wp_top_phi': '' if wp_top_phi.value is None else str(wp_top_phi.value),
+                            'wp_top_z': '' if wp_top_z.value is None else str(wp_top_z.value),
+                            'wp_bot_r': '' if wp_bot_r.value is None else str(wp_bot_r.value),
+                            'wp_bot_phi': '' if wp_bot_phi.value is None else str(wp_bot_phi.value),
+                            'wp_bot_z': '' if wp_bot_z.value is None else str(wp_bot_z.value),
+                            'wp_tw_r': '' if wp_twt_r.value is None else str(wp_twt_r.value),
+                            'wp_tw_phi': '' if wp_twt_phi.value is None else str(wp_twt_phi.value),
+                            'wp_tw_z': '' if wp_twt_z.value is None else str(wp_twt_z.value),
+                            'additional_positions': [
+                                {
+                                    'name': str(field['name'].value or '').strip(),
+                                    'r': field['r'].value,
+                                    'phi': field['phi'].value,
+                                    'z': field['z'].value,
+                                }
+                                for field in extra_position_fields
+                            ],
+                            'output_filename': filename,
+                        }
+                        on_grid_saved_callback(filename, grid_vars)
                     ui.notify(f"Grid successfully generated and saved.", type='positive')
                     
                 except Exception as e:
@@ -277,7 +378,12 @@ def build_grid_gen_ui(get_current_pos_callback=None, on_grid_saved_callback=None
         # Initialize the Viewer Engine
         with viewer_container:
             # Initialize empty or load existing file if available
-            initial_data = GRID_OUTPUT_FILENAME if os.path.exists(GRID_OUTPUT_FILENAME) else ('MySpeaker_scan_path.csv' if os.path.exists('MySpeaker_scan_path.csv') else None)
+            output_root = resolve_output_root(create=False)
+            output_root = output_root or os.getcwd()
+            filename = output_filename() if callable(output_filename) else output_filename
+            filename = filename or gv('output_filename', GRID_OUTPUT_FILENAME)
+            candidate = os.path.join(str(output_root), filename)
+            initial_data = candidate if os.path.exists(candidate) else (GRID_OUTPUT_FILENAME if os.path.exists(GRID_OUTPUT_FILENAME) else None)
             engine = CoordViewerEngine(input_data=initial_data)
 
         # Populate the playback controls

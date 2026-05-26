@@ -5,10 +5,11 @@ import configparser
 import json
 import os
 from pathlib import Path
+from unittest.mock import patch
 from nfs.audio import (
     MarkerGenerator, SweepGenerator, HarmonicInjector,
     ProtectionFilter, DeconvolutionEngine, AlignmentEngine,
-    DSPVerificationTool, AudioFactory
+    DSPVerificationTool, AudioFactory, find_device_id_by_name
 )
 from nfs.utils.dsp import DSPUtils
 from nfs.datatypes import CylindricalPosition
@@ -266,5 +267,27 @@ def test_integration_with_mock_audio(tmp_path):
 
     # Check if metrics file was created
     # Based on log output: Saved Linear IR: DSP_TEST_r100_ph0_z10_ir.wav
-    metrics_file = tmp_path / "Recordings" / "debug" / "DSP_TEST_r100_ph0_z10_metrics.json"
+    metrics_file = tmp_path / "debug" / "DSP_TEST_r100_ph0_z10_metrics.json"
     assert metrics_file.exists()
+
+
+@patch("nfs.audio.get_devices_and_channels")
+def test_find_device_id_by_name_handles_changed_id(mock_catalog):
+    mock_catalog.return_value = {
+        11: {
+            "name": "Bluetooth Headset",
+            "hostapi": "Windows WASAPI",
+            "input_channels": [1],
+            "output_channels": [1],
+        },
+        13: {
+            "name": "MOTU M4",
+            "hostapi": "ASIO",
+            "input_channels": [0, 1],
+            "output_channels": [0, 1, 2, 3],
+        },
+    }
+
+    assert find_device_id_by_name("MOTU M4", "ASIO", require_input=True) == 13
+    assert find_device_id_by_name("MOTU M4", "ASIO", require_output=True) == 13
+    assert find_device_id_by_name("Missing", "ASIO") is None

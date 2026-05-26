@@ -2,18 +2,21 @@ import asyncio
 import ctypes
 import os
 import queue
+import shutil
 import sys
 import threading
 import time
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from loguru import logger
 from nicegui import app, run, ui
 
 from harmonic_drive.config_editor import (
-    open_config_editor,
+    check_audio_device_ids_on_startup,
     set_file_measurement_points_filename,
 )
+from harmonic_drive import project
 from nfs import NearFieldScannerFactory, ScannerFactory
 from nfs.logging_config import setup_logging
 
@@ -36,11 +39,27 @@ pos_state = None
 home_button = None
 
 on_config_loaded = None
+measurement_set_title_provider = None
+project_root_provider = None
 
 
 def set_on_config_loaded(callback):
     global on_config_loaded
     on_config_loaded = callback
+
+
+def set_measurement_set_context(title_provider, root_provider) -> None:
+    global measurement_set_title_provider, project_root_provider
+    measurement_set_title_provider = title_provider
+    project_root_provider = root_provider
+
+
+def register_sine_controls(level, frequency, duration, button) -> None:
+    global level_input, freq_input, dur_input, play_button
+    level_input = level
+    freq_input = frequency
+    dur_input = duration
+    play_button = button
 
 
 def _log_built_object_tree(scanner, nfs, config_file: str) -> None:
@@ -163,14 +182,16 @@ class ScannerApp:
             _log_built_object_tree(self.scanner, self.nfs, self.config_file)
             self._is_loaded = True
 
-    def reload_config_ui(self):
+    def reload_config_ui(self, notify: bool = True):
         try:
             with self._load_lock:
                 self._is_loaded = False
             self.load_config()
+            apply_project_directory_to_nfs()
             if on_config_loaded:
                 on_config_loaded()
-            ui.notify("Configuration reloaded successfully", type='positive')
+            if notify:
+                ui.notify("Configuration reloaded successfully", type='positive')
         except Exception as exc:
             logger.error(f"Failed to reload configuration: {exc}")
             ui.notify(f"Reload failed: {exc}", type='negative')
@@ -184,13 +205,45 @@ def get_nfs() -> "NearFieldScanner":
     return scanner_app.nfs
 
 
-def use_generated_grid_file(filename: str):
+def apply_project_directory_to_nfs() -> None:
+    project.ensure_output_dirs()
+    nfs = get_nfs() if scanner_app else None
+    if nfs is not None and hasattr(nfs, "set_project_directory"):
+        nfs.set_project_directory(project.get_project_dir())
+
+
+def measurement_outputs_exist(measurement_set_dir: Path) -> bool:
+    measurement_dir = measurement_set_dir / "measurement_set"
+    if not measurement_dir.exists():
+        return False
+    for path in measurement_dir.rglob("*"):
+        if path.is_dir():
+            continue
+        return True
+    return False
+
+
+def loaded_grid_file_exists(measurement_set_dir: Path) -> bool:
+    grid_vars = project.get_project_data().get("grid_vars")
+    if isinstance(grid_vars, dict):
+        filename = grid_vars.get("output_filename")
+        if filename and (measurement_set_dir / str(filename)).exists():
+            return True
+    return False
+
+
+def use_generated_grid_file(filename: str, grid_vars=None):
     try:
+        config_filename = str((project.get_project_dir() / filename).resolve())
         section = set_file_measurement_points_filename(
             scanner_app.config_file,
-            filename,
+            config_filename,
             scanner_app.reload_config_ui,
         )
+        updates = {"output_filename": filename}
+        if isinstance(grid_vars, dict):
+            updates.update(grid_vars)
+        project.update_grid_vars(updates)
         ui.notify(
             f"Using generated grid '{filename}' via [{section}]",
             type='positive',
@@ -239,9 +292,15 @@ def audio_worker():
         if item is None:
             break
 
-        func, args, done_event, loop = item
+        if len(item) == 5:
+            func, args, done_event, loop, result_holder = item
+        else:
+            func, args, done_event, loop = item
+            result_holder = None
         try:
-            func(*args)
+            result = func(*args)
+            if result_holder is not None:
+                result_holder['result'] = result
         except StopIteration:
             logger.info("Measurement sequence completed: all points processed.")
         except Exception as exc:
@@ -301,13 +360,68 @@ def rehome():
 
 
 async def async_task():
+    title = (
+        measurement_set_title_provider()
+        if measurement_set_title_provider is not None
+        else project.get_project_name()
+    )
+    title = str(title or "").strip() or project.DEFAULT_PROJECT_NAME
+    measurement_set_name = project.sanitize_project_name(title)
+    project_root = (
+        project_root_provider()
+        if project_root_provider is not None
+        else str(project.get_default_project_root(scanner_app.config_file))
+    )
+    target_dir = Path(project_root).expanduser().resolve()
+    overwrite = False
+
+    if not loaded_grid_file_exists(target_dir):
+        ui.notify("No grid file loaded. Please generate one first.", type="warning")
+        return
+
+    if measurement_outputs_exist(target_dir):
+        decision = asyncio.Future()
+        with ui.dialog() as dialog, ui.card().classes("w-[420px] max-w-full"):
+            ui.label("Measurement output already exists").classes("text-lg font-bold")
+            ui.label(
+                "This measurement folder already contains measurement output. "
+                "Choose a different folder, overwrite it, or cancel."
+            ).classes("text-sm text-gray-700")
+            with ui.row().classes("w-full justify-end gap-2"):
+                ui.button("Cancel", on_click=lambda: (decision.set_result("cancel"), dialog.close())).props("flat")
+                ui.button("Overwrite", on_click=lambda: (decision.set_result("overwrite"), dialog.close())).props("color=negative")
+        dialog.open()
+        choice = await decision
+        if choice == "cancel":
+            ui.notify("Measurement cancelled", type="warning")
+            return
+        overwrite = True
+        measurement_dir = target_dir / "measurement_set"
+        if measurement_dir.exists():
+            shutil.rmtree(measurement_dir)
+        for filename in ("measurement_positions.csv",):
+            path = target_dir / filename
+            if path.exists():
+                path.unlink()
+        log_file = target_dir / "logs" / "Scanner.log"
+        if log_file.exists():
+            log_file.unlink()
+
+    project.save_project_to(target_dir, title, scanner_app.config_file)
+    apply_project_directory_to_nfs()
+
     ui.notify('Measurement started')
     for button in scanner_app.greyable_buttons:
         button.disable()
     try:
         loop = asyncio.get_running_loop()
         done = asyncio.Event()
-        audio_queue.put((get_nfs().take_measurement_set, (), done, loop))
+        audio_queue.put((
+            get_nfs().take_measurement_set,
+            (measurement_set_name, overwrite),
+            done,
+            loop,
+        ))
         await done.wait()
     except Exception as exc:
         logger.error(f"Measurement task failed: {exc}")
@@ -334,6 +448,25 @@ async def async_single_measurement_task():
         ui.notify('Single measurement finished')
         for button in scanner_app.greyable_buttons:
             button.enable()
+
+
+async def async_test_sweep_task():
+    ui.notify('Test sweep started')
+    try:
+        loop = asyncio.get_running_loop()
+        done = asyncio.Event()
+        result_holder = {}
+        audio_queue.put((get_nfs().test_sweep, (), done, loop, result_holder))
+        await done.wait()
+        result = result_holder.get('result')
+        if result is not None:
+            from harmonic_drive import live_capture
+            live_capture.set_preview_ir(result)
+    except Exception as exc:
+        logger.error(f"Test sweep failed: {exc}")
+        ui.notify(f"Error: {exc}", type='negative')
+    finally:
+        ui.notify('Test sweep finished')
 
 
 async def async_play_sine_task():
@@ -535,7 +668,6 @@ def build_log_dialog():
 
 
 def build_control_pane(log_dialog):
-    global play_button, level_input, freq_input, dur_input
     global pos_r, pos_t, pos_z, pos_state, home_button
 
     with ui.column().classes('w-full h-full min-w-0 overflow-auto px-2 py-2'):
@@ -702,38 +834,10 @@ def build_control_pane(log_dialog):
 
         with ui.row().classes('items-center mt-1 gap-4'):
             ui.button(
-                'Edit Config',
-                icon='edit',
-                on_click=lambda: open_config_editor(
-                    scanner_app.config_file,
-                    scanner_app.reload_config_ui,
-                ),
-            ).classes('bg-blue-200 text-blue-900')
-            with ui.row().classes('items-center gap-2'):
-                level_input = ui.number(
-                    'Level (dBFS)',
-                    value=-20,
-                    format='%.1f',
-                ).props('dense outlined').classes('w-32')
-                freq_input = ui.number(
-                    'Frequency (Hz)',
-                    value=1000,
-                    format='%d',
-                ).props('dense outlined').classes('w-32')
-                dur_input = ui.number(
-                    'Duration (s)',
-                    value=None,
-                    format='%.1f',
-                ).props('dense outlined').classes('w-32')
-                play_button = ui.button(
-                    icon='play_arrow',
-                    on_click=log_button_click('Play Sine', async_play_sine_task),
-                ).props('round')
-                ui.button(
-                    'Shutdown Program',
-                    color='red',
-                    on_click=log_button_click('Shutdown Program', stop_nfs),
-                )
+                'Shutdown Program',
+                color='red',
+                on_click=log_button_click('Shutdown Program', stop_nfs),
+            )
             ui.button(
                 'Show Logs',
                 icon='list',
@@ -805,6 +909,11 @@ async def load_app(status_label, finish_splash):
             get_scanner().set_on_state_update_callback(update_scanner_position)
         if on_config_loaded:
             on_config_loaded()
+        apply_project_directory_to_nfs()
+        check_audio_device_ids_on_startup(
+            scanner_app.config_file,
+            scanner_app.reload_config_ui,
+        )
 
     except Exception as exc:
         logger.error(f"Initialization error: {exc}")

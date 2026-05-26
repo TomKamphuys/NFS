@@ -1,6 +1,7 @@
 import asyncio
 import configparser
 import json
+import time
 import warnings
 from pathlib import Path
 
@@ -11,6 +12,8 @@ from loguru import logger
 from nicegui import ui
 
 from grid_generator.coord_viewer_core import CoordViewerEngine
+from harmonic_drive import project
+from nfs.audio import get_audio_meter_state
 
 
 ui.add_css("""
@@ -38,6 +41,8 @@ frequency_response_plot = None
 frequency_smoothing_input = None
 frequency_smoothing_fraction = 24
 live_capture_config_file = 'config.ini'
+live_capture_started_at = time.time()
+preview_ir_data = None
 
 GRID_FILE_CANDIDATES = (
     Path('grid1.csv'),
@@ -60,6 +65,7 @@ FREQUENCY_SMOOTHING_OPTIONS = {
     48: '1/48',
 }
 PANEL_LABELS = [
+    'Audio Meters',
     '3D Progress',
     'Measurement Positions',
     'Frequency Response',
@@ -72,22 +78,41 @@ DEFAULT_VISIBLE_PANELS = [
 
 
 def _find_latest_ir_file():
-    search_dirs = [Path('./Recordings')]
-    measurement_dir = Path('./measurements')
-    if measurement_dir.exists():
-        search_dirs.extend(measurement_dir.glob('*/Recordings'))
+    session_started_at = live_capture_started_at
+    root = project.get_project_dir()
+    search_dirs = [
+        root / 'measurement_set',
+        root / 'single_measurements',
+    ]
+    search_dirs.append(Path('./Recordings'))
 
     wav_files = []
     for directory in search_dirs:
         if directory.exists():
-            wav_files.extend(list(directory.glob('*_ir.wav')))
+            wav_files.extend(
+                file
+                for file in directory.glob('*_ir.wav')
+                if file.stat().st_mtime >= session_started_at
+            )
 
     if not wav_files:
         return None
     return max(wav_files, key=lambda file: file.stat().st_mtime)
 
 
+def reset_live_capture_session() -> None:
+    """Clear live-only plots by ignoring captures made before this moment."""
+    global live_capture_started_at, preview_ir_data
+    live_capture_started_at = time.time()
+    preview_ir_data = None
+    update_impulse_response_plot()
+    update_frequency_response_plot()
+
+
 def _load_latest_ir():
+    if preview_ir_data is not None:
+        return preview_ir_data["path"], preview_ir_data["ir"], preview_ir_data["fs"]
+
     latest_file = _find_latest_ir_file()
     if latest_file is None:
         return None, None, None
@@ -102,17 +127,25 @@ def _load_latest_ir():
         return None, None, None
 
 
+def set_preview_ir(result) -> None:
+    """Show a transient test-sweep IR without saving it to disk."""
+    global preview_ir_data
+    if not result:
+        return
+    preview_ir_data = {
+        "path": Path(str(result.get("name", "Test Sweep"))),
+        "ir": result.get("ir_linear"),
+        "fs": result.get("fs"),
+    }
+    update_impulse_response_plot()
+    update_frequency_response_plot()
+
+
 def _find_latest_measurement_positions_file():
-    measurement_dir = Path('./measurements')
+    root = project.get_project_dir()
     all_csv_files = []
-    if measurement_dir.exists():
-        all_csv_files.extend(measurement_dir.glob('*/measurement_points.csv'))
 
-    root_csv = Path('measurement_points.csv')
-    if root_csv.exists():
-        all_csv_files.append(root_csv)
-
-    root_pos_csv = Path('measurement_positions.csv')
+    root_pos_csv = root / 'measurement_positions.csv'
     if root_pos_csv.exists():
         all_csv_files.append(root_pos_csv)
 
@@ -133,7 +166,15 @@ def _count_measurement_rows(file_path):
 
 
 def _find_grid_file():
-    existing = [path for path in GRID_FILE_CANDIDATES if path.exists()]
+    root = project.get_project_dir()
+    configured = []
+    grid_vars = project.get_project_data().get("grid_vars", {})
+    if isinstance(grid_vars, dict) and grid_vars.get("output_filename"):
+        configured.append(Path(str(grid_vars["output_filename"])))
+    configured.append(Path(project.get_grid_filename()))
+    candidates = [*configured, *GRID_FILE_CANDIDATES]
+    existing = [root / path for path in candidates if (root / path).exists()]
+    existing.extend(path for path in candidates if path.exists())
     if not existing:
         return None
     return max(existing, key=lambda file: file.stat().st_mtime)
@@ -364,6 +405,100 @@ def _new_live_capture_figure():
     return figure
 
 
+def _meter_bar_value(db_value):
+    return max(0.0, min(1.0, (float(db_value) + 80.0) / 80.0))
+
+
+def _format_meter_db(db_value):
+    db_value = float(db_value)
+    if db_value <= -119.0:
+        return '-inf'
+    return f'{db_value:.1f}'
+
+
+def _load_audio_channel_labels(config_file):
+    parser = configparser.ConfigParser(inline_comment_prefixes=('#', ';'))
+    parser.read(config_file)
+
+    def channel(key, fallback):
+        try:
+            return parser.getint('audio', key, fallback=fallback)
+        except ValueError:
+            return fallback
+
+    return [
+        f"Mic Input CH {channel('in_ch_mic', 1)}",
+        f"Speaker Output CH {channel('out_ch_spkr', 0)}",
+        f"Loopback Input CH {channel('in_ch_loop', 0)}",
+        f"Loopback Output CH {channel('out_ch_ref', 1)}",
+    ]
+
+
+def _build_audio_meter_tile(label, kind):
+    tone_classes = (
+        'border border-pink-200 rounded bg-pink-50/60 px-2 py-1 min-w-0'
+        if kind == 'input'
+        else 'border border-blue-200 rounded bg-blue-50/60 px-2 py-1 min-w-0'
+    )
+    with ui.element('div').classes(
+        tone_classes
+    ):
+        with ui.row().classes('w-full items-center gap-2 flex-nowrap'):
+            label_el = ui.label(label).classes(
+                'w-40 text-xs font-bold text-gray-700 truncate'
+            )
+            bar = ui.linear_progress(value=0).classes('flex-1 min-w-24')
+            rms = ui.label('RMS -inf').classes('w-20 text-xs text-gray-600')
+            peak = ui.label('Peak -inf').classes('w-20 text-xs text-gray-600')
+    return {'label': label_el, 'bar': bar, 'rms': rms, 'peak': peak}
+
+
+def _build_audio_meters_panel(config_file):
+    with ui.element('div').classes(
+        'w-full shrink-0 border border-gray-300 rounded bg-white p-2'
+    ) as panel:
+        with ui.row().classes('w-full items-center justify-between gap-2 mb-1'):
+            with ui.row().classes('items-center gap-1 min-w-0'):
+                ui.icon('drag_indicator').classes(
+                    'live-capture-drag-handle text-gray-500'
+                )
+                ui.label('Audio Meters').classes('text-sm font-bold text-gray-700')
+
+        labels = _load_audio_channel_labels(config_file)
+        with ui.element('div').classes('grid grid-cols-2 gap-2 w-full') as grid:
+            rows = [
+                _build_audio_meter_tile(labels[0], 'input'),
+                _build_audio_meter_tile(labels[1], 'output'),
+                _build_audio_meter_tile(labels[2], 'input'),
+                _build_audio_meter_tile(labels[3], 'output'),
+            ]
+
+        def refresh():
+            labels_now = _load_audio_channel_labels(config_file)
+            state = get_audio_meter_state()
+            meters = [
+                state['inputs'][1],
+                state['outputs'][0],
+                state['inputs'][0],
+                state['outputs'][1],
+            ]
+            for row, label, meter in zip(rows, labels_now, meters):
+                rms = meter.get('rms_dbfs', -120.0)
+                peak = meter.get('peak_dbfs', -120.0)
+                row['label'].set_text(label)
+                row['bar'].set_value(_meter_bar_value(peak))
+                row['rms'].set_text(f"RMS {_format_meter_db(rms)}")
+                row['peak'].set_text(f"Peak {_format_meter_db(peak)}")
+                if meter.get('clip'):
+                    row['peak'].classes(add='text-red-600 font-bold')
+                else:
+                    row['peak'].classes(remove='text-red-600 font-bold')
+
+        ui.timer(0.2, refresh)
+        refresh()
+        return panel
+
+
 def update_live_capture_plots():
     _refresh_frequency_smoothing_from_config()
     update_grid_progress_viewer()
@@ -498,20 +633,13 @@ def update_grid_progress_viewer():
 
 
 async def watch_measurement_points():
-    measurement_dir = Path('./measurements')
     last_mtime = 0
     last_file_path = None
 
     while True:
         try:
             all_csv_files = []
-            if measurement_dir.exists():
-                all_csv_files.extend(measurement_dir.glob('*/measurement_points.csv'))
-
-            root_csv = Path('measurement_points.csv')
-            if root_csv.exists():
-                all_csv_files.append(root_csv)
-            root_pos_csv = Path('measurement_positions.csv')
+            root_pos_csv = project.get_project_dir() / 'measurement_positions.csv'
             if root_pos_csv.exists():
                 all_csv_files.append(root_pos_csv)
 
@@ -846,6 +974,7 @@ def build_live_capture(config_file='config.ini'):
         with ui.column().classes(
             'w-full flex-1 min-h-0 min-w-0 gap-2 overflow-y-auto pr-1'
         ) as plot_stack:
+            audio_meters_panel = _build_audio_meters_panel(config_file)
             grid_progress_panel, grid_progress_engine = _build_grid_progress_panel()
             measurement_position_panel, measurement_position_plot = _build_plot_panel(
                 'Measurement Positions',
@@ -861,6 +990,7 @@ def build_live_capture(config_file='config.ini'):
             )
 
         panel_map = {
+            'Audio Meters': audio_meters_panel,
             '3D Progress': grid_progress_panel,
             'Measurement Positions': measurement_position_panel,
             'Frequency Response': frequency_response_panel,
