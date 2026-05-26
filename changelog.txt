@@ -1,6 +1,16 @@
+--------
+24/05/26
+--------
+Bug fix: SPL calibration now stores the calculated offset from the measured mic
+input RMS to the entered SPL value, instead of only saving the entered value.
+
+Files touched:
+src/harmonic_drive/audio_setup.py
+src/harmonic_drive/project.py
+tests/test_project.py
 
 --------
-26/05/26
+24/05/26
 --------
 Added session-folder workflow to the HarmonicDrive UI. The top bar now lets the
 user choose a Session Folder with the native folder picker, set a Save Name, and

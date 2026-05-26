@@ -215,6 +215,29 @@ def update_grid_vars(grid_vars: Dict[str, Any]) -> None:
     _project_data["grid_vars"] = current
 
 
+def build_spl_calibration(
+    spl_db: Any,
+    reference_input_rms_dbfs: Any,
+) -> Optional[Dict[str, Optional[float]]]:
+    if spl_db is None:
+        return None
+    spl_db_float = float(spl_db)
+    reference_float = (
+        None
+        if reference_input_rms_dbfs is None
+        else float(reference_input_rms_dbfs)
+    )
+    return {
+        "spl_db": spl_db_float,
+        "reference_input_rms_dbfs": reference_float,
+        "spl_offset_db": (
+            None
+            if reference_float is None
+            else spl_db_float - reference_float
+        ),
+    }
+
+
 def update_audio_setup(
     audio_settings: Dict[str, Any],
     sweep_settings: Dict[str, Any],

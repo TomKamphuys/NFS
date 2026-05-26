@@ -16,7 +16,7 @@ from harmonic_drive.config_editor import (
     _strip_inline_comment,
     save_config_values,
 )
-from nfs.audio import get_devices_and_channels, get_supported_sample_rates
+from nfs.audio import get_audio_meter_state, get_devices_and_channels, get_supported_sample_rates
 
 
 def _read_config(config_file: str) -> configparser.ConfigParser:
@@ -42,6 +42,17 @@ def _float_value(parser, section: str, key: str, fallback: float = 0.0) -> float
         return float(_value(parser, section, key, str(fallback)))
     except ValueError:
         return fallback
+
+
+def _current_mic_rms_dbfs() -> float | None:
+    state = get_audio_meter_state()
+    inputs = state.get("inputs", [])
+    if len(inputs) < 2:
+        return None
+    rms = inputs[1].get("rms_dbfs")
+    if rms is None:
+        return None
+    return float(rms)
 
 
 def _optional_float_text(parser, section: str, key: str, fallback: str = "") -> str:
@@ -233,7 +244,13 @@ def build_audio_setup_pane(config_file: str, show_live_capture=None):
             control.register_sine_controls(level_input, freq_input, dur_input, play_button)
             play_button.on("click", control.log_button_click("Play Sine", control.async_play_sine_task))
 
-        spl_input = ui.number("Calibrate (dB SPL)", value=None, format="%.1f").classes("w-44").props("outlined dense")
+        current_calibration = project.get_project_data().get("spl_calibration")
+        current_spl = (
+            current_calibration.get("spl_db")
+            if isinstance(current_calibration, dict)
+            else None
+        )
+        spl_input = ui.number("Calibrate (dB SPL)", value=current_spl, format="%.1f").classes("w-44").props("outlined dense")
 
         ui.separator()
         ui.label("Sweep Settings").classes("text-base font-bold")
@@ -328,10 +345,10 @@ def build_audio_setup_pane(config_file: str, show_live_capture=None):
             project.update_audio_setup(
                 _section_dict(fresh, "audio"),
                 _section_dict(fresh, "sweep"),
-                {
-                    "spl_db_at_1m": spl_input.value,
-                    "reference_input_rms_dbfs": None,
-                },
+                project.build_spl_calibration(
+                    spl_input.value,
+                    _current_mic_rms_dbfs(),
+                ),
             )
             if notify:
                 ui.notify("Audio setup saved", type="positive")

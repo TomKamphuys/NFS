@@ -45,6 +45,27 @@ def test_project_json_only_saved_explicitly(tmp_path):
     assert "audio_settings" not in content
 
 
+def test_spl_calibration_saves_offset_from_mic_rms(tmp_path):
+    config_file = tmp_path / "config.ini"
+    work_dir = tmp_path / "work"
+    _write_config(config_file)
+
+    project.set_project_dir(work_dir, str(config_file))
+    project.update_audio_setup(
+        {"in_dev": "9"},
+        {"sweep_dur_s": "2.0", "num_sweeps": "3"},
+        project.build_spl_calibration(80.0, -30.0),
+    )
+    saved_dir = project.save_project_to(tmp_path / "projects" / "speaker_a", "Speaker A", str(config_file))
+
+    saved_file = next(saved_dir.glob("*_project.json"))
+    content = saved_file.read_text(encoding="utf-8")
+
+    assert '"spl_db": 80.0' in content
+    assert '"reference_input_rms_dbfs": -30.0' in content
+    assert '"spl_offset_db": 110.0' in content
+
+
 def test_project_apply_does_not_overwrite_global_audio(tmp_path):
     config_file = tmp_path / "config.ini"
     _write_config(config_file)
