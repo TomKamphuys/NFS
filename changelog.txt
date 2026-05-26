@@ -44,6 +44,11 @@ Audio Setup now includes:
 - Test Sweep button
 - All audio settings and sweep settings
 
+Audio device selection is now more robust when device IDs change.
+Config saves selected input/output device names as well as their device
+IDs, uses the saved names to detect changes, and prompts the
+user before updating the device IDs.
+
 Test Sweep uses the active audio/sweep settings, including protection HPF and
 sweep level, but returns the processed IR to Live Capture in memory rather than
 writing permanent WAV, IR, or debug files.
