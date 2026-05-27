@@ -13,8 +13,9 @@ from loguru import logger
 LEGACY_PROJECT_FILENAME = "project.json"
 APP_SECTION = "app"
 DEFAULT_PROJECT_NAME = "HALS_Project"
+TEMP_PROJECT_DIR = Path(tempfile.gettempdir()) / "HALS_working_project"
 
-_project_dir = Path(tempfile.gettempdir()) / "HALS_working_project"
+_project_dir = TEMP_PROJECT_DIR
 _project_data: Dict[str, Any] = {}
 _callbacks: list[Callable[[], None]] = []
 
@@ -27,6 +28,13 @@ def sanitize_project_name(name: str) -> str:
 
 def get_project_dir() -> Path:
     return _project_dir
+
+
+def is_temporary_project_dir() -> bool:
+    try:
+        return _project_dir.resolve() == TEMP_PROJECT_DIR.resolve()
+    except OSError:
+        return _project_dir == TEMP_PROJECT_DIR
 
 
 def get_project_json_path() -> Path:

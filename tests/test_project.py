@@ -1,7 +1,10 @@
 import configparser
+import tempfile
+from pathlib import Path
 
 from harmonic_drive.control import loaded_grid_file_exists, measurement_outputs_exist
 from harmonic_drive import project
+from harmonic_drive.gui import NO_SESSION_FOLDER_TEXT, resolve_session_folder_value
 
 
 def _write_config(path):
@@ -127,3 +130,45 @@ def test_loaded_grid_file_must_exist(tmp_path):
     (tmp_path / "missing_grid.csv").write_text("r_xy_mm,phi_deg,z_mm\n")
 
     assert loaded_grid_file_exists(tmp_path) is True
+
+
+def test_temporary_project_dir_detection(tmp_path):
+    project.set_project_dir(Path(tempfile.gettempdir()) / "HALS_working_project")
+
+    assert project.is_temporary_project_dir() is True
+
+    project.set_project_dir(tmp_path / "session")
+
+    assert project.is_temporary_project_dir() is False
+
+
+def test_no_session_placeholder_with_temp_project_is_not_selected(tmp_path):
+    value = resolve_session_folder_value(
+        NO_SESSION_FOLDER_TEXT,
+        Path(tempfile.gettempdir()) / "HALS_working_project",
+        is_temporary_project_dir=True,
+    )
+
+    assert value is None
+
+
+def test_no_session_placeholder_uses_activated_project_folder(tmp_path):
+    session_dir = tmp_path / "session"
+    value = resolve_session_folder_value(
+        NO_SESSION_FOLDER_TEXT,
+        session_dir,
+        is_temporary_project_dir=False,
+    )
+
+    assert value == str(session_dir.resolve())
+
+
+def test_displayed_session_folder_is_selected_even_before_activation(tmp_path):
+    session_dir = tmp_path / "picked_session"
+    value = resolve_session_folder_value(
+        str(session_dir),
+        Path(tempfile.gettempdir()) / "HALS_working_project",
+        is_temporary_project_dir=True,
+    )
+
+    assert value == str(session_dir)

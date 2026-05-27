@@ -7,6 +7,7 @@ Run this script directly to launch the web UI:
 """
 
 import os
+import asyncio
 from pathlib import Path
 
 try:
@@ -94,6 +95,12 @@ def build_grid_gen_ui(
             except TypeError:
                 return output_directory()
         return output_directory
+
+    async def resolve_output_root_async(create=False):
+        output_root = resolve_output_root(create=create)
+        if asyncio.iscoroutine(output_root):
+            output_root = await output_root
+        return output_root
 
     def as_float(value):
         if value in (None, ''):
@@ -255,7 +262,7 @@ def build_grid_gen_ui(
                     g_flip_p = ui.checkbox('Flip Poles', value=gv_bool('flip_poles', False))
                     g_z_mid = ui.checkbox('Z Midpoint = 0', value=gv_bool('z_midpoint_zero', True))
 
-            def do_generate_and_plan():
+            async def do_generate_and_plan():
                 try:
                     def get_wp(r, phi, z):
                         if r.value is None or phi.value is None or z.value is None:
@@ -300,8 +307,9 @@ def build_grid_gen_ui(
                     ct_val_str = str(g_cap_tol.value).strip().lower()
                     cap_tol = g_wall_th.value + 1.0 if ct_val_str in ('auto', '') else float(g_cap_tol.value)
                     
-                    output_root = resolve_output_root(create=True)
-                    output_root = output_root or os.getcwd()
+                    output_root = await resolve_output_root_async(create=True)
+                    if output_root is None:
+                        return
                     os.makedirs(output_root, exist_ok=True)
                     filename = output_filename() if callable(output_filename) else output_filename
                     filename = filename or GRID_OUTPUT_FILENAME
@@ -379,6 +387,8 @@ def build_grid_gen_ui(
         with viewer_container:
             # Initialize empty or load existing file if available
             output_root = resolve_output_root(create=False)
+            if asyncio.iscoroutine(output_root):
+                output_root = None
             output_root = output_root or os.getcwd()
             filename = output_filename() if callable(output_filename) else output_filename
             filename = filename or gv('output_filename', GRID_OUTPUT_FILENAME)

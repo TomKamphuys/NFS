@@ -1,4 +1,5 @@
 import argparse
+import asyncio
 import os
 import tempfile
 from pathlib import Path
@@ -8,6 +9,22 @@ from nicegui import app, run, ui
 from grid_generator.grid_gen_gui import build_grid_gen_ui, register_grid_image_files
 from harmonic_drive import audio_setup, control, live_capture, project
 from harmonic_drive.config_editor import open_config_editor
+
+
+NO_SESSION_FOLDER_TEXT = "No session folder selected"
+
+
+def resolve_session_folder_value(
+    displayed_value: str | None,
+    active_project_dir: Path,
+    is_temporary_project_dir: bool,
+) -> str | None:
+    value = str(displayed_value or "").strip()
+    if value and value != NO_SESSION_FOLDER_TEXT:
+        return value
+    if not is_temporary_project_dir:
+        return str(active_project_dir.resolve())
+    return None
 
 
 ui.add_head_html(
@@ -171,12 +188,16 @@ def _native_folder_picker(initial_dir: str) -> str:
 
 
 async def _browse_measurement_folder(path_input, title_input, on_project_loaded=None):
-    initial_dir = str(Path(path_input.value or project.get_default_project_root()).expanduser().resolve())
+    current_value = str(path_input.value or "").strip()
+    if current_value and current_value != NO_SESSION_FOLDER_TEXT:
+        initial_dir = str(Path(current_value).expanduser().resolve())
+    else:
+        initial_dir = str(project.get_default_project_root(control.scanner_app.config_file))
     try:
         selected = await run.io_bound(_native_folder_picker, initial_dir)
     except Exception as exc:
         ui.notify(f'Could not open folder browser: {exc}', type='negative')
-        return
+        return False
     if selected:
         path_input.set_value(selected)
         project.set_project_dir(selected, control.scanner_app.config_file)
@@ -187,6 +208,8 @@ async def _browse_measurement_folder(path_input, title_input, on_project_loaded=
         if on_project_loaded is not None:
             on_project_loaded()
         ui.notify('Measurement folder loaded', type='positive')
+        return True
+    return False
 
 
 async def _browse_project_folder(path_input, title_input, on_project_loaded=None):
@@ -229,21 +252,71 @@ def main_page():
             ui.element('div').classes('w-6')
             ui.label('Session Folder').classes('text-sm font-semibold text-gray-600')
             project_path_input = ui.input(
-                value=str(_default_measurement_folder(control.scanner_app.config_file)),
-            ).props('dense outlined').classes('w-[360px] max-w-[34vw]')
+                value=NO_SESSION_FOLDER_TEXT,
+            ).props('dense outlined readonly').classes('w-[360px] max-w-[34vw]')
             ui.button(
-                'Browse',
+                'New/Load Session',
                 icon='folder_open',
-                on_click=lambda: _browse_measurement_folder(
-                    project_path_input,
-                    project_title_input,
-                    on_project_loaded=lambda: rebuild_grid_panel(),
-                ),
+                on_click=lambda: select_session_folder(),
             ).props('color=primary dense')
             ui.label('Save Name').classes('text-sm font-semibold text-gray-600')
             project_title_input = ui.input(value=project.get_project_name()).props('dense outlined').classes('w-48')
 
-            def save_project_snapshot():
+            def session_folder_value() -> str | None:
+                return resolve_session_folder_value(
+                    project_path_input.value,
+                    project.get_project_dir(),
+                    project.is_temporary_project_dir(),
+                )
+
+            def has_session_folder() -> bool:
+                return session_folder_value() is not None
+
+            async def select_session_folder(rebuild=True):
+                selected = await _browse_measurement_folder(
+                    project_path_input,
+                    project_title_input,
+                    on_project_loaded=(lambda: rebuild_grid_panel()) if rebuild else None,
+                )
+                return selected
+
+            async def require_session_folder() -> bool:
+                if has_session_folder():
+                    return True
+
+                decision = asyncio.Future()
+                with ui.dialog() as dialog, ui.card().classes("w-[420px] max-w-full"):
+                    ui.label("No session folder selected").classes("text-lg font-bold")
+                    ui.label(
+                        "Choose or create a Session Folder before saving grids or "
+                        "measurements. Test Sweep can still run without a folder."
+                    ).classes("text-sm text-gray-700")
+
+                    async def browse_and_close():
+                        selected = await select_session_folder(rebuild=False)
+                        if selected and not decision.done():
+                            decision.set_result(True)
+                            dialog.close()
+
+                    with ui.row().classes("w-full justify-end gap-2"):
+                        ui.button(
+                            "Cancel",
+                            on_click=lambda: (
+                                decision.set_result(False),
+                                dialog.close(),
+                            ),
+                        ).props("flat")
+                        ui.button(
+                            "Browse",
+                            icon="folder_open",
+                            on_click=browse_and_close,
+                        ).props("color=primary")
+                dialog.open()
+                return await decision
+
+            async def save_project_snapshot():
+                if not await require_session_folder():
+                    return
                 project.set_project_name(project_title_input.value)
                 saved_dir = project.save_project_to(
                     project_path_input.value,
@@ -256,7 +329,8 @@ def main_page():
 
             control.set_measurement_set_context(
                 lambda: project_title_input.value,
-                lambda: project_path_input.value,
+                session_folder_value,
+                require_session_folder,
             )
 
             with ui.button(
@@ -336,14 +410,16 @@ def main_page():
                             return grid_vars['output_filename']
                         return project.get_grid_filename()
 
-                    def activate_measurement_folder(create=True):
-                        path = Path(
-                            project_path_input.value
-                            or _default_measurement_folder(
-                                control.scanner_app.config_file,
-                                project_title_input.value,
-                            )
-                        ).expanduser().resolve()
+                    async def activate_measurement_folder(create=True):
+                        if not has_session_folder():
+                            if not create:
+                                return None
+                            if not await require_session_folder():
+                                return None
+                        session_value = session_folder_value()
+                        if session_value is None:
+                            return None
+                        path = Path(session_value).expanduser().resolve()
                         project_path_input.set_value(str(path))
                         if create:
                             project.set_project_dir(path, control.scanner_app.config_file)

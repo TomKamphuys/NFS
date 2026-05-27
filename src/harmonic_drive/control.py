@@ -41,6 +41,7 @@ home_button = None
 on_config_loaded = None
 measurement_set_title_provider = None
 project_root_provider = None
+session_folder_guard = None
 
 
 def set_on_config_loaded(callback):
@@ -48,10 +49,20 @@ def set_on_config_loaded(callback):
     on_config_loaded = callback
 
 
-def set_measurement_set_context(title_provider, root_provider) -> None:
-    global measurement_set_title_provider, project_root_provider
+def set_measurement_set_context(title_provider, root_provider, guard=None) -> None:
+    global measurement_set_title_provider, project_root_provider, session_folder_guard
     measurement_set_title_provider = title_provider
     project_root_provider = root_provider
+    session_folder_guard = guard
+
+
+async def _ensure_session_folder_selected() -> bool:
+    if session_folder_guard is None:
+        return True
+    result = session_folder_guard()
+    if asyncio.iscoroutine(result):
+        result = await result
+    return bool(result)
 
 
 def register_sine_controls(level, frequency, duration, button) -> None:
@@ -360,6 +371,9 @@ def rehome():
 
 
 async def async_task():
+    if not await _ensure_session_folder_selected():
+        return
+
     title = (
         measurement_set_title_provider()
         if measurement_set_title_provider is not None
@@ -409,6 +423,8 @@ async def async_task():
 
     project.save_project_to(target_dir, title, scanner_app.config_file)
     apply_project_directory_to_nfs()
+    from harmonic_drive import live_capture
+    live_capture.reset_live_capture_session()
 
     ui.notify('Measurement started')
     for button in scanner_app.greyable_buttons:
@@ -427,16 +443,38 @@ async def async_task():
         logger.error(f"Measurement task failed: {exc}")
         ui.notify(f"Error: {exc}", type='negative')
     finally:
+        live_capture.update_live_capture_plots()
         ui.notify('Measurement finished')
         for button in scanner_app.greyable_buttons:
             button.enable()
 
 
 async def async_single_measurement_task():
+    if not await _ensure_session_folder_selected():
+        return
+
     ui.notify('Single measurement started')
     for button in scanner_app.greyable_buttons:
         button.disable()
     try:
+        title = (
+            measurement_set_title_provider()
+            if measurement_set_title_provider is not None
+            else project.get_project_name()
+        )
+        title = str(title or "").strip() or project.DEFAULT_PROJECT_NAME
+        project_root = (
+            project_root_provider()
+            if project_root_provider is not None
+            else str(
+                project.get_default_project_root(scanner_app.config_file)
+                / project.sanitize_project_name(title)
+            )
+        )
+        target_dir = Path(project_root).expanduser().resolve()
+        project.save_project_to(target_dir, title, scanner_app.config_file)
+        apply_project_directory_to_nfs()
+
         loop = asyncio.get_running_loop()
         done = asyncio.Event()
         audio_queue.put((get_nfs().take_single_measurement, (), done, loop))

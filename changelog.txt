@@ -1,8 +1,42 @@
 --------
+27/05/26
+--------
+Bug fix: removed the ambiguous no-session-selected state. On startup the Session
+Folder field now shows "No session folder selected" and the default project
+directory is only used as the file picker starting location. Save, grid
+generation, single measurements, and full measurements now require the user to
+choose or create a Session Folder first via a Browse/Cancel prompt. Test Sweep
+remains in-memory and does not require a Session Folder.
+
+Added tests for no-session/session-selected folder resolution and single
+measurement output routing to the active Session Folder.
+
+Files touched:
+src/harmonic_drive/control.py
+src/harmonic_drive/gui.py
+src/harmonic_drive/project.py
+src/grid_generator/grid_gen_gui.py
+tests/test_project.py
+
+--------
+26/05/26
+--------
+Added controls in the config editor for GRBL streamer type,
+baudrate, and COM port. COM ports are now listed from detected serial devices,
+while preserving the configured port if it is not currently connected.
+
+Added config editor tests for GRBL connection saving and serial port option
+generation.
+
+Files touched:
+src/harmonic_drive/config_editor.py
+tests/test_config_editor.py
+
+--------
 24/05/26
 --------
 Moved output level control from 'Sine Tone' section to the main audio settings
-section to make it clear this is a global control.
+setion to make it clear this is a global control.
 
 Files touched:
 src/harmonic_drive/audio_setup.py

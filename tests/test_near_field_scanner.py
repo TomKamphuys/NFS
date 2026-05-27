@@ -29,6 +29,26 @@ def test_take_single_measurement(mocks):
     mocks['audio'].measure_ir.assert_called_once_with(position)
 
 
+def test_take_single_measurement_uses_active_project_directory(mocks, tmp_path):
+    position = CylindricalPosition(1.0, 2.0, 3.0)
+    mocks['scanner'].get_position.return_value = position
+
+    with patch("builtins.open", mock_open()):
+        nfs = NearFieldScanner(
+            mocks['scanner'],
+            mocks['audio'],
+            mocks['motion_manager'],
+            position_log_file=str(tmp_path / "measurement_positions.csv"),
+        )
+        nfs.set_project_directory(tmp_path)
+        nfs.take_single_measurement()
+
+    mocks['audio'].set_session_directory.assert_called_with(
+        tmp_path / "single_measurements"
+    )
+    mocks['audio'].measure_ir.assert_called_once_with(position)
+
+
 def test_take_measurement_set(mocks):
     # Setup motion manager to run for 2 points then be ready
     # Code logic:

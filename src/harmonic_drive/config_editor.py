@@ -170,6 +170,18 @@ EDITABLE_SCHEMA: Dict[str, List[SchemaEntry]] = {
         ("feed_rate", "int",
          "GRBL feed rate (mm/min) used for moves between measurement points.", None),
     ],
+    "grbl_streamer": [
+        ("type", "choice",
+         "GRBL controller backend. Arduino connects to the configured COM port; "
+         "Mock simulates the controller.",
+         ["Arduino", "Mock"]),
+        ("baudrate", "int", "Serial baudrate used for the GRBL connection.", None),
+    ],
+    "windows": [
+        ("port", "choice",
+         "Windows COM port used when the GRBL streamer type is Arduino.",
+         None),
+    ],
     "logging": [
         ("level", "choice",
          "Logger verbosity. TRACE is the most verbose, ERROR the least.",
@@ -183,7 +195,7 @@ EDITABLE_SCHEMA: Dict[str, List[SchemaEntry]] = {
     ],
 }
 
-CONFIG_EDITOR_HIDDEN_SECTIONS = {"sweep"}
+CONFIG_EDITOR_HIDDEN_SECTIONS = {"sweep", "grbl_streamer", "windows"}
 CONFIG_EDITOR_SECTION_KEYS = {
     "audio": {"mode"},
 }
@@ -236,10 +248,16 @@ def _build_input(key: str, kind: str, current: str, options: Optional[List[str]]
     if kind == "bool":
         return ui.switch(label, value=_parse_bool(current))
     if kind == "choice":
-        opts = list(options or [])
-        if current and current not in opts:
-            opts = [*opts, current]
-        return ui.select(opts, value=current or (opts[0] if opts else ""), label=label) \
+        opts = dict(options) if isinstance(options, dict) else list(options or [])
+        if isinstance(opts, dict):
+            if current and current not in opts:
+                opts = {current: current, **opts}
+            value = current or (next(iter(opts)) if opts else "")
+        else:
+            if current and current not in opts:
+                opts = [*opts, current]
+            value = current or (opts[0] if opts else "")
+        return ui.select(opts, value=value, label=label) \
             .classes("w-full").props("outlined dense")
     if key == "default_project_dir":
         with ui.row().classes("w-full items-end gap-2"):
@@ -339,6 +357,27 @@ def _sample_rate_options(rates: List[int]) -> Dict[int, str]:
         rate: f"{rate} (recommended)" if rate == 48000 else str(rate)
         for rate in rates
     }
+
+
+def _serial_port_options(current: str = "") -> Dict[str, str]:
+    current = _strip_inline_comment(current)
+    try:
+        from serial.tools import list_ports
+    except ImportError:
+        return {current: f"{current} (configured)"} if current else {}
+
+    ports = sorted(list_ports.comports(), key=lambda port: port.device)
+    options = {
+        port.device: (
+            port.device
+            if not getattr(port, "description", "")
+            else f"{port.device}: {port.description}"
+        )
+        for port in ports
+    }
+    if current and current not in options:
+        options = {current: f"{current} (configured, not currently detected)", **options}
+    return options
 
 
 def _set_select_options(select, options, value=None) -> None:
@@ -525,6 +564,36 @@ def _build_audio_panel(parser, static_inputs: Dict[Tuple[str, str], object]) -> 
 
     ui.button("Refresh Sound Devices", icon="refresh", on_click=refresh_devices).props("outline").classes("mt-4")
     _prompt_for_audio_device_relink(parser, catalog, device_selects, refresh_channels, refresh_sample_rates)
+
+
+def _build_scanner_panel(parser, static_inputs: Dict[Tuple[str, str], object]) -> None:
+    """Render scanner settings plus GRBL connection settings."""
+    ui.label("Scanner").classes("text-base font-semibold")
+    for key, kind, tooltip, options in EDITABLE_SCHEMA["scanner"]:
+        if not parser.has_option("scanner", key):
+            continue
+        raw = _strip_inline_comment(parser.get("scanner", key))
+        el = _build_input(key, kind, raw, options)
+        el.tooltip(tooltip)
+        static_inputs[("scanner", key)] = el
+
+    ui.separator()
+    ui.label("GRBL connection").classes("text-base font-semibold")
+    for section, key, label in (
+        ("grbl_streamer", "type", "GRBL streamer type"),
+        ("grbl_streamer", "baudrate", "Baudrate"),
+        ("windows", "port", "COM port"),
+    ):
+        if not parser.has_section(section):
+            continue
+        entry = next(e for e in EDITABLE_SCHEMA[section] if e[0] == key)
+        _key, kind, tooltip, options = entry
+        raw = _strip_inline_comment(parser.get(section, key, fallback=""))
+        if section == "windows" and key == "port":
+            options = _serial_port_options(raw)
+        el = _build_input(label, kind, raw, options)
+        el.tooltip(tooltip)
+        static_inputs[(section, key)] = el
 
 
 def _prompt_for_audio_device_relink(
@@ -846,6 +915,8 @@ def open_config_editor(config_file: str, on_apply: Callable[[], None]) -> None:
                                         el = _build_input(key, kind, raw, options)
                                         el.tooltip(tooltip)
                                         static_inputs[(section, key)] = el
+                                elif section == "scanner":
+                                    _build_scanner_panel(parser, static_inputs)
                                 else:
                                     for key, kind, tooltip, options in EDITABLE_SCHEMA[section]:
                                         if not parser.has_option(section, key):

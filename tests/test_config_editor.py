@@ -4,7 +4,8 @@ import pytest
 from unittest.mock import MagicMock, patch
 from harmonic_drive.config_editor import (
     _coerce, _format_for_ini, _on_ok, _strip_inline_comment, _parse_bool,
-    open_config_editor, restore_default_config, set_file_measurement_points_filename
+    _serial_port_options, open_config_editor, restore_default_config,
+    set_file_measurement_points_filename
 )
 
 # --- Unit tests for helper functions ---
@@ -53,6 +54,34 @@ def test_format_for_ini():
     assert _format_for_ini("optional_float", None) == "None"
     assert _format_for_ini("float", 1.2) == "1.2"
     assert _format_for_ini("str", "val") == "val"
+
+
+def test_serial_port_options_lists_detected_ports():
+    port_a = MagicMock()
+    port_a.device = "COM7"
+    port_a.description = "Arduino Uno"
+    port_b = MagicMock()
+    port_b.device = "COM3"
+    port_b.description = ""
+
+    with patch("serial.tools.list_ports.comports", return_value=[port_a, port_b]):
+        options = _serial_port_options("COM7")
+
+    assert list(options) == ["COM3", "COM7"]
+    assert options["COM3"] == "COM3"
+    assert options["COM7"] == "COM7: Arduino Uno"
+
+
+def test_serial_port_options_preserves_configured_missing_port():
+    port = MagicMock()
+    port.device = "COM7"
+    port.description = "Arduino Uno"
+
+    with patch("serial.tools.list_ports.comports", return_value=[port]):
+        options = _serial_port_options("COM5")
+
+    assert list(options) == ["COM5", "COM7"]
+    assert options["COM5"] == "COM5 (configured, not currently detected)"
 
 # --- Tests for _on_ok logic (Saving and Backups) ---
 
@@ -109,6 +138,53 @@ def test_on_ok_validation_error(tmp_path):
         assert "invalid value" in mock_notify.call_args[0][0]
         dialog.close.assert_not_called()
         on_apply.assert_not_called()
+
+
+def test_on_ok_scanner_grbl_connection_fields(tmp_path):
+    config_file = tmp_path / "config.ini"
+    config_file.write_text(
+        "[scanner]\n"
+        "feed_rate = 35000\n"
+        "\n"
+        "[grbl_streamer]\n"
+        "type = Mock\n"
+        "baudrate = 115200\n"
+        "\n"
+        "[windows]\n"
+        "port = COM5\n"
+    )
+
+    parser = configparser.ConfigParser()
+    parser.read(config_file)
+
+    grbl_type = MagicMock()
+    grbl_type.value = "Arduino"
+    com_port = MagicMock()
+    com_port.value = "COM8"
+    baudrate = MagicMock()
+    baudrate.value = "250000"
+
+    static_inputs = {
+        ("grbl_streamer", "type"): grbl_type,
+        ("grbl_streamer", "baudrate"): baudrate,
+        ("windows", "port"): com_port,
+    }
+    dyn = {"mm_type_select": None}
+    dialog = MagicMock()
+    on_apply = MagicMock()
+
+    _on_ok(parser, config_file, static_inputs, dyn, dialog, on_apply)
+
+    saved = configparser.ConfigParser()
+    saved.read(config_file)
+
+    assert saved.get("grbl_streamer", "type") == "Arduino"
+    assert saved.get("grbl_streamer", "baudrate") == "250000"
+    assert saved.get("windows", "port") == "COM8"
+    assert not saved.has_option("scanner", "type")
+    assert not saved.has_option("scanner", "port")
+    dialog.close.assert_called_once()
+    on_apply.assert_called_once()
 
 def test_on_ok_motion_manager_dynamic(tmp_path):
     config_file = tmp_path / "config.ini"
