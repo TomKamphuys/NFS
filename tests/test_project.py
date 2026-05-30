@@ -87,6 +87,20 @@ def test_project_apply_does_not_overwrite_global_audio(tmp_path):
     assert parser.get("sweep", "sweep_dur_s") == "3.5"
 
 
+def test_user_positions_are_saved_in_grid_vars(tmp_path):
+    project.set_project_dir(tmp_path / "work")
+    project.update_grid_vars(
+        {
+            "user_positions": [{"name": "woofer", "r": 90.0, "phi": 0.0, "z": 80.0}],
+        }
+    )
+
+    grid_vars = project.get_project_data()["grid_vars"]
+    assert grid_vars["user_positions"] == [
+        {"name": "woofer", "r": 90.0, "phi": 0.0, "z": 80.0}
+    ]
+
+
 def test_single_measurements_do_not_count_as_full_measurement_output(tmp_path):
     single_dir = tmp_path / "single_measurements"
     single_dir.mkdir(parents=True)

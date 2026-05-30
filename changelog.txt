@@ -1,4 +1,58 @@
 --------
+30/05/26
+--------
+Added fixed optional Grid Generator waypoints for post-processing visual
+setup: Reference Origin, Baffle Bottom Left, Baffle Top Left, and Baffle Top
+Right. The waypoint controls are arranged in two columns, with the original Top,
+Bottom, and Tweeter points on the left and the optional visualisation points on
+the right. The dynamic user-position add/remove buttons remain under the left
+column, while Total Points and Azimuth Density sit under the right column.
+The baffle corner UI labels are shortened to Baffle Bot L, Baffle Top L, and
+Baffle Top R so larger coordinate values fit more comfortably.
+Reference Origin is labelled as Ref Origin in the UI. The waypoint panel now
+notes that Top, Bottom, and Tweeter are required, while Ref Origin, baffle
+corners, and additional points aid exported response-data visualisation. The
+add/remove controls are labelled as Additional points.
+The generated CSV metadata payload now includes ref_origin_pos,
+baffle_bot_l_pos, baffle_top_l_pos, and baffle_top_r_pos so the visualisation
+waypoints are available alongside the existing top, bottom, tweeter, and
+user-position metadata.
+Added regression coverage confirming dynamic user_position_* entries are
+preserved in the final planned CSV output.
+
+Files touched:
+HALS_Projects/HALS_Test_Session/HALS_Test_Session_grid.csv
+HALS_Projects/HALS_Test_Session/HALS_Test_Session_project.json
+src/grid_generator/config_grid.py
+src/grid_generator/grid_gen.py
+src/grid_generator/grid_gen_gui.py
+tests/test_grid_gen_metadata.py
+
+--------
+30/05/26
+--------
+Aligned the previously disparate names for extra user markers between the
+project JSON and generated grid CSV. Project JSON now stores these entries as
+user_positions to match the CSV user_position_* metadata naming. No backward
+compatibility is provided for the old additional_positions key.
+
+To make an older project JSON compatible, manually rename
+"additional_positions" to "user_positions" in a text editor.
+
+Files touched:
+src/grid_generator/grid_gen_gui.py
+tests/test_project.py
+
+--------
+30/05/26
+--------
+Bug fix: the Grid Generator 3D viewer now reloads an existing saved grid file
+view after the active Session Folder has been resolved.
+
+Files touched:
+src/grid_generator/grid_gen_gui.py
+
+--------
 27/05/26
 --------
 Bug fix: removed the ambiguous no-session-selected state. On startup the Session

@@ -133,20 +133,21 @@ def build_grid_gen_ui(
 
     def add_extra_position_field(initial=None):
         initial = initial or {}
+        extra_positions_container.set_visibility(True)
         with extra_positions_container:
-            with ui.row().classes('items-center w-fit gap-2 border border-gray-200 rounded p-1 bg-gray-50') as row_container:
-                with ui.column().classes('w-32 gap-0 leading-tight'):
-                    name_input = ui.input('Name', value=initial.get('name', '')).classes('w-full').props('dense')
-                r_input = ui.number('Radius', value=as_float(initial.get('r')), format='%.1f').classes('w-20').props('dense')
-                phi_input = ui.number('Phi', value=as_float(initial.get('phi')), format='%.1f').classes('w-20').props('dense')
-                z_input = ui.number('Height', value=as_float(initial.get('z')), format='%.1f').classes('w-20').props('dense')
-                set_btn = ui.button(
-                    'Set',
-                    on_click=lambda e: set_position_from_callback(
-                        r_input, phi_input, z_input, e.sender,
-                        150.0, 0.0, 200.0
-                    )
-                ).props('size=sm')
+            with ui.element('div').classes('grid w-full grid-cols-[7rem_1fr] items-center gap-1 border border-gray-200 rounded p-1 bg-gray-50') as row_container:
+                name_input = ui.input('Name', value=initial.get('name', '')).classes('w-full').props('dense')
+                with ui.row().classes('items-center justify-end flex-nowrap gap-2 min-w-0'):
+                    r_input = ui.number('Radius', value=as_float(initial.get('r')), format='%.1f').classes('w-16').props('dense')
+                    phi_input = ui.number('Phi', value=as_float(initial.get('phi')), format='%.1f').classes('w-16').props('dense')
+                    z_input = ui.number('Height', value=as_float(initial.get('z')), format='%.1f').classes('w-16').props('dense')
+                    set_btn = ui.button(
+                        'Set',
+                        on_click=lambda e: set_position_from_callback(
+                            r_input, phi_input, z_input, e.sender,
+                            150.0, 0.0, 200.0
+                        )
+                    ).props('size=sm')
         extra_position_fields.append({
             'name': name_input,
             'r': r_input,
@@ -161,6 +162,8 @@ def build_grid_gen_ui(
             return
         field = extra_position_fields.pop()
         field['row'].delete()
+        if not extra_position_fields:
+            extra_positions_container.set_visibility(False)
 
     # Main container (vertical stacking)
     with ui.column().classes('w-full max-w-4xl mx-auto p-4 items-center gap-4'):
@@ -170,6 +173,7 @@ def build_grid_gen_ui(
             ui.label('Grid Generation & Planning').classes('text-xl font-bold mb-2')
             
             ui.label('Cylinder Physical Waypoints - Jog and Set Position').classes('text-base font-bold')
+            ui.label('Top, Bottom, and Tweeter waypoints are required. Ref Origin, baffle corners, and additional points help visualise exported response data.').classes('text-xs text-gray-600')
 
             def toggle_adv():
                 vis = not adv_container.visible
@@ -180,63 +184,73 @@ def build_grid_gen_ui(
                     adv_container.set_visibility(False)
                     adv_icon.set_name('expand_more')
 
+            def build_waypoint_row(label, key_prefix, default_r, default_phi, default_z, help_image=None):
+                with ui.element('div').classes('grid w-full h-[48px] grid-cols-[7rem_1fr] items-center gap-1 border border-gray-200 rounded p-1 bg-gray-50'):
+                    with ui.column().classes('gap-0 leading-tight'):
+                        ui.label(f'{label}:').classes('font-semibold text-sm whitespace-nowrap')
+                        with ui.row().classes('items-center gap-1 text-blue-500 hover:text-blue-700 cursor-help transition-colors'):
+                            ui.icon('help_outline', size='14px')
+                            ui.label('diagram').classes('text-[10px] font-bold uppercase tracking-wider')
+                            if help_image:
+                                with ui.tooltip().props('content-class="bg-white p-1 border border-gray-300 shadow-xl"'):
+                                    ui.image(grid_image_url(help_image)).classes('w-64 rounded')
+                    with ui.row().classes('items-center justify-end flex-nowrap gap-2 min-w-0'):
+                        r_input = ui.number('Radius', value=gv_float(f'{key_prefix}_r'), format='%.1f').classes('w-16').props('dense')
+                        phi_input = ui.number('Phi', value=gv_float(f'{key_prefix}_phi'), format='%.1f').classes('w-16').props('dense')
+                        z_input = ui.number('Height', value=gv_float(f'{key_prefix}_z'), format='%.1f').classes('w-16').props('dense')
+                        ui.button(
+                            'Set',
+                            on_click=lambda e: set_position_from_callback(
+                                r_input, phi_input, z_input, e.sender,
+                                default_r, default_phi, default_z
+                            )
+                        ).props('size=sm')
+                return r_input, phi_input, z_input
+
             with ui.column().classes('w-full gap-1'):
-                with ui.row().classes('w-full items-center gap-4'):
-                    with ui.row().classes('items-center w-fit gap-2 border border-gray-200 rounded p-1 bg-gray-50'):
-                        with ui.column().classes('w-32 gap-0 leading-tight'):
-                            ui.label('Top Waypoint:').classes('font-semibold text-sm')
-                            with ui.row().classes('items-center gap-1 text-blue-500 hover:text-blue-700 cursor-help transition-colors'):
-                                ui.icon('help_outline', size='14px')
-                                ui.label('diagram').classes('text-[10px] font-bold uppercase tracking-wider')
-                                with ui.tooltip().props('content-class="bg-white p-1 border border-gray-300 shadow-xl"'):
-                                    ui.image(grid_image_url('waypoint_top.png')).classes('w-64 rounded')
-                        wp_top_r = ui.number('Radius', value=gv_float('wp_top_r'), format='%.1f').classes('w-20').props('dense')
-                        wp_top_phi = ui.number('Phi', value=gv_float('wp_top_phi'), format='%.1f').classes('w-20').props('dense')
-                        wp_top_z = ui.number('Height', value=gv_float('wp_top_z'), format='%.1f').classes('w-20').props('dense')
-                        ui.button('Set', on_click=lambda e: set_position_from_callback(wp_top_r, wp_top_phi, wp_top_z, e.sender, 200.0, 45.0, 350.0)).props('size=sm')
-                    g_pts = ui.number('Total Points', value=gv_int('num_points', 1000), format='%d').classes('flex-1').props('dense outlined bg-color=white')
-
-                with ui.row().classes('w-full items-center gap-4'):
-                    with ui.row().classes('items-center w-fit gap-2 border border-gray-200 rounded p-1 bg-gray-50'):
-                        with ui.column().classes('w-32 gap-0 leading-tight'):
-                            ui.label('Bottom Waypoint:').classes('font-semibold text-sm')
-                            with ui.row().classes('items-center gap-1 text-blue-500 hover:text-blue-700 cursor-help transition-colors'):
-                                ui.icon('help_outline', size='14px')
-                                ui.label('diagram').classes('text-[10px] font-bold uppercase tracking-wider')
-                                with ui.tooltip().props('content-class="bg-white p-1 border border-gray-300 shadow-xl"'):
-                                    ui.image(grid_image_url('waypoint_bottom.png')).classes('w-64 rounded')
-                        wp_bot_r = ui.number('Radius', value=gv_float('wp_bot_r'), format='%.1f').classes('w-20').props('dense')
-                        wp_bot_phi = ui.number('Phi', value=gv_float('wp_bot_phi'), format='%.1f').classes('w-20').props('dense')
-                        wp_bot_z = ui.number('Height', value=gv_float('wp_bot_z'), format='%.1f').classes('w-20').props('dense')
-                        ui.button('Set', on_click=lambda e: set_position_from_callback(wp_bot_r, wp_bot_phi, wp_bot_z, e.sender, 40.0, 0.0, -50.0)).props('size=sm')
-                    g_az_dens = ui.number('Azimuth Density Ratio', value=gv_float('azimuth_density_ratio', 1.0), format='%.2f').classes('flex-1').props('dense outlined bg-color=white')
-
-                with ui.row().classes('w-full items-end gap-4'):
-                    with ui.column().classes('w-fit gap-1'):
-                        with ui.row().classes('items-center w-fit gap-2 border border-gray-200 rounded p-1 bg-gray-50'):
-                            with ui.column().classes('w-32 gap-0 leading-tight'):
-                                ui.label('Tweeter Point:').classes('font-semibold text-sm')
-                                with ui.row().classes('items-center gap-1 text-blue-500 hover:text-blue-700 cursor-help transition-colors'):
-                                    ui.icon('help_outline', size='14px')
-                                    ui.label('diagram').classes('text-[10px] font-bold uppercase tracking-wider')
-                                    with ui.tooltip().props('content-class="bg-white p-1 border border-gray-300 shadow-xl"'):
-                                        ui.image(grid_image_url('tweeter_point.png')).classes('w-64 rounded')
-                            wp_twt_r = ui.number('Radius', value=gv_float('wp_tw_r'), format='%.1f').classes('w-20').props('dense')
-                            wp_twt_phi = ui.number('Phi', value=gv_float('wp_tw_phi'), format='%.1f').classes('w-20').props('dense')
-                            wp_twt_z = ui.number('Height', value=gv_float('wp_tw_z'), format='%.1f').classes('w-20').props('dense')
-                            ui.button('Set', on_click=lambda e: set_position_from_callback(wp_twt_r, wp_twt_phi, wp_twt_z, e.sender, 150.0, 0.0, 250.0)).props('size=sm')
-                        extra_positions_container = ui.column().classes('w-fit gap-1')
-                        with ui.row().classes('items-center gap-1 self-start'):
-                            ui.button(icon='add', on_click=lambda: add_extra_position_field()).props('flat round dense color=primary')
-                            ui.button(icon='remove', on_click=remove_latest_extra_position_field).props('flat round dense color=negative')
-                        for saved_position in gv('additional_positions', []) or []:
+                with ui.row().classes('w-full items-start gap-4'):
+                    with ui.column().classes('flex-1 min-w-0 gap-1'):
+                        wp_top_r, wp_top_phi, wp_top_z = build_waypoint_row(
+                            'Top Waypoint', 'wp_top', 200.0, 45.0, 350.0, 'waypoint_top.png'
+                        )
+                        wp_bot_r, wp_bot_phi, wp_bot_z = build_waypoint_row(
+                            'Bottom Waypoint', 'wp_bot', 40.0, 0.0, -50.0, 'waypoint_bottom.png'
+                        )
+                        wp_twt_r, wp_twt_phi, wp_twt_z = build_waypoint_row(
+                            'Tweeter Point', 'wp_tw', 150.0, 0.0, 250.0, 'tweeter_point.png'
+                        )
+                        with ui.row().classes('w-full h-[48px] items-center gap-1 p-1'):
+                            with ui.row().classes('items-center gap-1 min-w-0'):
+                                ui.button(icon='add', on_click=lambda: add_extra_position_field()).props('flat round dense color=primary')
+                                ui.button(icon='remove', on_click=remove_latest_extra_position_field).props('flat round dense color=negative')
+                                ui.label('Additional Points').classes('text-sm font-semibold text-gray-700 whitespace-nowrap')
+                        extra_positions_container = ui.column().classes('w-full gap-1')
+                        extra_positions_container.set_visibility(False)
+                        with ui.row().classes('w-full h-[40px] items-center justify-between bg-gray-100 hover:bg-gray-200 cursor-pointer rounded border border-gray-200 p-1 px-2 transition-colors').on('click', toggle_adv):
+                            with ui.row().classes('items-center gap-2'):
+                                ui.icon('settings', size='sm').classes('text-gray-700')
+                                ui.label('Advanced Settings').classes('text-gray-800 text-sm font-medium')
+                            adv_icon = ui.icon('expand_more', size='sm').classes('text-gray-700')
+                        saved_user_positions = gv('user_positions', [])
+                        for saved_position in saved_user_positions or []:
                             if isinstance(saved_position, dict):
                                 add_extra_position_field(saved_position)
-                    with ui.row().classes('flex-1 h-fit items-center justify-between bg-gray-100 hover:bg-gray-200 cursor-pointer rounded border border-gray-200 p-1 px-2 transition-colors').on('click', toggle_adv):
-                        with ui.row().classes('items-center gap-2'):
-                            ui.icon('settings', size='sm').classes('text-gray-700')
-                            ui.label('Advanced Settings').classes('text-gray-800 text-sm font-medium')
-                        adv_icon = ui.icon('expand_more', size='sm').classes('text-gray-700')
+                    with ui.column().classes('flex-1 min-w-0 gap-1'):
+                        wp_ref_origin_r, wp_ref_origin_phi, wp_ref_origin_z = build_waypoint_row(
+                            'Ref Origin', 'wp_ref_origin', 90.0, 0.0, 170.0
+                        )
+                        wp_baffle_bl_r, wp_baffle_bl_phi, wp_baffle_bl_z = build_waypoint_row(
+                            'Baffle Bot L', 'wp_baffle_bl', 90.0, -45.0, 80.0
+                        )
+                        wp_baffle_tl_r, wp_baffle_tl_phi, wp_baffle_tl_z = build_waypoint_row(
+                            'Baffle Top L', 'wp_baffle_tl', 90.0, -45.0, 240.0
+                        )
+                        wp_baffle_tr_r, wp_baffle_tr_phi, wp_baffle_tr_z = build_waypoint_row(
+                            'Baffle Top R', 'wp_baffle_tr', 90.0, 45.0, 240.0
+                        )
+                        with ui.row().classes('w-full h-[40px] items-center gap-2'):
+                            g_pts = ui.number('Total Points', value=gv_int('num_points', 1000), format='%d').classes('flex-1 min-w-0').props('dense outlined bg-color=white')
+                            g_az_dens = ui.number('Azimuth Density Ratio', value=gv_float('azimuth_density_ratio', 1.0), format='%.2f').classes('flex-1 min-w-0').props('dense outlined bg-color=white')
 
             with ui.column().classes('w-full bg-gray-50 rounded border border-gray-200 p-4 gap-2 mt-2') as adv_container:
                 adv_container.set_visibility(False)
@@ -300,6 +314,10 @@ def build_grid_gen_ui(
                         azimuth_weight_center_deg=g_az_wc.value,
                         tweeter_pos=get_wp(wp_twt_r, wp_twt_phi, wp_twt_z),
                         additional_positions=get_additional_positions(),
+                        ref_origin_pos=get_wp(wp_ref_origin_r, wp_ref_origin_phi, wp_ref_origin_z),
+                        baffle_bot_l_pos=get_wp(wp_baffle_bl_r, wp_baffle_bl_phi, wp_baffle_bl_z),
+                        baffle_top_l_pos=get_wp(wp_baffle_tl_r, wp_baffle_tl_phi, wp_baffle_tl_z),
+                        baffle_top_r_pos=get_wp(wp_baffle_tr_r, wp_baffle_tr_phi, wp_baffle_tr_z),
                         top_crit_pos=get_wp(wp_top_r, wp_top_phi, wp_top_z),
                         bot_crit_pos=get_wp(wp_bot_r, wp_bot_phi, wp_bot_z)
                     )
@@ -357,7 +375,19 @@ def build_grid_gen_ui(
                             'wp_tw_r': '' if wp_twt_r.value is None else str(wp_twt_r.value),
                             'wp_tw_phi': '' if wp_twt_phi.value is None else str(wp_twt_phi.value),
                             'wp_tw_z': '' if wp_twt_z.value is None else str(wp_twt_z.value),
-                            'additional_positions': [
+                            'wp_ref_origin_r': '' if wp_ref_origin_r.value is None else str(wp_ref_origin_r.value),
+                            'wp_ref_origin_phi': '' if wp_ref_origin_phi.value is None else str(wp_ref_origin_phi.value),
+                            'wp_ref_origin_z': '' if wp_ref_origin_z.value is None else str(wp_ref_origin_z.value),
+                            'wp_baffle_bl_r': '' if wp_baffle_bl_r.value is None else str(wp_baffle_bl_r.value),
+                            'wp_baffle_bl_phi': '' if wp_baffle_bl_phi.value is None else str(wp_baffle_bl_phi.value),
+                            'wp_baffle_bl_z': '' if wp_baffle_bl_z.value is None else str(wp_baffle_bl_z.value),
+                            'wp_baffle_tl_r': '' if wp_baffle_tl_r.value is None else str(wp_baffle_tl_r.value),
+                            'wp_baffle_tl_phi': '' if wp_baffle_tl_phi.value is None else str(wp_baffle_tl_phi.value),
+                            'wp_baffle_tl_z': '' if wp_baffle_tl_z.value is None else str(wp_baffle_tl_z.value),
+                            'wp_baffle_tr_r': '' if wp_baffle_tr_r.value is None else str(wp_baffle_tr_r.value),
+                            'wp_baffle_tr_phi': '' if wp_baffle_tr_phi.value is None else str(wp_baffle_tr_phi.value),
+                            'wp_baffle_tr_z': '' if wp_baffle_tr_z.value is None else str(wp_baffle_tr_z.value),
+                            'user_positions': [
                                 {
                                     'name': str(field['name'].value or '').strip(),
                                     'r': field['r'].value,
@@ -385,16 +415,7 @@ def build_grid_gen_ui(
 
         # Initialize the Viewer Engine
         with viewer_container:
-            # Initialize empty or load existing file if available
-            output_root = resolve_output_root(create=False)
-            if asyncio.iscoroutine(output_root):
-                output_root = None
-            output_root = output_root or os.getcwd()
-            filename = output_filename() if callable(output_filename) else output_filename
-            filename = filename or gv('output_filename', GRID_OUTPUT_FILENAME)
-            candidate = os.path.join(str(output_root), filename)
-            initial_data = candidate if os.path.exists(candidate) else (GRID_OUTPUT_FILENAME if os.path.exists(GRID_OUTPUT_FILENAME) else None)
-            engine = CoordViewerEngine(input_data=initial_data)
+            engine = CoordViewerEngine()
 
         # Populate the playback controls
         with controls_container:
@@ -402,6 +423,25 @@ def build_grid_gen_ui(
             with ui.row().classes('w-full items-center gap-3 flex-nowrap'):
                 ui.label("Scrub:").classes('text-sm font-semibold text-gray-700 w-12')
                 scrub_slider = ui.slider(min=0, max=max(0, engine.N-1), value=0, on_change=lambda e: engine.set_current_index(e.value)).classes('flex-grow').props('dense')
+
+            async def load_existing_grid():
+                try:
+                    output_root = await resolve_output_root_async(create=False)
+                    output_root = output_root or os.getcwd()
+                    filename = output_filename() if callable(output_filename) else output_filename
+                    filename = filename or gv('output_filename', GRID_OUTPUT_FILENAME)
+                    candidate = os.path.join(str(output_root), filename)
+                    initial_data = candidate if os.path.exists(candidate) else (GRID_OUTPUT_FILENAME if os.path.exists(GRID_OUTPUT_FILENAME) else None)
+                    if initial_data is None:
+                        return
+                    engine.load_data(initial_data)
+                    scrub_slider.props(f'max={max(0, engine.N - 1)}')
+                    scrub_slider.set_value(0)
+                except Exception as e:
+                    print(f"Failed to load existing grid: {e}")
+                    ui.notify(f"Error loading existing grid: {e}", type='negative')
+
+            ui.timer(0.1, load_existing_grid, once=True)
 
             # Row 2: Combined Controls
             with ui.row().classes('w-full items-center justify-between flex-wrap gap-2'):
