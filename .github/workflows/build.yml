@@ -44,6 +44,11 @@ jobs:
         run: |
           $version = "${{ github.ref_name }}"
           if ([string]::IsNullOrEmpty($version)) { $version = "dev" }
+          # github.ref_name can contain characters that aren't valid in file
+          # names (e.g. "31/merge" for pull requests). Replace anything that
+          # isn't alphanumeric / dot / dash / underscore with a dash so the
+          # resulting zip path is always a valid Windows file name.
+          $version = $version -replace '[^A-Za-z0-9._-]', '-'
           Compress-Archive -Path dist/nfs/* -DestinationPath "dist/nfs-windows-$version.zip"
 
       - name: Upload build artifact
