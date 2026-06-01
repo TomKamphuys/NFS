@@ -13,6 +13,14 @@ dist/
 build/
 *.egg-info/
 
+# PyInstaller
+# The spec file under packaging/ is checked in; ignore any spec generated at
+# the repo root by an ad-hoc ``pyinstaller <script>`` invocation, plus the
+# transient PyInstaller working directories.
+/*.spec
+*.manifest
+pyinstaller-build/
+
 # Test / tooling caches
 .pytest_cache/
 .coverage

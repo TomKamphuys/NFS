@@ -29,6 +29,7 @@ dependencies = [
   "soundfile>=0.13.1",
   "scipy-stubs~=1.16.3",
   "nicegui[highcharts]>=2.24.2",
+  "pywebview",
 ]
 
 [project.optional-dependencies]
@@ -69,6 +70,7 @@ dev = [
     "sphinx>=9.1.0",
     "sphinx-autodoc-typehints>=3.9.11",
     "sphinx-rtd-theme>=3.1.0",
+    "pyinstaller>=6.10",
 ]
 
 [tool.setuptools]

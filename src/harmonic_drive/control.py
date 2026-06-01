@@ -268,6 +268,11 @@ def stop_nfs():
     logger.info('Stopping NFS and shutting down...')
     global is_playing
     try:
+        # Check if we are already shutting down to avoid recursion if called multiple ways
+        if getattr(stop_nfs, '_shutting_down', False):
+            return
+        stop_nfs._shutting_down = True
+
         audio_queue.put(None)
         if scanner_app and scanner_app.nfs:
             scanner_app.nfs.shutdown()

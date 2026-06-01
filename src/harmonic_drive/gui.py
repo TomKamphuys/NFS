@@ -1,7 +1,30 @@
 import argparse
 import os
+import sys
 
 from nicegui import app, ui
+
+
+def _default_config_path() -> str:
+    """Locate the default ``config.ini``.
+
+    When running from a PyInstaller bundle, data files are placed in
+    ``sys._MEIPASS`` (onefile) or next to ``sys.executable`` (onedir).  In
+    development we just fall back to the plain relative name so the existing
+    ``cwd``-based behaviour is preserved.
+    """
+    if getattr(sys, 'frozen', False):
+        candidates = []
+        meipass = getattr(sys, '_MEIPASS', None)
+        if meipass:
+            candidates.append(os.path.join(meipass, 'config.ini'))
+        candidates.append(
+            os.path.join(os.path.dirname(sys.executable), 'config.ini')
+        )
+        for path in candidates:
+            if os.path.exists(path):
+                return path
+    return 'config.ini'
 
 from grid_generator.grid_gen_gui import build_grid_gen_ui, register_grid_image_files
 from harmonic_drive import control, live_capture
@@ -208,7 +231,7 @@ def main():
     parser = argparse.ArgumentParser(description='Near-field scanner UI')
     parser.add_argument(
         '--config',
-        default='config.ini',
+        default=_default_config_path(),
         help='Path to the configuration file',
     )
     args, _ = parser.parse_known_args()
@@ -216,16 +239,25 @@ def main():
     control.initialize_app(args.config)
     control.set_on_config_loaded(live_capture.update_live_capture_plots)
 
-    static_images_path = os.path.join(os.getcwd(), 'images')
+    # When frozen by PyInstaller the cwd is wherever the user launched the
+    # exe from, not the bundle directory. Resolve assets next to the
+    # executable / inside ``_MEIPASS`` instead.
+    if getattr(sys, 'frozen', False):
+        base_dir = getattr(sys, '_MEIPASS', None) or os.path.dirname(sys.executable)
+    else:
+        base_dir = os.getcwd()
+    static_images_path = os.path.join(base_dir, 'images')
     if os.path.exists(static_images_path):
         app.add_static_files('/images', static_images_path)
     register_grid_image_files()
 
     favicon = os.path.join(static_images_path, 'icon.png')
     ui.run(
+        native=True,
         reload=False,
         title='HALS',
         favicon=favicon if os.path.exists(favicon) else None,
+        window_size=(1200, 800),
     )
 
 
