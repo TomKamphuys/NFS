@@ -1254,8 +1254,8 @@ def build_control_pane(log_dialog):
                         _panel_jog_row(
                             axis='PHI',
                             unit='Deg',
-                            left_label='-',
-                            right_label='+',
+                            left_label='CW',
+                            right_label='CCW',
                             left_moves=[
                                 (120, 'rotate_cw'),
                                 (60, 'rotate_cw'),

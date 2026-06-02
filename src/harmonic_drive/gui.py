@@ -273,11 +273,12 @@ ui.add_css("""
 }
 .alt-jog-direction {
   color: #d1d5db;
-  font-size: 1.05rem;
+  font-size: 0.74rem;
   font-weight: 800;
   line-height: 1;
   text-align: center;
   text-transform: uppercase;
+  white-space: nowrap;
 }
 .alt-jog-steps {
   min-width: 0;

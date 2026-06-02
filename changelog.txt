@@ -1,6 +1,11 @@
 
 --------
-31/05/26
+02/06/26
+--------
+Swapped Phi + and - symbols for CCW and CW labels.
+
+--------
+02/06/26
 --------
 Updated  Machine Control and Audio Setup.
 
