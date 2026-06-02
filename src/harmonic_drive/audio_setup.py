@@ -44,15 +44,27 @@ def _float_value(parser, section: str, key: str, fallback: float = 0.0) -> float
         return fallback
 
 
-def _current_mic_rms_dbfs() -> float | None:
+def _current_a_weighted_mic_peak_dbfs() -> float | None:
     state = get_audio_meter_state()
-    inputs = state.get("inputs", [])
+    inputs = state.get("a_weighted_inputs", [])
     if len(inputs) < 2:
         return None
-    rms = inputs[1].get("rms_dbfs")
-    if rms is None:
+    peak = inputs[1].get("peak_dbfs")
+    if peak is None:
         return None
-    return float(rms)
+    return float(peak)
+
+
+def _format_dbfs(value: float | None) -> str:
+    if value is None or value <= -119.0:
+        return "-inf dBFS"
+    return f"{value:.1f} dBFS"
+
+
+def _optional_float_value(value: Any) -> float | None:
+    if value is None or value == "":
+        return None
+    return float(value)
 
 
 def _optional_float_text(parser, section: str, key: str, fallback: str = "") -> str:
@@ -90,6 +102,7 @@ def build_audio_setup_pane(config_file: str, show_live_capture=None):
     inputs: Dict[tuple[str, str], Any] = {}
     fs_select = None
     auto_apply_task = None
+    held_cal_level_dbfs = None
 
     with ui.column().classes("w-full h-full min-w-0 overflow-auto px-3 py-3 gap-4"):
         with ui.row().classes("w-full items-center justify-between"):
@@ -242,21 +255,86 @@ def build_audio_setup_pane(config_file: str, show_live_capture=None):
 
         ui.separator()
         ui.label("Sine Tone").classes("text-base font-bold")
-        current_calibration = project.get_project_data().get("spl_calibration")
-        current_spl = (
-            current_calibration.get("spl_db")
+        current_calibration = project.get_project_data().get("stage5_vars")
+        current_scale = (
+            current_calibration.get("frd_db_offset")
             if isinstance(current_calibration, dict)
             else None
         )
+        current_spl = None
         with ui.row().classes("w-full items-center gap-2"):
             freq_input = ui.number("Frequency (Hz)", value=1000, format="%d").classes("w-36").props("outlined dense")
             dur_input = ui.number("Duration (s)", value=None, format="%.1f").classes("w-36").props('outlined dense placeholder="Optional"')
-            play_button = ui.button(icon="play_arrow").props("round")
-            control.register_sine_controls(level_input, freq_input, dur_input, play_button)
+            with ui.button().props("round") as play_button:
+                play_button_icon = ui.icon("play_arrow")
+            control.register_sine_controls(level_input, freq_input, dur_input, play_button, play_button_icon)
             play_button.on("click", control.log_button_click("Play Sine", control.async_play_sine_task))
-            ui.element("div").classes("w-4")
-            spl_input = ui.number("Calibrate (dB SPL)", value=current_spl, format="%.1f").classes("w-44").props("outlined dense")
-            ui.label("use save").classes("text-xs text-gray-500")
+        ui.label("SPL Calibration").classes("text-base font-bold")
+        with ui.row().classes("w-full items-center gap-2"):
+            with ui.row().classes(
+                "h-10 w-40 items-center justify-between rounded border border-pink-200 bg-pink-50/70 px-2 overflow-hidden"
+            ):
+                with ui.column().classes("gap-0 leading-tight shrink-0"):
+                    ui.label("Mic Level").classes("text-[10px] font-semibold text-gray-500")
+                    ui.label("dBFS(A)").classes("text-[10px] text-gray-500")
+                cal_level_label = ui.label(_format_dbfs(held_cal_level_dbfs)).classes("font-mono text-sm whitespace-nowrap")
+            spl_input = ui.number("Meter Reading (dB SPL)", value=current_spl, format="%.1f").classes("w-44").props("outlined dense")
+            calc_offset_button = ui.button("Calibrate").props("dense")
+            scale_input = ui.number("SPL dB Offset", value=current_scale, format="%.2f").classes("w-36").props("outlined dense")
+            save_cal_button = ui.button("Save Cal", icon="save").props("dense")
+            with ui.row().classes("items-center gap-1 text-blue-500 hover:text-blue-700 cursor-help transition-colors"):
+                ui.icon("help_outline", size="18px")
+                with ui.tooltip().props('content-class="bg-white text-gray-800 p-3 border border-gray-300 shadow-xl max-w-xs"'):
+                    with ui.column().classes("gap-1 text-xs leading-snug"):
+                        ui.label("1. Run the sine tone.")
+                        ui.label("2. Wait for Mic Level dBFS(A) to settle; it holds when stopped.")
+                        ui.label("3. Enter the physical SPL meter reading.")
+                        ui.label("4. Press Calibrate to fill SPL dB Offset.")
+                        ui.label("5. Press Save Cal, or enter a known offset manually and save.")
+
+        cal_meter_peaks: list[float] = []
+
+        def update_calibration_from_offset() -> bool:
+            scale_value = _optional_float_value(scale_input.value)
+            if scale_value is None:
+                return False
+            calibration = project.build_spl_calibration(None, None, scale_value)
+            if calibration is None:
+                return False
+            project.update_spl_calibration(calibration)
+            return True
+
+        def calculate_spl_offset() -> None:
+            if spl_input.value is None:
+                ui.notify("Enter the SPL meter reading first", type="warning")
+                return
+            if held_cal_level_dbfs is None:
+                ui.notify("Play the sine tone until the mic level readout appears", type="warning")
+                return
+            scale_input.value = float(spl_input.value) - held_cal_level_dbfs
+            update_calibration_from_offset()
+
+        def refresh_cal_meter() -> None:
+            nonlocal held_cal_level_dbfs
+            state = get_audio_meter_state()
+            if not state.get("active"):
+                return
+            value = _current_a_weighted_mic_peak_dbfs()
+            if value is None:
+                return
+            cal_meter_peaks.append(value)
+            if len(cal_meter_peaks) < 5:
+                return
+            held_cal_level_dbfs = max(cal_meter_peaks)
+            cal_meter_peaks.clear()
+            cal_level_label.set_text(_format_dbfs(held_cal_level_dbfs))
+
+        ui.timer(0.2, refresh_cal_meter)
+        calc_offset_button.on(
+            "click",
+            control.log_button_click("Calibrate SPL dB Offset", calculate_spl_offset),
+        )
+        scale_input.on("update:model-value", lambda _e: update_calibration_from_offset())
 
         ui.separator()
         ui.label("Sweep Settings").classes("text-base font-bold")
@@ -351,15 +429,26 @@ def build_audio_setup_pane(config_file: str, show_live_capture=None):
             project.update_audio_setup(
                 _section_dict(fresh, "audio"),
                 _section_dict(fresh, "sweep"),
-                project.build_spl_calibration(
-                    spl_input.value,
-                    _current_mic_rms_dbfs(),
-                ),
             )
+            update_calibration_from_offset()
             if notify:
                 ui.notify("Audio setup saved", type="positive")
             if show_live_capture is not None:
                 show_live_capture()
+
+        async def save_spl_calibration() -> None:
+            if not update_calibration_from_offset():
+                ui.notify("Enter an SPL dB offset or calculate one first", type="warning")
+                return
+            if not await control.ensure_session_folder_selected():
+                return
+            project.save_project()
+            ui.notify("SPL calibration saved", type="positive")
+
+        save_cal_button.on(
+            "click",
+            control.log_button_click("Save SPL Calibration", save_spl_calibration),
+        )
 
         def schedule_auto_apply() -> None:
             nonlocal auto_apply_task
@@ -397,7 +486,6 @@ def build_audio_setup_pane(config_file: str, show_live_capture=None):
             taper,
             h2,
             h3,
-            spl_input,
         ]
         for element in auto_apply_controls:
             element.on("update:model-value", lambda _e: schedule_auto_apply())

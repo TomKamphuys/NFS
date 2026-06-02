@@ -111,6 +111,28 @@ def test_take_measurement_set_can_overwrite_existing_outputs(mocks, tmp_path):
     assert not stale_file.exists()
 
 
+def test_measurement_set_stop_finishes_current_point_then_returns_safe(mocks):
+    mocks['motion_manager'].ready.side_effect = [
+        False,  # first while check
+        False,  # after first move
+        False,  # next while check, then stop request breaks before next move
+    ]
+    mocks['motion_manager'].total_points.return_value = 4
+    pos1 = CylindricalPosition(100, 0, 10)
+    mocks['scanner'].get_position.return_value = pos1
+
+    with patch("builtins.open", mock_open()):
+        nfs = NearFieldScanner(mocks['scanner'], mocks['audio'], mocks['motion_manager'])
+        mocks['audio'].measure_ir.side_effect = lambda position: nfs.stop_measurement_set()
+        nfs.take_measurement_set()
+
+    assert mocks['motion_manager'].next.call_count == 1
+    mocks['audio'].measure_ir.assert_called_once_with(pos1)
+    assert mocks['motion_manager'].move_to_safe_starting_radius.call_count == 2
+    mocks['scanner'].angular_move_to.assert_called_once_with(0.0)
+    assert not nfs.is_measurement_set_running()
+
+
 def test_shutdown(mocks):
     with patch("builtins.open", mock_open()):
         nfs = NearFieldScanner(mocks['scanner'], mocks['audio'], mocks['motion_manager'])

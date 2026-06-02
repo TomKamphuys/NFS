@@ -1,6 +1,7 @@
 import asyncio
 import configparser
 import json
+import math
 import time
 import warnings
 from pathlib import Path
@@ -27,6 +28,15 @@ ui.add_css("""
 }
 .live-capture-drag-handle:active {
   cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='28' height='28' viewBox='0 0 28 28'%3E%3Ctext x='14' y='21' text-anchor='middle' font-size='21' font-family='Arial, sans-serif' font-weight='700' fill='white' stroke='black' stroke-width='3' paint-order='stroke fill'%3E%E2%9C%8A%3C/text%3E%3C/svg%3E") 14 14, grabbing !important;
+}
+.live-capture-collapsible.live-capture-collapsed {
+  min-height: 40px;
+  height: 40px;
+  padding-top: 3px;
+  padding-bottom: 3px;
+}
+.live-capture-collapsible.live-capture-collapsed > :not(:first-child) {
+  display: none !important;
 }
 """, shared=True)
 
@@ -406,7 +416,11 @@ def _new_live_capture_figure():
 
 
 def _meter_bar_value(db_value):
-    return max(0.0, min(1.0, (float(db_value) + 80.0) / 80.0))
+    return round(max(0.0, min(1.0, (float(db_value) + 60.0) / 60.0)), 3)
+
+
+def _meter_bar_percent(db_value):
+    return _meter_bar_value(db_value) * 100.0
 
 
 def _format_meter_db(db_value):
@@ -414,6 +428,28 @@ def _format_meter_db(db_value):
     if db_value <= -119.0:
         return '-inf'
     return f'{db_value:.1f}'
+
+
+def _average_dbfs(db_values):
+    powers = [10 ** (float(value) / 10.0) for value in db_values if float(value) > -119.0]
+    if not powers:
+        return -120.0
+    return 10.0 * math.log10(sum(powers) / len(powers))
+
+
+def _set_panel_collapsed(panel, button, collapsed):
+    if collapsed:
+        panel.classes(add='live-capture-collapsed')
+        button.set_icon('expand_more')
+    else:
+        panel.classes(remove='live-capture-collapsed')
+        button.set_icon('expand_less')
+    button.update()
+
+
+def _set_plot_panel_collapsed(panel, collapse_button, expand_button, collapsed):
+    _set_panel_collapsed(panel, collapse_button, collapsed)
+    expand_button.set_visibility(not collapsed)
 
 
 def _load_audio_channel_labels(config_file):
@@ -436,26 +472,49 @@ def _load_audio_channel_labels(config_file):
 
 def _build_audio_meter_tile(label, kind):
     tone_classes = (
-        'border border-pink-200 rounded bg-pink-50/60 px-2 py-1 min-w-0'
+        'h-[58px] border border-pink-200 rounded bg-pink-50/60 px-2 py-1 min-w-0'
         if kind == 'input'
-        else 'border border-blue-200 rounded bg-blue-50/60 px-2 py-1 min-w-0'
+        else 'h-[58px] border border-blue-200 rounded bg-blue-50/60 px-2 py-1 min-w-0'
     )
     with ui.element('div').classes(
         tone_classes
     ):
-        with ui.row().classes('w-full items-center gap-2 flex-nowrap'):
+        with ui.column().classes('w-full h-full gap-0 min-w-0'):
             label_el = ui.label(label).classes(
-                'w-40 text-xs font-bold text-gray-700 truncate'
+                'w-full text-xs font-bold text-gray-700 truncate'
             )
-            bar = ui.linear_progress(value=0).classes('flex-1 min-w-24')
-            rms = ui.label('RMS -inf').classes('w-20 text-xs text-gray-600')
-            peak = ui.label('Peak -inf').classes('w-20 text-xs text-gray-600')
-    return {'label': label_el, 'bar': bar, 'rms': rms, 'peak': peak}
+            with ui.row().classes('w-full items-center gap-2 flex-nowrap min-w-0'):
+                with ui.column().classes('flex-1 min-w-32 gap-0'):
+                    with ui.element('div').classes(
+                        'relative h-[18px] w-full overflow-hidden rounded bg-gray-200'
+                    ):
+                        bar_fill = ui.element('div').classes(
+                            'absolute left-0 top-0 h-full bg-blue-500'
+                        ).style('width: 0%')
+                        peak_marker = ui.element('div').classes(
+                            'absolute top-0 h-full w-[2px] bg-red-600'
+                        ).style('left: 0%')
+                    with ui.row().classes('w-full justify-between text-[10px] leading-none text-gray-500'):
+                        ui.label('-60 dB')
+                        ui.label('0 dB')
+                with ui.column().classes('w-16 shrink-0 gap-0 text-xs text-gray-600 leading-tight'):
+                    rms = ui.label('RMS -inf').classes('whitespace-nowrap')
+                    ui.label('dBFS').classes('text-[10px] text-gray-500')
+                with ui.column().classes('w-16 shrink-0 gap-0 text-xs text-gray-600 leading-tight'):
+                    peak = ui.label('Peak -inf').classes('whitespace-nowrap')
+                    ui.label('dBFS').classes('text-[10px] text-gray-500')
+    return {
+        'label': label_el,
+        'bar_fill': bar_fill,
+        'peak_marker': peak_marker,
+        'rms': rms,
+        'peak': peak,
+    }
 
 
 def _build_audio_meters_panel(config_file):
     with ui.element('div').classes(
-        'w-full shrink-0 border border-gray-300 rounded bg-white p-2'
+        'live-capture-collapsible w-full shrink-0 border border-gray-300 rounded bg-white p-2'
     ) as panel:
         with ui.row().classes('w-full items-center justify-between gap-2 mb-1'):
             with ui.row().classes('items-center gap-1 min-w-0'):
@@ -463,6 +522,7 @@ def _build_audio_meters_panel(config_file):
                     'live-capture-drag-handle text-gray-500'
                 )
                 ui.label('Audio Meters').classes('text-sm font-bold text-gray-700')
+            collapse_button = ui.button(icon='expand_less').props('flat round dense')
 
         labels = _load_audio_channel_labels(config_file)
         with ui.element('div').classes('grid grid-cols-2 gap-2 w-full') as grid:
@@ -472,8 +532,16 @@ def _build_audio_meters_panel(config_file):
                 _build_audio_meter_tile(labels[2], 'input'),
                 _build_audio_meter_tile(labels[3], 'output'),
             ]
+        meter_windows = [{'rms': [], 'peak': []} for _ in rows]
+        peak_marker_db = [-120.0 for _ in rows]
+        last_text_update = time.monotonic()
+        last_meter_update = time.monotonic()
 
         def refresh():
+            nonlocal last_text_update, last_meter_update
+            now = time.monotonic()
+            elapsed = max(0.0, now - last_meter_update)
+            last_meter_update = now
             labels_now = _load_audio_channel_labels(config_file)
             state = get_audio_meter_state()
             meters = [
@@ -482,21 +550,43 @@ def _build_audio_meters_panel(config_file):
                 state['inputs'][0],
                 state['outputs'][1],
             ]
-            for row, label, meter in zip(rows, labels_now, meters):
+            update_text = now - last_text_update >= 1.0
+            for index, (row, label, meter, window) in enumerate(zip(rows, labels_now, meters, meter_windows)):
                 rms = meter.get('rms_dbfs', -120.0)
                 peak = meter.get('peak_dbfs', -120.0)
                 row['label'].set_text(label)
-                row['bar'].set_value(_meter_bar_value(peak))
-                row['rms'].set_text(f"RMS {_format_meter_db(rms)}")
-                row['peak'].set_text(f"Peak {_format_meter_db(peak)}")
+                row['bar_fill'].style(f'width: {_meter_bar_percent(rms):.1f}%')
+                if peak >= peak_marker_db[index]:
+                    peak_marker_db[index] = float(peak)
+                else:
+                    peak_marker_db[index] = max(
+                        float(peak),
+                        peak_marker_db[index] - (12.0 * elapsed),
+                    )
+                row['peak_marker'].style(
+                    f'left: calc({_meter_bar_percent(peak_marker_db[index]):.1f}% - 1px)'
+                )
+                window['rms'].append(rms)
+                window['peak'].append(peak)
+                if update_text:
+                    row['rms'].set_text(
+                        f"RMS {_format_meter_db(_average_dbfs(window['rms']))}"
+                    )
+                    row['peak'].set_text(
+                        f"Peak {_format_meter_db(max(window['peak']))}"
+                    )
+                    window['rms'].clear()
+                    window['peak'].clear()
                 if meter.get('clip'):
                     row['peak'].classes(add='text-red-600 font-bold')
                 else:
                     row['peak'].classes(remove='text-red-600 font-bold')
+            if update_text:
+                last_text_update = time.monotonic()
 
-        ui.timer(0.2, refresh)
+        ui.timer(0.1, refresh)
         refresh()
-        return panel
+        return panel, collapse_button
 
 
 def update_live_capture_plots():
@@ -689,7 +779,7 @@ def _build_plot_panel(title, update_callback):
     state = {'expanded': False}
 
     with ui.element('div').classes(
-        'w-full shrink-0 border border-gray-300 rounded bg-white p-2'
+        'live-capture-collapsible w-full shrink-0 border border-gray-300 rounded bg-white p-2'
     ) as panel:
         with ui.row().classes('w-full items-center justify-between gap-2'):
             with ui.row().classes('items-center gap-1 min-w-0'):
@@ -697,7 +787,9 @@ def _build_plot_panel(title, update_callback):
                     'live-capture-drag-handle text-gray-500'
                 )
                 ui.label(title).classes('text-sm font-bold text-gray-700')
-            expand_button = ui.button(icon='open_in_full').props('flat round dense')
+            with ui.row().classes('items-center gap-1'):
+                expand_button = ui.button(icon='open_in_full').props('flat round dense')
+                collapse_button = ui.button(icon='expand_less').props('flat round dense')
 
         with ui.column().classes('w-full') as plot_container:
             plot_widget = ui.plotly(_new_live_capture_figure()).classes(
@@ -718,7 +810,7 @@ def _build_plot_panel(title, update_callback):
 
         expand_button.on('click', toggle_expand)
         apply_state()
-        return panel, plot_widget
+        return panel, plot_widget, collapse_button, expand_button
 
 
 def _build_grid_progress_panel():
@@ -728,7 +820,7 @@ def _build_grid_progress_panel():
     grid_progress_grid_mtime = grid_file.stat().st_mtime if grid_file is not None else None
 
     with ui.element('div').classes(
-        'w-full shrink-0 border border-gray-300 rounded bg-white p-2'
+        'live-capture-collapsible w-full shrink-0 border border-gray-300 rounded bg-white p-2'
     ) as panel:
         with ui.row().classes('w-full items-center justify-between gap-2'):
             title = 'Measurement Progress'
@@ -741,12 +833,13 @@ def _build_grid_progress_panel():
                 grid_progress_title_label = ui.label(title).classes(
                     'text-sm font-bold text-gray-700'
                 )
+            collapse_button = ui.button(icon='expand_less').props('flat round dense')
 
         if grid_file is None:
             ui.label('No planned grid file found. Generate a grid first.').classes(
                 'text-sm text-gray-600 p-4'
             )
-            return panel, None
+            return panel, None, collapse_button
 
         with ui.row().classes('w-full items-center justify-between flex-wrap gap-2 mb-2'):
             with ui.row().classes('items-center gap-1'):
@@ -850,7 +943,7 @@ def _build_grid_progress_panel():
         engine = CoordViewerEngine(input_data=str(grid_file))
         engine.set_history_mode(False)
         update_grid_progress_viewer()
-        return panel, engine
+        return panel, engine, collapse_button
 
 
 def _enable_plot_reordering(plot_stack, panel_map):
@@ -969,22 +1062,21 @@ def build_live_capture(config_file='config.ini'):
             with ui.row().classes('items-center gap-1 text-gray-500'):
                 ui.icon('drag_indicator').classes('text-sm')
                 ui.label('Drag to reorder').classes('text-xs')
-            plot_button_bar = ui.row().classes('items-center gap-2 flex-wrap')
 
         with ui.column().classes(
             'w-full flex-1 min-h-0 min-w-0 gap-2 overflow-y-auto pr-1'
         ) as plot_stack:
-            audio_meters_panel = _build_audio_meters_panel(config_file)
-            grid_progress_panel, grid_progress_engine = _build_grid_progress_panel()
-            measurement_position_panel, measurement_position_plot = _build_plot_panel(
+            audio_meters_panel, audio_meters_collapse = _build_audio_meters_panel(config_file)
+            grid_progress_panel, grid_progress_engine, grid_progress_collapse = _build_grid_progress_panel()
+            measurement_position_panel, measurement_position_plot, measurement_position_collapse, measurement_position_expand = _build_plot_panel(
                 'Measurement Positions',
                 update_measurement_position_plot,
             )
-            frequency_response_panel, frequency_response_plot = _build_plot_panel(
+            frequency_response_panel, frequency_response_plot, frequency_response_collapse, frequency_response_expand = _build_plot_panel(
                 'Frequency Response',
                 update_frequency_response_plot,
             )
-            impulse_response_panel, impulse_response_plot = _build_plot_panel(
+            impulse_response_panel, impulse_response_plot, impulse_response_collapse, impulse_response_expand = _build_plot_panel(
                 'Impulse Response',
                 update_impulse_response_plot,
             )
@@ -996,31 +1088,40 @@ def build_live_capture(config_file='config.ini'):
             'Frequency Response': frequency_response_panel,
             'Impulse Response': impulse_response_panel,
         }
+        collapse_button_map = {
+            'Audio Meters': audio_meters_collapse,
+            '3D Progress': grid_progress_collapse,
+            'Measurement Positions': measurement_position_collapse,
+            'Frequency Response': frequency_response_collapse,
+            'Impulse Response': impulse_response_collapse,
+        }
+        plot_expand_button_map = {
+            'Measurement Positions': measurement_position_expand,
+            'Frequency Response': frequency_response_expand,
+            'Impulse Response': impulse_response_expand,
+        }
         panel_order, visible_panels, frequency_smoothing_fraction = \
             _load_panel_layout(config_file)
-
-        def set_plot_button_state(button, is_visible):
-            if is_visible:
-                button.props('color=green')
-                button.classes(replace='text-white border border-green-700 font-bold')
-                button.style('')
-            else:
-                button.props(remove='color')
-                button.classes(replace='text-white font-bold')
-                button.style(
-                    'background: rgb(99, 154, 210); '
-                    'border: 1px solid rgb(68, 111, 154);'
-                )
-
-        button_map = {}
 
         def apply_plot_layout():
             for index, label in enumerate(panel_order):
                 panel = panel_map[label]
                 panel.move(plot_stack, index)
-                panel.set_visibility(label in visible_panels)
-                if label in button_map:
-                    button_map[label].move(plot_button_bar, index)
+                panel.set_visibility(True)
+                collapsed = label not in visible_panels
+                if label in plot_expand_button_map:
+                    _set_plot_panel_collapsed(
+                        panel,
+                        collapse_button_map[label],
+                        plot_expand_button_map[label],
+                        collapsed,
+                    )
+                else:
+                    _set_panel_collapsed(
+                        panel,
+                        collapse_button_map[label],
+                        collapsed,
+                    )
 
         def _event_order(args):
             if isinstance(args, list):
@@ -1035,7 +1136,7 @@ def build_live_capture(config_file='config.ini'):
             requested_order = _event_order(event.args)
             ordered_labels = [
                 label for label in requested_order
-                if label in panel_map and label in visible_panels
+                if label in panel_map
             ]
             if ordered_labels:
                 hidden_labels = [
@@ -1060,28 +1161,15 @@ def build_live_capture(config_file='config.ini'):
             )
             ui.notify('Live Capture settings saved', type='positive')
 
-        with plot_button_bar:
-            for label in panel_order:
-                state = {'visible': label in visible_panels}
-                button = ui.button(label).props(
-                    'dense unelevated rounded'
-                ).classes('text-white border border-green-700 font-bold')
-                button_map[label] = button
-                set_plot_button_state(button, state['visible'])
+        def toggle_panel(selected_label):
+            if selected_label in visible_panels:
+                visible_panels.discard(selected_label)
+            else:
+                visible_panels.add(selected_label)
+            apply_plot_layout()
 
-                def toggle_plot(selected_label, b, s):
-                    s['visible'] = not s['visible']
-                    if s['visible']:
-                        visible_panels.add(selected_label)
-                    else:
-                        visible_panels.discard(selected_label)
-                    apply_plot_layout()
-                    set_plot_button_state(b, s['visible'])
-
-                button.on(
-                    'click',
-                    lambda _e, l=label, b=button, s=state: toggle_plot(l, b, s),
-                )
+        for label, button in collapse_button_map.items():
+            button.on('click', lambda _e, l=label: toggle_panel(l))
 
         def set_frequency_smoothing(event):
             global frequency_smoothing_fraction

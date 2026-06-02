@@ -48,7 +48,7 @@ def test_project_json_only_saved_explicitly(tmp_path):
     assert "audio_settings" not in content
 
 
-def test_spl_calibration_saves_offset_from_mic_rms(tmp_path):
+def test_spl_calibration_saves_stage5_frd_offset(tmp_path):
     config_file = tmp_path / "config.ini"
     work_dir = tmp_path / "work"
     _write_config(config_file)
@@ -64,9 +64,53 @@ def test_spl_calibration_saves_offset_from_mic_rms(tmp_path):
     saved_file = next(saved_dir.glob("*_project.json"))
     content = saved_file.read_text(encoding="utf-8")
 
-    assert '"spl_db": 80.0' in content
-    assert '"reference_input_rms_dbfs": -30.0' in content
-    assert '"spl_offset_db": 110.0' in content
+    assert '"stage5_vars"' in content
+    assert '"frd_db_offset": 110.0' in content
+    assert '"spl_calibration"' not in content
+    assert '"spl_offset_db"' not in content
+    assert '"spl_db"' not in content
+    assert '"reference_input_rms_dbfs"' not in content
+
+
+def test_spl_calibration_update_preserves_project_state_and_stage5_vars(tmp_path):
+    project.set_project_dir(tmp_path / "work")
+    project.update_grid_vars({"output_filename": "grid.csv"})
+    project.get_project_data()["stage5_vars"] = {"other_value": 12}
+    project.update_audio_setup(
+        {"in_dev": "9"},
+        {"sweep_dur_s": "2.0", "num_sweeps": "3"},
+    )
+
+    project.update_spl_calibration(project.build_spl_calibration(83.0, -27.5))
+
+    data = project.get_project_data()
+    assert data["grid_vars"]["output_filename"] == "grid.csv"
+    assert data["sweep_settings"]["sweep_dur_s"] == "2.0"
+    assert data["stage5_vars"] == {"other_value": 12, "frd_db_offset": 110.5}
+    assert "spl_calibration" not in data
+
+
+def test_spl_calibration_can_be_saved_from_known_scale(tmp_path):
+    project.set_project_dir(tmp_path / "work")
+
+    project.update_spl_calibration(
+        project.build_spl_calibration(None, None, 109.75)
+    )
+
+    data = project.get_project_data()
+    assert data["stage5_vars"] == {"frd_db_offset": 109.75}
+    assert "spl_calibration" not in data
+
+
+def test_spl_calibration_truncates_frd_offset_to_two_decimals(tmp_path):
+    project.set_project_dir(tmp_path / "work")
+
+    project.update_spl_calibration(
+        project.build_spl_calibration(None, None, 99.2468908428665)
+    )
+
+    data = project.get_project_data()
+    assert data["stage5_vars"] == {"frd_db_offset": 99.24}
 
 
 def test_project_apply_does_not_overwrite_global_audio(tmp_path):

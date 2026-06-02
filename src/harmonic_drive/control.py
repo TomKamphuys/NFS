@@ -1,7 +1,9 @@
 import asyncio
+import configparser
 import ctypes
 import os
 import queue
+import re
 import shutil
 import sys
 import threading
@@ -18,6 +20,8 @@ from harmonic_drive.config_editor import (
 )
 from harmonic_drive import project
 from nfs import NearFieldScannerFactory, ScannerFactory
+from nfs.audio import AudioFactory
+from nfs.datatypes import CylindricalPosition
 from nfs.logging_config import setup_logging
 
 if TYPE_CHECKING:
@@ -27,16 +31,30 @@ if TYPE_CHECKING:
 
 scanner_app = None
 log_handler = None
+log_handler_sink_id = None
 is_playing = False
+sine_audio = None
+sine_target = None
 play_button = None
+play_button_icon = None
 level_input = None
 freq_input = None
 dur_input = None
+measurement_start_button = None
+measurement_stop_button = None
 pos_r = None
 pos_t = None
 pos_z = None
 pos_state = None
+mcs_pos_r = None
+mcs_pos_t = None
+mcs_pos_z = None
+mcs_pos_state = None
+position_display_titles = []
+mcs_position_display = None
+wcs_position_display = None
 home_button = None
+zero_button = None
 
 on_config_loaded = None
 measurement_set_title_provider = None
@@ -65,12 +83,71 @@ async def _ensure_session_folder_selected() -> bool:
     return bool(result)
 
 
-def register_sine_controls(level, frequency, duration, button) -> None:
-    global level_input, freq_input, dur_input, play_button
+async def ensure_session_folder_selected() -> bool:
+    return await _ensure_session_folder_selected()
+
+
+def register_sine_controls(level, frequency, duration, button, button_icon=None) -> None:
+    global level_input, freq_input, dur_input, play_button, play_button_icon
     level_input = level
     freq_input = frequency
     dur_input = duration
     play_button = button
+    play_button_icon = button_icon
+
+
+def _set_sine_button_icon(icon_name: str) -> None:
+    if play_button_icon:
+        play_button_icon.set_name(icon_name)
+        play_button_icon.update()
+        return
+    if play_button:
+        try:
+            play_button.set_icon(icon_name)
+            play_button._props['icon'] = icon_name
+            play_button.update()
+        except AttributeError:
+            play_button.props(f"icon={icon_name}")
+            play_button.update()
+
+
+def _get_audio_target(purpose: str):
+    global sine_audio
+    nfs = get_nfs()
+    if nfs is not None:
+        return nfs
+    if scanner_app is None:
+        raise RuntimeError("App is not initialized yet")
+    if sine_audio is None:
+        logger.info(
+            f"NearFieldScanner is unavailable; creating audio-only {purpose} backend"
+        )
+        sine_audio = AudioFactory.create(scanner_app.config_file)
+    return sine_audio
+
+
+def _get_sine_audio_target():
+    return _get_audio_target("sine")
+
+
+def _get_test_sweep_call():
+    target = _get_audio_target("test sweep")
+    if hasattr(target, "test_sweep"):
+        return target.test_sweep, ()
+    return target.measure_ir, (CylindricalPosition(0.0, 0.0, 0.0), "TEST", False)
+
+
+def _format_scanner_error(exc: Exception) -> str:
+    text = str(exc)
+    match = re.search(r"port '([^']+)'", text, re.IGNORECASE)
+    if match:
+        return (
+            f"Scanner connection failed on {match.group(1)}. "
+            "Check the port and controller connection."
+        )
+    if "No GRBL response" in text:
+        return "Scanner not responding on the selected port. Check the port and controller type."
+    return f"Scanner unavailable: {exc}"
 
 
 def _log_built_object_tree(scanner, nfs, config_file: str) -> None:
@@ -169,10 +246,12 @@ class ScannerApp:
         self.log_handler = None
         self._load_lock = threading.Lock()
         self._is_loaded = False
+        self.load_warning = None
 
     def load_config(self, status_callback=None):
         with self._load_lock:
             if self._is_loaded:
+                attach_gui_log_handler()
                 return
 
             def update_status(msg):
@@ -182,12 +261,27 @@ class ScannerApp:
 
             update_status("(Re)loading configuration")
             setup_logging(self.config_file, project_name="HarmonicDrive")
+            attach_gui_log_handler()
             update_status("Connecting to GRBL")
-            self.scanner = ScannerFactory.create(self.config_file)
-            update_status("Initializing Near Field Scanner & reading points")
-            self.nfs = NearFieldScannerFactory.create(self.scanner, self.config_file)
+            self.load_warning = None
+            self.scanner = None
+            self.nfs = None
+            try:
+                self.scanner = ScannerFactory.create(self.config_file)
+            except Exception as exc:
+                self.load_warning = _format_scanner_error(exc)
+                logger.error(f"{self.load_warning}: {exc}")
+                update_status("Scanner unavailable; continuing without motion hardware")
 
-            if self.scanner:
+            if self.scanner is not None:
+                try:
+                    update_status("Initializing Near Field Scanner & reading points")
+                    self.nfs = NearFieldScannerFactory.create(self.scanner, self.config_file)
+                except Exception as exc:
+                    self.load_warning = f"Near Field Scanner unavailable: {exc}"
+                    logger.error(self.load_warning)
+                    update_status("Near Field Scanner unavailable; continuing")
+
                 self.scanner.set_on_state_update_callback(update_scanner_position)
 
             _log_built_object_tree(self.scanner, self.nfs, self.config_file)
@@ -201,18 +295,26 @@ class ScannerApp:
             apply_project_directory_to_nfs()
             if on_config_loaded:
                 on_config_loaded()
+            apply_position_display_config()
             if notify:
-                ui.notify("Configuration reloaded successfully", type='positive')
+                if self.load_warning:
+                    ui.notify(self.load_warning, type='warning')
+                else:
+                    ui.notify("Configuration reloaded successfully", type='positive')
         except Exception as exc:
             logger.error(f"Failed to reload configuration: {exc}")
             ui.notify(f"Reload failed: {exc}", type='negative')
 
 
 def get_scanner() -> "Scanner":
+    if scanner_app is None:
+        return None
     return scanner_app.scanner
 
 
 def get_nfs() -> "NearFieldScanner":
+    if scanner_app is None:
+        return None
     return scanner_app.nfs
 
 
@@ -271,6 +373,20 @@ class LogBuffer:
 
     def write(self, message):
         self.buffer.put(message.strip())
+
+
+def attach_gui_log_handler() -> None:
+    global log_handler_sink_id
+    if log_handler is None or log_handler_sink_id is not None:
+        return
+    log_handler_sink_id = logger.add(
+        log_handler.write,
+        level="TRACE",
+        format=(
+            "{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | "
+            "{name}:{function}:{line} - {message}"
+        ),
+    )
 
 
 def log_button_click(label: str, handler):
@@ -334,16 +450,77 @@ worker_thread = threading.Thread(target=audio_worker, daemon=True)
 worker_thread.start()
 
 
+def show_shutdown_screen() -> None:
+    try:
+        ui.run_javascript("""
+        (() => {
+          const existing = document.getElementById('hals-shutdown-overlay');
+          if (existing) return;
+          const appRoot = document.getElementById('q-app') || document.body;
+          appRoot.style.filter = 'grayscale(1)';
+          appRoot.style.opacity = '0.32';
+          appRoot.style.pointerEvents = 'none';
+
+          const overlay = document.createElement('div');
+          overlay.id = 'hals-shutdown-overlay';
+          overlay.style.cssText = [
+            'position: fixed',
+            'inset: 0',
+            'z-index: 2147483647',
+            'display: flex',
+            'align-items: center',
+            'justify-content: center',
+            'background: rgba(8, 12, 18, 0.72)',
+            'backdrop-filter: blur(2px)',
+            'font-family: system-ui, sans-serif',
+            'color: #f8fafc',
+            'text-align: center',
+          ].join(';');
+          overlay.innerHTML = `
+            <div>
+              <div style="font-size: clamp(48px, 9vw, 118px); font-weight: 900; letter-spacing: 0.08em;">
+                SHUTDOWN
+              </div>
+              <div style="margin-top: 14px; font-size: 18px; color: #cbd5e1;">
+                HarmonicDrive server has been stopped.
+              </div>
+            </div>
+          `;
+          document.body.appendChild(overlay);
+        })();
+        """)
+    except Exception:
+        pass
+
+
+async def shutdown_from_ui():
+    show_shutdown_screen()
+    await asyncio.sleep(0.7)
+    await run.io_bound(stop_nfs)
+
+
 def stop_nfs():
     logger.info('Stopping NFS and shutting down...')
-    global is_playing
+    global is_playing, sine_audio, sine_target
     try:
+        show_shutdown_screen()
         audio_queue.put(None)
+        if sine_target is not None:
+            try:
+                sine_target.stop_sine()
+            except Exception as exc:
+                logger.warning(f"Error stopping sine target during shutdown: {exc}")
+        elif sine_audio is not None:
+            try:
+                sine_audio.stop_sine()
+            except Exception as exc:
+                logger.warning(f"Error stopping audio-only sine during shutdown: {exc}")
         if scanner_app and scanner_app.nfs:
             scanner_app.nfs.shutdown()
         is_playing = False
-        if play_button:
-            play_button.props('icon=play_arrow')
+        sine_target = None
+        sine_audio = None
+        _set_sine_button_icon('play_arrow')
         time.sleep(0.5)
         app.shutdown()
         os._exit(0)
@@ -362,6 +539,64 @@ def hold_scanner():
 app.on_shutdown(stop_nfs)
 
 
+def _update_measurement_buttons() -> None:
+    nfs = get_nfs()
+    running = bool(
+        nfs is not None
+        and hasattr(nfs, "is_measurement_set_running")
+        and nfs.is_measurement_set_running()
+    )
+    paused = bool(
+        nfs is not None
+        and hasattr(nfs, "is_measurement_set_paused")
+        and nfs.is_measurement_set_paused()
+    )
+    if measurement_start_button is not None:
+        if paused:
+            _set_measurement_primary_button("Resume", "play_arrow", "primary")
+        elif running:
+            _set_measurement_primary_button("Pause", "pause", "warning")
+        else:
+            _set_measurement_primary_button(
+                "Start Measurements",
+                "play_arrow",
+                "primary",
+            )
+        measurement_start_button.enable()
+    if measurement_stop_button is not None:
+        if running:
+            measurement_stop_button.enable()
+        else:
+            measurement_stop_button.disable()
+
+
+def _set_measurement_primary_button(text: str, icon: str, color: str) -> None:
+    if measurement_start_button is None:
+        return
+    measurement_start_button.set_text(text)
+    measurement_start_button.props(f"icon={icon} color={color}")
+
+
+def pause_measurement_set():
+    nfs = get_nfs()
+    if nfs is None or not hasattr(nfs, "pause_measurement_set"):
+        ui.notify("Measurement set is not available", type="warning")
+        return
+    nfs.pause_measurement_set()
+    ui.notify("Measurement set will pause after the current operation")
+    _update_measurement_buttons()
+
+
+def stop_measurement_set():
+    nfs = get_nfs()
+    if nfs is None or not hasattr(nfs, "stop_measurement_set"):
+        ui.notify("Measurement set is not available", type="warning")
+        return
+    nfs.stop_measurement_set()
+    ui.notify("Measurement set will stop after the current operation")
+    _update_measurement_buttons()
+
+
 def rehome():
     get_scanner().softreset()
     time.sleep(1)
@@ -370,7 +605,27 @@ def rehome():
     get_scanner().home()
 
 
-async def async_task():
+async def toggle_measurement_set():
+    nfs = get_nfs()
+    if (
+        nfs is not None
+        and hasattr(nfs, "is_measurement_set_paused")
+        and nfs.is_measurement_set_paused()
+    ):
+        nfs.resume_measurement_set()
+        ui.notify("Measurement set resumed")
+        _update_measurement_buttons()
+        return
+    if (
+        nfs is not None
+        and hasattr(nfs, "is_measurement_set_running")
+        and nfs.is_measurement_set_running()
+    ):
+        nfs.pause_measurement_set()
+        ui.notify("Measurement set will pause after the current operation")
+        _update_measurement_buttons()
+        return
+
     if not await _ensure_session_folder_selected():
         return
 
@@ -429,15 +684,21 @@ async def async_task():
     ui.notify('Measurement started')
     for button in scanner_app.greyable_buttons:
         button.disable()
+    _update_measurement_buttons()
     try:
         loop = asyncio.get_running_loop()
         done = asyncio.Event()
         audio_queue.put((
-            get_nfs().take_measurement_set,
+            nfs.take_measurement_set,
             (measurement_set_name, overwrite),
             done,
             loop,
         ))
+        if measurement_stop_button is not None:
+            measurement_stop_button.enable()
+        if measurement_start_button is not None:
+            _set_measurement_primary_button("Pause", "pause", "warning")
+            measurement_start_button.enable()
         await done.wait()
     except Exception as exc:
         logger.error(f"Measurement task failed: {exc}")
@@ -447,6 +708,7 @@ async def async_task():
         ui.notify('Measurement finished')
         for button in scanner_app.greyable_buttons:
             button.enable()
+        _update_measurement_buttons()
 
 
 async def async_single_measurement_task():
@@ -491,10 +753,11 @@ async def async_single_measurement_task():
 async def async_test_sweep_task():
     ui.notify('Test sweep started')
     try:
+        sweep_func, sweep_args = _get_test_sweep_call()
         loop = asyncio.get_running_loop()
         done = asyncio.Event()
         result_holder = {}
-        audio_queue.put((get_nfs().test_sweep, (), done, loop, result_holder))
+        audio_queue.put((sweep_func, sweep_args, done, loop, result_holder))
         await done.wait()
         result = result_holder.get('result')
         if result is not None:
@@ -508,35 +771,44 @@ async def async_test_sweep_task():
 
 
 async def async_play_sine_task():
-    global is_playing
+    global is_playing, sine_target
     if is_playing:
-        get_nfs().stop_sine()
+        if sine_target is not None:
+            sine_target.stop_sine()
         is_playing = False
-        if play_button:
-            play_button.props('icon=play_arrow')
+        sine_target = None
+        _set_sine_button_icon('play_arrow')
         return
 
     level = level_input.value if level_input.value is not None else -20.0
     freq = freq_input.value if freq_input.value is not None else 1000.0
     dur = float(dur_input.value) if dur_input.value is not None else None
 
+    try:
+        sine_target = _get_sine_audio_target()
+    except Exception as exc:
+        logger.error(f"Could not initialize sine audio backend: {exc}")
+        ui.notify(f"Audio unavailable: {exc}", type='negative')
+        sine_target = None
+        return
+
     is_playing = True
-    if play_button:
-        play_button.props('icon=stop')
+    _set_sine_button_icon('stop')
 
     try:
         loop = asyncio.get_running_loop()
         done = asyncio.Event()
-        audio_queue.put((get_nfs().play_sine, (freq, level, dur), done, loop))
+        audio_queue.put((sine_target.play_sine, (freq, level, dur), done, loop))
         await done.wait()
     except Exception as exc:
         logger.error(f"Play sine failed: {exc}")
         ui.notify(f"Error: {exc}", type='negative')
+        sine_target = None
     finally:
         if dur is not None:
             is_playing = False
-            if play_button:
-                play_button.props('icon=play_arrow')
+            sine_target = None
+            _set_sine_button_icon('play_arrow')
 
 
 async def safe_move(func, *args):
@@ -587,28 +859,60 @@ def _get_raw_state_string():
         return None
 
 
-def update_scanner_position(pos=None, state=None):
+def _format_position_value(pos, axis: str) -> str:
+    if pos is None:
+        return '   -   '
+    if axis == 'r':
+        return f'{pos.r():7.2f}'
+    if axis == 't':
+        return f'{pos.t():7.2f}'
+    return f'{pos.z():7.2f}'
+
+
+def _format_state_value(state) -> str:
+    if state is None:
+        raw_state = _get_raw_state_string()
+    else:
+        raw_state = state.name if hasattr(state, 'name') \
+            else str(state).split('.')[-1]
+    return f'{raw_state:^8}' if raw_state else '   -   '
+
+
+def _set_position_labels(targets, pos, state=None):
+    r_label, t_label, z_label, state_label = targets
+    for label in targets:
+        if label is None:
+            return
+    r_label.set_text(_format_position_value(pos, 'r'))
+    t_label.set_text(_format_position_value(pos, 't'))
+    z_label.set_text(_format_position_value(pos, 'z'))
+    state_label.set_text(_format_state_value(state))
+
+
+def update_scanner_position(pos=None, state=None, machine_pos=None):
     def do_update():
-        nonlocal pos, state
+        nonlocal pos, state, machine_pos
         if pos is None:
             pos = get_scanner().get_position()
-        if pos is not None:
-            pos_r.set_text(f'{pos.r():7.2f}')
-            pos_t.set_text(f'{pos.t():7.2f}')
-            pos_z.set_text(f'{pos.z():7.2f}')
-        else:
-            pos_r.set_text('   -   ')
-            pos_t.set_text('   -   ')
-            pos_z.set_text('   -   ')
-        if state is None:
-            raw_state = _get_raw_state_string()
-        else:
-            raw_state = state.name if hasattr(state, 'name') \
-                else str(state).split('.')[-1]
-        pos_state.set_text(f'{raw_state:^8}' if raw_state else '   -   ')
+        if machine_pos is None:
+            machine_getter = getattr(get_scanner(), "get_machine_position", None)
+            if machine_getter is not None:
+                machine_pos = machine_getter()
+
+        _set_position_labels((pos_r, pos_t, pos_z, pos_state), pos, state)
+        _set_position_labels(
+            (mcs_pos_r, mcs_pos_t, mcs_pos_z, mcs_pos_state),
+            machine_pos,
+            state,
+        )
+
         if _scanner_has_alarm():
             pos_state.classes(remove='text-[#7eff00]').classes(
                 add='text-red-600 alarm_blink'
+            )
+            if mcs_pos_state is not None:
+                mcs_pos_state.classes(remove='text-orange-400').classes(
+                    add='text-red-600 alarm_blink'
             )
             scanner_app.home_state['ok'] = False
             _set_home_button_color('orange')
@@ -616,6 +920,10 @@ def update_scanner_position(pos=None, state=None):
             pos_state.classes(remove='text-red-600 alarm_blink').classes(
                 add='text-[#7eff00]'
             )
+            if mcs_pos_state is not None:
+                mcs_pos_state.classes(remove='text-red-600 alarm_blink').classes(
+                    add='text-orange-400'
+                )
             _set_home_button_color(
                 'green' if scanner_app.home_state['ok'] else 'orange'
             )
@@ -644,7 +952,7 @@ def add_jog_row(axis: str, left_label: str, right_label: str, unit: str,
         with ui.element('div').classes('jog-grid'):
             ui.label('')
             ui.label(left_label).classes('jog-hdr jog-hdr-left')
-            ui.label('STOP').classes('jog-hdr jog-hdr-stop')
+            ui.label('HOLD').classes('jog-hdr jog-hdr-stop')
             ui.label(right_label).classes('jog-hdr jog-hdr-right')
         with ui.element('div').classes('jog-grid'):
             ui.html(
@@ -661,10 +969,10 @@ def add_jog_row(axis: str, left_label: str, right_label: str, unit: str,
                 ).classes('jog-btn')
                 scanner_app.greyable_buttons.append(button)
             ui.button(
-                'STOP',
+                'HOLD',
                 color='red',
                 on_click=log_button_click(
-                    f'{axis} STOP (HOLD)',
+                    f'{axis} HOLD',
                     lambda: run.io_bound(hold_scanner),
                 ),
             ).classes('jog-stop')
@@ -706,68 +1014,15 @@ def build_log_dialog():
 
 
 def build_control_pane(log_dialog):
-    global pos_r, pos_t, pos_z, pos_state, home_button
+    global pos_r, pos_t, pos_z, pos_state, home_button, zero_button
+    global measurement_start_button, measurement_stop_button
 
-    with ui.column().classes('w-full h-full min-w-0 overflow-auto px-2 py-2'):
-        with ui.row().classes('w-full items-start gap-4 mb-4'):
-            with ui.column().classes('flex-1'):
-                add_jog_row(
-                    axis='PHI',
-                    left_label='CW',
-                    right_label='CCW',
-                    unit='Deg',
-                    left_moves=[
-                        (120, 'rotate_cw'),
-                        (60, 'rotate_cw'),
-                        (10, 'rotate_cw'),
-                        (1, 'rotate_cw'),
-                    ],
-                    right_moves=[
-                        (1, 'rotate_ccw'),
-                        (10, 'rotate_ccw'),
-                        (60, 'rotate_ccw'),
-                        (120, 'rotate_ccw'),
-                    ],
-                )
-                add_jog_row(
-                    axis='R',
-                    left_label='IN',
-                    right_label='OUT',
-                    unit='mm',
-                    left_moves=[
-                        (120, 'move_in'),
-                        (60, 'move_in'),
-                        (10, 'move_in'),
-                        (1, 'move_in'),
-                    ],
-                    right_moves=[
-                        (1, 'move_out'),
-                        (10, 'move_out'),
-                        (60, 'move_out'),
-                        (120, 'move_out'),
-                    ],
-                )
-                add_jog_row(
-                    axis='Z',
-                    left_label='DOWN',
-                    right_label='UP',
-                    unit='mm',
-                    left_moves=[
-                        (120, 'move_down'),
-                        (60, 'move_down'),
-                        (10, 'move_down'),
-                        (1, 'move_down'),
-                    ],
-                    right_moves=[
-                        (1, 'move_up'),
-                        (10, 'move_up'),
-                        (60, 'move_up'),
-                        (120, 'move_up'),
-                    ],
-                )
-            ui.image('/images/splash.png').classes(
-                'w-64 rounded-lg shadow-lg self-center'
-            )
+    with ui.column().classes('w-full h-full min-w-0 overflow-auto px-2 pt-3 pb-2'):
+        _build_position_display()
+        show_rehome = _get_app_bool("show_rehome_button", False)
+        show_height_offset = _get_app_bool("show_height_offset_controls", True)
+        use_alt_controls = _get_app_bool("use_alternative_motion_controls", False)
+        height_offset_value = {'value': 0}
 
         async def _wait_for_home_settle(timeout_s: float = 5.0) -> bool:
             deadline = time.time() + timeout_s
@@ -789,148 +1044,514 @@ def build_control_pane(log_dialog):
                 'green' if scanner_app.home_state['ok'] else 'orange'
             )
 
-        with ui.element('div').classes('cmd-row w-full justify-start mt-1'):
-            home_button = ui.button(
-                'HOME',
-                color='orange',
-                on_click=log_button_click('Home', home_and_update),
-            ).classes('cmd-btn')
-            ui.button(
-                'Clear\nAlarm',
-                on_click=log_button_click(
-                    'Clear Alarm',
-                    lambda: run.io_bound(
-                        get_scanner().clear_alarm if get_scanner() else None
-                    ),
-                ),
-            ).classes('cmd-btn cmd-btn-blue')
-            ui.button(
-                'Soft\nReset',
-                on_click=log_button_click(
-                    'Soft Reset',
-                    lambda: run.io_bound(
-                        get_scanner().softreset if get_scanner() else None
-                    ),
-                ),
-            ).classes('cmd-btn cmd-btn-blue')
-            ui.button(
-                'REHOME',
-                on_click=log_button_click(
-                    'ReHome',
-                    lambda: asyncio.create_task(safe_move(rehome)),
-                ),
-            ).classes('cmd-btn cmd-btn-blue')
-            ui.button(
-                'HOLD',
-                color='red',
-                on_click=log_button_click(
-                    'Hold',
-                    lambda: run.io_bound(
-                        get_scanner().hold if get_scanner() else None
-                    ),
-                ),
-            ).classes('cmd-btn')
+        if use_alt_controls:
+            jog_step = {'value': 20}
 
-        with ui.button_group():
-            height_input = ui.number(
-                label='Height Offset (mm)',
-                value=0,
-                format='%.2f',
-            )
-            ui.button(
-                'Set height offset',
-                on_click=log_button_click(
+            async def _execute_move(method_name: str):
+                scanner = get_scanner()
+                if not scanner:
+                    ui.notify("Scanner not initialized", type='warning')
+                    return
+                method = getattr(scanner, method_name)
+                await safe_move(method, jog_step['value'])
+
+            def _alt_motion_button(icon: str, label: str, method_name: str):
+                button = ui.button(
+                    icon=icon,
+                    on_click=log_button_click(
+                        label,
+                        lambda m=method_name: _execute_move(m),
+                    ),
+                ).classes('alt-motion-btn').props('color=primary no-caps')
+                scanner_app.greyable_buttons.append(button)
+                return button
+
+            def _alt_axis_header(title: str):
+                ui.html(
+                    f'<span class="alt-axis-sign">-</span>'
+                    f'<span class="alt-axis-title">{title}</span>'
+                    f'<span class="alt-axis-sign">+</span>'
+                ).classes('alt-axis-header')
+
+            def _alt_command_button(text: str, icon: str, color: str, click):
+                return ui.button(
+                    text,
+                    icon=icon,
+                    color=color,
+                    on_click=click,
+                ).classes('alt-command-btn').props('no-caps')
+
+            step_btns = []
+
+            def set_step(val):
+                jog_step['value'] = val
+                for button in step_btns:
+                    if getattr(button, '_step_val', None) == val:
+                        button.props('color=primary text-color=white')
+                    else:
+                        button.props('color=blue-grey-8 text-color=white')
+
+            with ui.column().classes('alt-motion-panel mb-3'):
+                with ui.element('div').classes('alt-top-grid'):
+                    ui.html('M<br>O<br>V<br>E').classes('alt-move-title')
+                    with ui.element('div').classes('alt-axis-group alt-axis-phi'):
+                        _alt_axis_header('PHI')
+                        with ui.element('div').classes('alt-axis-buttons'):
+                            _alt_motion_button('rotate_right', 'PHI CW', 'rotate_cw')
+                            _alt_motion_button('rotate_left', 'PHI CCW', 'rotate_ccw')
+                    with ui.element('div').classes('alt-axis-group alt-axis-radius'):
+                        _alt_axis_header('RADIUS')
+                        with ui.element('div').classes('alt-axis-buttons'):
+                            _alt_motion_button('arrow_back', 'Radius IN', 'move_in')
+                            _alt_motion_button('arrow_forward', 'Radius OUT', 'move_out')
+                    with ui.element('div').classes('alt-axis-group alt-axis-height'):
+                        _alt_axis_header('HEIGHT')
+                        with ui.element('div').classes('alt-axis-buttons'):
+                            _alt_motion_button('arrow_downward', 'Height DOWN', 'move_down')
+                            _alt_motion_button('arrow_upward', 'Height UP', 'move_up')
+                    with ui.element('div').classes('alt-status-controls'):
+                        ui.element('div').classes('alt-status-spacer')
+                        home_button = _alt_command_button(
+                            'HOME',
+                            'home',
+                            'green' if scanner_app.home_state['ok'] else 'orange',
+                            log_button_click('Home', home_and_update),
+                        )
+
+                with ui.element('div').classes('alt-step-row'):
+                    ui.label('STEP').classes('alt-step-label')
+                    for val in [0.1, 1, 5, 10, 20, 60, 120]:
+                        label = str(val).rstrip('0').rstrip('.') if isinstance(val, float) else str(val)
+                        button = ui.button(
+                            label,
+                            on_click=lambda e, v=val: set_step(v),
+                        ).classes('alt-step-btn').props('no-caps')
+                        button._step_val = val
+                        step_btns.append(button)
+
+                with ui.element('div').classes('alt-command-row'):
+                    zero_button = _alt_command_button(
+                        'ZERO',
+                        'my_location',
+                        'primary',
+                        log_button_click(
+                            'Zero NFS',
+                            lambda: zero_nfs_then_apply_height_offset(
+                                height_offset_value['value']
+                            ),
+                        ),
+                    )
+                    scanner_app.greyable_buttons.append(zero_button)
+                    _alt_command_button(
+                        'CLEAR ALARM',
+                        'notifications',
+                        'primary',
+                        log_button_click(
+                            'Clear Alarm',
+                            lambda: run.io_bound(
+                                get_scanner().clear_alarm if get_scanner() else None
+                            ),
+                        ),
+                    )
+                    _alt_command_button(
+                        'RESET',
+                        'warning',
+                        'negative',
+                        log_button_click(
+                            'Reset Controller',
+                            lambda: run.io_bound(
+                                get_scanner().softreset if get_scanner() else None
+                            ),
+                        ),
+                    )
+                    _alt_command_button(
+                        'HOLD',
+                        'stop',
+                        'negative',
+                        log_button_click(
+                            'Feed-Hold',
+                            lambda: run.io_bound(
+                                get_scanner().hold if get_scanner() else None
+                            ),
+                        ),
+                    )
+
+                set_step(20)
+        else:
+            async def _execute_step_move(method_name: str, value: float):
+                scanner = get_scanner()
+                if not scanner:
+                    ui.notify("Scanner not initialized", type='warning')
+                    return
+                method = getattr(scanner, method_name)
+                await safe_move(method, value)
+
+            def _alt_command_button(text: str, icon: str, color: str, click):
+                return ui.button(
+                    text,
+                    icon=icon,
+                    color=color,
+                    on_click=click,
+                ).classes('alt-command-btn').props('no-caps')
+
+            def _step_label(value: float) -> str:
+                return str(value).rstrip('0').rstrip('.') if isinstance(value, float) else str(value)
+
+            def _step_shade_class(value: float) -> str:
+                return f'alt-jog-step-{str(value).replace(".", "_")}'
+
+            def _step_shade_style(value: float) -> str:
+                colors = {
+                    1: ('#9fd0ff', '#08111f'),
+                    5: ('#78b7f2', '#08111f'),
+                    10: ('#5398df', '#ffffff'),
+                    20: ('#3f84cf', '#ffffff'),
+                    60: ('#2e72bd', '#ffffff'),
+                    120: ('#174f98', '#ffffff'),
+                }
+                background, text = colors.get(value, ('#5398df', '#ffffff'))
+                return (
+                    f'background: {background} !important; '
+                    f'background-color: {background} !important; '
+                    f'color: {text} !important;'
+                )
+
+            def _panel_jog_row(axis: str, unit: str, left_label: str, right_label: str,
+                               left_moves: list, right_moves: list):
+                with ui.element('div').classes('alt-jog-row'):
+                    with ui.element('div').classes('alt-jog-side alt-jog-side-left'):
+                        ui.label(left_label).classes('alt-jog-direction')
+                        with ui.element('div').classes('alt-jog-steps'):
+                            for value, method_name in left_moves:
+                                button = ui.button(
+                                    _step_label(value),
+                                    on_click=log_button_click(
+                                        f'{axis} {left_label} {value}{unit}',
+                                        lambda v=value, m=method_name: _execute_step_move(m, v),
+                                    ),
+                                ).classes(f'alt-step-btn alt-jog-step-btn {_step_shade_class(value)}').props('no-caps').style(_step_shade_style(value))
+                                scanner_app.greyable_buttons.append(button)
+                    ui.html(
+                        f'<div class="alt-jog-axis">{axis}<div class="alt-jog-unit">{unit}</div></div>'
+                    )
+                    with ui.element('div').classes('alt-jog-side alt-jog-side-right'):
+                        with ui.element('div').classes('alt-jog-steps'):
+                            for value, method_name in right_moves:
+                                button = ui.button(
+                                    _step_label(value),
+                                    on_click=log_button_click(
+                                        f'{axis} {right_label} {value}{unit}',
+                                        lambda v=value, m=method_name: _execute_step_move(m, v),
+                                    ),
+                                ).classes(f'alt-step-btn alt-jog-step-btn {_step_shade_class(value)}').props('no-caps').style(_step_shade_style(value))
+                                scanner_app.greyable_buttons.append(button)
+                        ui.label(right_label).classes('alt-jog-direction')
+
+            with ui.column().classes('alt-motion-panel alt-jog-panel mb-3'):
+                with ui.element('div').classes('alt-jog-grid'):
+                    ui.html('M<br>O<br>V<br>E').classes('alt-move-title')
+                    with ui.element('div').classes('alt-jog-rows'):
+                        _panel_jog_row(
+                            axis='PHI',
+                            unit='Deg',
+                            left_label='-',
+                            right_label='+',
+                            left_moves=[
+                                (120, 'rotate_cw'),
+                                (60, 'rotate_cw'),
+                                (20, 'rotate_cw'),
+                                (10, 'rotate_cw'),
+                                (5, 'rotate_cw'),
+                                (1, 'rotate_cw'),
+                            ],
+                            right_moves=[
+                                (1, 'rotate_ccw'),
+                                (5, 'rotate_ccw'),
+                                (10, 'rotate_ccw'),
+                                (20, 'rotate_ccw'),
+                                (60, 'rotate_ccw'),
+                                (120, 'rotate_ccw'),
+                            ],
+                        )
+                        _panel_jog_row(
+                            axis='RADIUS',
+                            unit='mm',
+                            left_label='-',
+                            right_label='+',
+                            left_moves=[
+                                (120, 'move_in'),
+                                (60, 'move_in'),
+                                (20, 'move_in'),
+                                (10, 'move_in'),
+                                (5, 'move_in'),
+                                (1, 'move_in'),
+                            ],
+                            right_moves=[
+                                (1, 'move_out'),
+                                (5, 'move_out'),
+                                (10, 'move_out'),
+                                (20, 'move_out'),
+                                (60, 'move_out'),
+                                (120, 'move_out'),
+                            ],
+                        )
+                        _panel_jog_row(
+                            axis='HEIGHT',
+                            unit='mm',
+                            left_label='-',
+                            right_label='+',
+                            left_moves=[
+                                (120, 'move_down'),
+                                (60, 'move_down'),
+                                (20, 'move_down'),
+                                (10, 'move_down'),
+                                (5, 'move_down'),
+                                (1, 'move_down'),
+                            ],
+                            right_moves=[
+                                (1, 'move_up'),
+                                (5, 'move_up'),
+                                (10, 'move_up'),
+                                (20, 'move_up'),
+                                (60, 'move_up'),
+                                (120, 'move_up'),
+                            ],
+                        )
+
+                command_count = 6 if show_rehome else 5
+                with ui.element('div').classes(f'alt-command-row alt-command-row-{command_count}'):
+                    home_button = _alt_command_button(
+                        'HOME',
+                        'home',
+                        'green' if scanner_app.home_state['ok'] else 'orange',
+                        log_button_click('Home', home_and_update),
+                    )
+                    zero_button = _alt_command_button(
+                        'ZERO',
+                        'my_location',
+                        'primary',
+                        log_button_click(
+                            'Zero NFS',
+                            lambda: zero_nfs_then_apply_height_offset(
+                                height_offset_value['value']
+                            ),
+                        ),
+                    )
+                    scanner_app.greyable_buttons.append(zero_button)
+                    _alt_command_button(
+                        'CLEAR ALARM',
+                        'notifications',
+                        'primary',
+                        log_button_click(
+                            'Clear Alarm',
+                            lambda: run.io_bound(
+                                get_scanner().clear_alarm if get_scanner() else None
+                            ),
+                        ),
+                    )
+                    _alt_command_button(
+                        'RESET',
+                        'warning',
+                        'negative',
+                        log_button_click(
+                            'Reset Controller',
+                            lambda: run.io_bound(
+                                get_scanner().softreset if get_scanner() else None
+                            ),
+                        ),
+                    )
+                    if show_rehome:
+                        _alt_command_button(
+                            'REHOME',
+                            'home_repair_service',
+                            'primary',
+                            log_button_click(
+                                'ReHome',
+                                lambda: asyncio.create_task(safe_move(rehome)),
+                            ),
+                        )
+                    _alt_command_button(
+                        'HOLD',
+                        'stop',
+                        'negative',
+                        log_button_click(
+                            'Feed-Hold',
+                            lambda: run.io_bound(
+                                get_scanner().hold if get_scanner() else None
+                            ),
+                        ),
+                    )
+
+        if show_height_offset:
+            with ui.button_group():
+                height_input = ui.number(
+                    label='Height Offset (mm)',
+                    value=0,
+                    format='%.2f',
+                    on_change=lambda e: height_offset_value.update(
+                        value=e.value or 0
+                    ),
+                )
+                ui.button(
                     'Set height offset',
-                    lambda: run.io_bound(
-                        get_scanner().set_speaker_center_above_stool
-                        if get_scanner() else None,
-                        height_input.value,
+                    on_click=log_button_click(
+                        'Set height offset',
+                        lambda: run.io_bound(
+                            get_scanner().set_speaker_center_above_stool
+                            if get_scanner() else None,
+                            height_input.value,
+                        ),
                     ),
-                ),
-            )
-        scanner_app.greyable_buttons.append(ui.button(
-            'Zero NFS',
-            color='orange',
-            on_click=log_button_click(
-                'Zero NFS',
-                lambda: zero_nfs_then_apply_height_offset(height_input.value),
-            ),
-        ))
-
-        with ui.button_group():
-            scanner_app.greyable_buttons.append(ui.button(
-                'Start measurements',
-                on_click=log_button_click('Start measurements', async_task),
-            ))
+                )
+        with ui.row().classes('items-center gap-4 mt-1'):
             scanner_app.greyable_buttons.append(ui.button(
                 'Take single measurement',
                 on_click=log_button_click(
                     'Take single measurement',
                     async_single_measurement_task,
                 ),
-            ))
+            ).style('width: 260px'))
+
+        with ui.row().classes('items-center gap-4 mt-1'):
+            measurement_start_button = ui.button(
+                'Start Measurements',
+                on_click=log_button_click('Toggle measurement set', toggle_measurement_set),
+            ).props('icon=play_arrow color=primary').style('width: 260px')
+            measurement_stop_button = ui.button(
+                'Stop Measurements',
+                icon='stop',
+                on_click=log_button_click(
+                    'Stop measurement set',
+                    stop_measurement_set,
+                ),
+            ).props('color=negative').style('width: 260px')
+        _update_measurement_buttons()
 
         with ui.row().classes('items-center mt-1 gap-4'):
-            ui.button(
-                'Shutdown Program',
-                color='red',
-                on_click=log_button_click('Shutdown Program', stop_nfs),
-            )
             ui.button(
                 'Show Logs',
                 icon='list',
                 on_click=log_dialog.open,
-            ).classes('ml-2')
-
-        with ui.row().classes('w-full justify-start items-center gap-4'):
-            with ui.row().classes('gap-4 items-center'):
-                _build_position_card('R (Radius)', ' 888.88', ' 000.00', 'mm', 'r')
-                _build_position_card('P (Phi)', ' 888.88', ' 000.00', 'Deg', 't')
-                _build_position_card('Z (Height)', ' 888.88', ' 000.00', 'mm', 'z')
-                _build_position_card('Status', 'XXXXXXXX', '   -   ', 'Mode', 'state')
+            )
 
 
-def _build_position_card(title, ghost, value, unit, target):
+def _get_app_bool(key: str, fallback: bool = False) -> bool:
+    if scanner_app is None:
+        return fallback
+    parser = configparser.ConfigParser(inline_comment_prefixes=("#", ";"))
+    parser.read(scanner_app.config_file)
+    return parser.getboolean("app", key, fallback=fallback)
+
+
+def _show_machine_coordinate_system() -> bool:
+    return _get_app_bool("show_machine_coordinate_system", False)
+
+
+def apply_position_display_config() -> None:
+    show_mcs = _show_machine_coordinate_system()
+    for title in position_display_titles:
+        title.set_visibility(show_mcs)
+    if wcs_position_display is not None:
+        wcs_position_display.style(
+            'grid-template-columns: 36px repeat(4, minmax(0, 1fr));'
+            if show_mcs else
+            'grid-template-columns: repeat(4, minmax(0, 1fr));'
+        )
+    if mcs_position_display is not None:
+        mcs_position_display.set_visibility(show_mcs)
+
+
+def _build_position_display():
     global pos_r, pos_t, pos_z, pos_state
+    global mcs_pos_r, mcs_pos_t, mcs_pos_z, mcs_pos_state
+    global mcs_position_display, wcs_position_display, position_display_titles
 
-    card_classes = 'p-2 items-center bg-black rounded-lg border-2 border-gray-700 w-48'
-    label_classes = 'text-xs font-bold text-gray-300 uppercase tracking-widest mb-1'
-    bg_value_classes = 'text-4xl font-bold text-[#1a3300] absolute'
-    value_classes = 'text-4xl font-bold text-[#7eff00] relative'
-    value_style = "font-family: 'Share Tech Mono', monospace; white-space: pre;"
-    unit_classes = 'text-xs font-bold text-gray-400 mt-1'
+    display_style = (
+        'display: grid; '
+        'grid-template-columns: 36px repeat(4, minmax(0, 1fr)); '
+        'gap: 0; '
+        'max-width: 780px;'
+    )
+    housing_classes = (
+        'w-full mb-3 bg-black rounded-lg border-2 border-gray-700 '
+        'shadow-lg overflow-hidden'
+    )
 
-    with ui.card().classes(card_classes):
+    position_display_titles = []
+
+    with ui.element('div').classes(housing_classes).style(display_style) as display:
+        wcs_position_display = display
+        position_display_titles.append(
+            _build_position_title('WCS', text_class='text-lime-200')
+        )
+        pos_t = _build_position_readout(
+            'Phi deg', ' 888.88', ' 000.00'
+        )
+        pos_r = _build_position_readout(
+            'Radius mm', ' 888.88', ' 000.00'
+        )
+        pos_z = _build_position_readout(
+            'Height mm', ' 888.88', ' 000.00'
+        )
+        pos_state = _build_position_readout(
+            'Status mode', 'XXXXXXXX', '   -   '
+        )
+
+    with ui.element('div').classes(housing_classes).style(display_style) as display:
+        mcs_position_display = display
+        _build_position_title('MCS', text_class='text-orange-200')
+        mcs_pos_t = _build_position_readout(
+            'Phi deg', ' 888.88', ' 000.00', text_class='text-orange-400'
+        )
+        mcs_pos_r = _build_position_readout(
+            'Radius mm', ' 888.88', ' 000.00', text_class='text-orange-400'
+        )
+        mcs_pos_z = _build_position_readout(
+            'Height mm', ' 888.88', ' 000.00', text_class='text-orange-400'
+        )
+        mcs_pos_state = _build_position_readout(
+            'Status mode', 'XXXXXXXX', '   -   ', text_class='text-orange-400'
+        )
+
+    apply_position_display_config()
+
+
+def _build_position_title(title, text_class='text-gray-300'):
+    title_text = '<br>'.join(title)
+    return ui.html(title_text).classes(
+        f'h-full min-w-0 flex items-center justify-center text-xs font-bold '
+        f'{text_class} uppercase leading-tight border-r border-gray-800'
+    ).style(
+        "font-family: 'Share Tech Mono', monospace; letter-spacing: 0;"
+    )
+
+
+def _build_position_readout(title, ghost, value, text_class='text-[#7eff00]'):
+    label_classes = 'text-[0.68rem] font-bold text-gray-300 uppercase mb-1'
+    bg_value_classes = 'text-3xl font-bold text-[#1a3300] absolute inset-0'
+    value_classes = f'text-3xl font-bold {text_class} relative'
+    value_style = (
+        "font-family: 'Share Tech Mono', monospace; "
+        "white-space: pre; letter-spacing: 0;"
+    )
+
+    with ui.element('div').classes(
+        'min-w-0 px-2 py-1.5 text-center border-r border-gray-800 last:border-r-0'
+    ):
         ui.label(title).classes(label_classes)
-        with ui.element('div').classes('relative'):
+        with ui.element('div').classes('relative min-h-[34px] flex justify-center'):
             ui.label(ghost).classes(bg_value_classes).style(value_style)
             label = ui.label(value).classes(value_classes).style(value_style)
-        ui.label(unit).classes(unit_classes)
-
-    if target == 'r':
-        pos_r = label
-    elif target == 't':
-        pos_t = label
-    elif target == 'z':
-        pos_z = label
-    else:
-        pos_state = label
+    return label
 
 
 def initialize_app(config_file: str):
-    global scanner_app, log_handler
+    global scanner_app, log_handler, log_handler_sink_id
 
     scanner_app = ScannerApp(config_file)
     log_handler = LogBuffer()
+    log_handler_sink_id = None
     scanner_app.log_handler = log_handler
-    logger.add(
-        log_handler.write,
-        level="INFO",
-        format=(
-            "{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | "
-            "{name}:{function}:{line} - {message}"
-        ),
-    )
 
 
 async def load_app(status_label, finish_splash):
@@ -941,7 +1562,9 @@ async def load_app(status_label, finish_splash):
             return
 
         await run.io_bound(scanner_app.load_config, status_label.set_text)
-        status_label.set_text("Ready!")
+        status_label.set_text(
+            "Ready (scanner unavailable)" if scanner_app.load_warning else "Ready!"
+        )
 
         if get_scanner():
             get_scanner().set_on_state_update_callback(update_scanner_position)
@@ -952,6 +1575,8 @@ async def load_app(status_label, finish_splash):
             scanner_app.config_file,
             scanner_app.reload_config_ui,
         )
+        if scanner_app.load_warning:
+            ui.notify(scanner_app.load_warning, type='warning')
 
     except Exception as exc:
         logger.error(f"Initialization error: {exc}")

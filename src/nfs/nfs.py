@@ -1,5 +1,6 @@
 import configparser
 import shutil
+import threading
 import time
 from pathlib import Path
 from typing import Optional
@@ -51,6 +52,9 @@ class NearFieldScanner:
         self._position_log_file = position_log_file
         self._config_file = config_file
         self._project_dir = Path.cwd()
+        self._measurement_pause_requested = threading.Event()
+        self._measurement_stop_requested = threading.Event()
+        self._measurement_running = False
         self._clear_position_log()
 
     def _single_measurements_dir(self) -> Path:
@@ -107,11 +111,48 @@ class NearFieldScanner:
         """
         return self._audio.measure_ir(self._scanner.get_position(), "TEST", save=False)
 
+    def pause_measurement_set(self) -> None:
+        """Request a clean pause before the next measurement point."""
+        if self._measurement_running:
+            logger.info("Measurement set pause requested.")
+            self._measurement_pause_requested.set()
+
+    def resume_measurement_set(self) -> None:
+        """Resume a paused measurement set."""
+        logger.info("Measurement set resume requested.")
+        self._measurement_pause_requested.clear()
+
+    def stop_measurement_set(self) -> None:
+        """Request a clean stop before any further measurement points are taken."""
+        if self._measurement_running:
+            logger.info("Measurement set stop requested.")
+            self._measurement_stop_requested.set()
+            self._measurement_pause_requested.clear()
+
+    def is_measurement_set_running(self) -> bool:
+        return self._measurement_running
+
+    def is_measurement_set_paused(self) -> bool:
+        return self._measurement_pause_requested.is_set()
+
+    def _wait_while_measurement_paused(self) -> bool:
+        if self._measurement_pause_requested.is_set():
+            logger.info("Measurement set paused.")
+        while self._measurement_pause_requested.is_set():
+            if self._measurement_stop_requested.is_set():
+                return False
+            time.sleep(0.1)
+        return not self._measurement_stop_requested.is_set()
+
     def take_measurement_set(self, measurement_set_name: str | None = None, overwrite: bool = False) -> None:
         """
         Take a full set of measurements.
         :return: nothing
         """
+        self._measurement_pause_requested.clear()
+        self._measurement_stop_requested.clear()
+        self._measurement_running = True
+
         # 1. Setup this measurement set's output directory
         session_name = self._safe_measurement_set_name(measurement_set_name)
         measurement_dir = self._measurement_set_dir()
@@ -144,8 +185,16 @@ class NearFieldScanner:
             total = self._measurement_motion_manager.total_points()
             current = 0
             while not self._measurement_motion_manager.ready():
+                if not self._wait_while_measurement_paused():
+                    logger.info("Measurement set stopped before next point.")
+                    break
+
                 self._measurement_motion_manager.next()
                 if self._measurement_motion_manager.ready():
+                    break
+
+                if self._measurement_stop_requested.is_set():
+                    logger.info("Measurement set stopped after current move.")
                     break
 
                 current += 1
@@ -162,6 +211,9 @@ class NearFieldScanner:
             self._scanner.angular_move_to(0.0)
 
         finally:
+            self._measurement_running = False
+            self._measurement_pause_requested.clear()
+            self._measurement_stop_requested.clear()
             # 5. Cleanup: Restore paths and remove session log sink
             logger.info(f"Measurement set {session_name} complete.")
             logger.remove(sink_id)

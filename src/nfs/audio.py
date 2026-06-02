@@ -68,7 +68,12 @@ _METER_STATE = {
         {"rms_dbfs": -120.0, "peak_dbfs": -120.0, "clip": False},
         {"rms_dbfs": -120.0, "peak_dbfs": -120.0, "clip": False},
     ],
+    "a_weighted_inputs": [
+        {"rms_dbfs": -120.0, "peak_dbfs": -120.0, "clip": False},
+        {"rms_dbfs": -120.0, "peak_dbfs": -120.0, "clip": False},
+    ],
 }
+_A_WEIGHTING_FILTERS: Dict[int, Tuple[np.ndarray, np.ndarray]] = {}
 
 
 def _channel_meter(samples: np.ndarray) -> Dict[str, Any]:
@@ -96,6 +101,48 @@ def _two_channel_meters(frames: np.ndarray) -> List[Dict[str, Any]]:
     return meters
 
 
+def _a_weighting_filter(sample_rate: int) -> Tuple[np.ndarray, np.ndarray]:
+    cached = _A_WEIGHTING_FILTERS.get(sample_rate)
+    if cached is not None:
+        return cached
+
+    f1 = 20.598997
+    f2 = 107.65265
+    f3 = 737.86223
+    f4 = 12194.217
+    a1000 = 1.9997
+    nums = [
+        (2 * np.pi * f4) ** 2 * (10 ** (a1000 / 20)),
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+    ]
+    dens = np.polymul(
+        [1.0, 4 * np.pi * f4, (2 * np.pi * f4) ** 2],
+        [1.0, 4 * np.pi * f1, (2 * np.pi * f1) ** 2],
+    )
+    dens = np.polymul(np.polymul(dens, [1.0, 2 * np.pi * f3]), [1.0, 2 * np.pi * f2])
+    filt = scipy.signal.bilinear(nums, dens, sample_rate)
+    _A_WEIGHTING_FILTERS[sample_rate] = filt
+    return filt
+
+
+def _two_channel_a_weighted_meters(frames: np.ndarray, sample_rate: int) -> List[Dict[str, Any]]:
+    b, a = _a_weighting_filter(int(sample_rate))
+    if frames.ndim == 1:
+        frames = frames[:, None]
+    weighted = np.zeros((frames.shape[0], 2), dtype=np.float32)
+    for channel_index in range(2):
+        if channel_index < frames.shape[1]:
+            weighted[:, channel_index] = scipy.signal.lfilter(
+                b,
+                a,
+                frames[:, channel_index],
+            ).astype(np.float32)
+    return _two_channel_meters(weighted)
+
+
 def _role_frames(
     frames: np.ndarray,
     first_index: int,
@@ -116,6 +163,8 @@ def update_audio_meter_state(
     inputs: Optional[np.ndarray] = None,
     *,
     active: bool = True,
+    sample_rate: Optional[int] = None,
+    a_weighted_inputs: Optional[np.ndarray] = None,
 ) -> None:
     with _METER_LOCK:
         _METER_STATE["active"] = active
@@ -124,6 +173,13 @@ def update_audio_meter_state(
             _METER_STATE["outputs"] = _two_channel_meters(outputs)
         if inputs is not None:
             _METER_STATE["inputs"] = _two_channel_meters(inputs)
+            if a_weighted_inputs is not None:
+                _METER_STATE["a_weighted_inputs"] = _two_channel_meters(a_weighted_inputs)
+            elif sample_rate is not None:
+                _METER_STATE["a_weighted_inputs"] = _two_channel_a_weighted_meters(
+                    inputs,
+                    int(sample_rate),
+                )
 
 
 def reset_audio_meter_state(active: bool = False) -> None:
@@ -141,6 +197,7 @@ def get_audio_meter_state() -> Dict[str, Any]:
             "updated_at": float(_METER_STATE["updated_at"]),
             "outputs": [dict(item) for item in _METER_STATE["outputs"]],
             "inputs": [dict(item) for item in _METER_STATE["inputs"]],
+            "a_weighted_inputs": [dict(item) for item in _METER_STATE["a_weighted_inputs"]],
         }
 
 
@@ -1061,7 +1118,12 @@ class Audio(IAudio):
                     self.hw['ch_in_loop'],
                     self.hw['ch_in_mic'],
                 )
-            update_audio_meter_state(meter_out, meter_in, active=True)
+            update_audio_meter_state(
+                meter_out,
+                meter_in,
+                active=True,
+                sample_rate=self.hw['fs'],
+            )
 
             idx_play += n_out
             idx_rec += n_in
@@ -1197,6 +1259,21 @@ class Audio(IAudio):
         in_api = self._get_api_name(in_dev)
         use_asio_out = "ASIO" in out_api
         use_asio_in = "ASIO" in in_api
+        a_weight_b, a_weight_a = _a_weighting_filter(fs)
+        a_weight_zi = np.zeros((2, max(len(a_weight_a), len(a_weight_b)) - 1), dtype=np.float64)
+
+        def a_weight_inputs(meter_in: np.ndarray) -> np.ndarray:
+            nonlocal a_weight_zi
+            weighted = np.zeros_like(meter_in, dtype=np.float32)
+            for channel_index in range(min(2, meter_in.shape[1])):
+                filtered, a_weight_zi[channel_index] = scipy.signal.lfilter(
+                    a_weight_b,
+                    a_weight_a,
+                    meter_in[:, channel_index],
+                    zi=a_weight_zi[channel_index],
+                )
+                weighted[:, channel_index] = filtered.astype(np.float32)
+            return weighted
 
         in_ch_count = max(self.hw['ch_in_mic'], self.hw['ch_in_loop']) + 1
         if use_asio_in:
@@ -1262,7 +1339,13 @@ class Audio(IAudio):
                         self.hw['ch_in_loop'],
                         self.hw['ch_in_mic'],
                     )
-                update_audio_meter_state(meter_out, meter_in, active=True)
+                update_audio_meter_state(
+                    meter_out,
+                    meter_in,
+                    active=True,
+                    sample_rate=fs,
+                    a_weighted_inputs=a_weight_inputs(meter_in),
+                )
                 idx_play += n_out
                 if idx_play >= n:
                     done_evt.set()
@@ -1320,7 +1403,13 @@ class Audio(IAudio):
                         self.hw['ch_in_loop'],
                         self.hw['ch_in_mic'],
                     )
-                update_audio_meter_state(meter_out, meter_in, active=True)
+                update_audio_meter_state(
+                    meter_out,
+                    meter_in,
+                    active=True,
+                    sample_rate=fs,
+                    a_weighted_inputs=a_weight_inputs(meter_in),
+                )
 
             if use_asio_out:
                 out_args_extra = sd.AsioSettings(channel_selectors=[self.hw['ch_out_spkr'], self.hw['ch_out_ref']])

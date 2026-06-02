@@ -82,6 +82,10 @@ class Scanner:
         """Return the current cylindrical position."""
         return self._grbl_controller.get_position()
 
+    def get_machine_position(self) -> CylindricalPosition | None:
+        """Return the current machine-coordinate cylindrical position, if available."""
+        return self._grbl_controller.get_machine_position()
+
     def get_state(self) -> GrblMachineState:
         """Return the current normalized GRBL state (Idle/Run/Alarm/...)."""
         return self._grbl_controller.get_state()

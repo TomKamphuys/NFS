@@ -42,6 +42,14 @@ DEFAULT_CONFIG_FILENAME = "default_config.ini"
 # kind ∈ {"str", "int", "float", "bool", "choice", "opt_float"}
 SchemaEntry = Tuple[str, str, str, Optional[List[str]]]
 
+DISPLAY_LABELS = {
+    "show_machine_coordinate_system": "Show machine coordinates",
+    "show_rehome_button": "Show ReHome button",
+    "show_height_offset_controls": "Show height offset controls",
+    "default_project_dir": "Default session folder",
+    "use_alternative_motion_controls": "Use alternative motion controls",
+}
+
 # ---------------------------------------------------------------------------
 # Type-driven schemas for the polymorphic motion_manager / measurement-points
 # pair.
@@ -190,8 +198,16 @@ EDITABLE_SCHEMA: Dict[str, List[SchemaEntry]] = {
         ("retention", "str", "How long old logs are retained (e.g. '1 week').", None),
     ],
     "app": [
+        ("show_machine_coordinate_system", "bool",
+         "Show a second orange DRO row using machine coordinates alongside the work coordinates.", None),
+        ("show_rehome_button", "bool",
+         "Show the ReHome command button in the machine control pane.", None),
+        ("show_height_offset_controls", "bool",
+         "Show the height offset input and Set height offset command in the machine control pane.", None),
         ("default_project_dir", "str",
          "Default parent folder used to create new session folders.", None),
+        ("use_alternative_motion_controls", "bool",
+         "Use a compact alternative layout for machine motion controls.", None),
     ],
 }
 
@@ -244,7 +260,7 @@ def _format_for_ini(kind: str, value) -> str:
 
 
 def _build_input(key: str, kind: str, current: str, options: Optional[List[str]]):
-    label = key
+    label = DISPLAY_LABELS.get(key, key.replace("_", " ").title())
     if kind == "bool":
         return ui.switch(label, value=_parse_bool(current))
     if kind == "choice":
@@ -920,8 +936,27 @@ def open_config_editor(config_file: str, on_apply: Callable[[], None]) -> None:
                                 else:
                                     for key, kind, tooltip, options in EDITABLE_SCHEMA[section]:
                                         if not parser.has_option(section, key):
-                                            continue
-                                        raw = _strip_inline_comment(parser.get(section, key))
+                                            if (
+                                                section == "app"
+                                                and key in {
+                                                    "show_machine_coordinate_system",
+                                                    "show_rehome_button",
+                                                    "show_height_offset_controls",
+                                                "use_alternative_motion_controls",
+                                                }
+                                            ):
+                                                raw = (
+                                                    "True"
+                                                    if key in {
+                                                        "show_rehome_button",
+                                                        "show_height_offset_controls",
+                                                    }
+                                                    else "False"
+                                                )
+                                            else:
+                                                continue
+                                        else:
+                                            raw = _strip_inline_comment(parser.get(section, key))
                                         el = _build_input(key, kind, raw, options)
                                         el.tooltip(tooltip)
                                         static_inputs[(section, key)] = el

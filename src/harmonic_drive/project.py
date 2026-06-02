@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import configparser
 import json
+import math
 import shutil
 import tempfile
 from pathlib import Path
@@ -18,6 +19,11 @@ TEMP_PROJECT_DIR = Path(tempfile.gettempdir()) / "HALS_working_project"
 _project_dir = TEMP_PROJECT_DIR
 _project_data: Dict[str, Any] = {}
 _callbacks: list[Callable[[], None]] = []
+
+
+def _truncate_float(value: float, decimals: int) -> float:
+    factor = 10 ** decimals
+    return math.trunc(value * factor) / factor
 
 
 def sanitize_project_name(name: str) -> str:
@@ -226,24 +232,28 @@ def update_grid_vars(grid_vars: Dict[str, Any]) -> None:
 def build_spl_calibration(
     spl_db: Any,
     reference_input_rms_dbfs: Any,
+    spl_offset_db: Any = None,
 ) -> Optional[Dict[str, Optional[float]]]:
-    if spl_db is None:
+    if spl_db is None and spl_offset_db is None:
         return None
-    spl_db_float = float(spl_db)
+    spl_db_float = None if spl_db is None else float(spl_db)
     reference_float = (
         None
         if reference_input_rms_dbfs is None
         else float(reference_input_rms_dbfs)
     )
-    return {
-        "spl_db": spl_db_float,
-        "reference_input_rms_dbfs": reference_float,
-        "spl_offset_db": (
+    offset_float = (
+        float(spl_offset_db)
+        if spl_offset_db is not None
+        else (
             None
-            if reference_float is None
+            if spl_db_float is None or reference_float is None
             else spl_db_float - reference_float
-        ),
-    }
+        )
+    )
+    if offset_float is not None:
+        offset_float = _truncate_float(offset_float, 2)
+    return {"frd_db_offset": offset_float}
 
 
 def update_audio_setup(
@@ -255,4 +265,13 @@ def update_audio_setup(
     # measurement settings are captured in a saved project snapshot.
     _project_data["sweep_settings"] = sweep_settings
     if spl_calibration is not None:
-        _project_data["spl_calibration"] = spl_calibration
+        update_spl_calibration(spl_calibration)
+
+
+def update_spl_calibration(spl_calibration: Dict[str, Any]) -> None:
+    current = _project_data.get("stage5_vars")
+    if not isinstance(current, dict):
+        current = {}
+    current.update(spl_calibration)
+    _project_data["stage5_vars"] = current
+    _project_data.pop("spl_calibration", None)

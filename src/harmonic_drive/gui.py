@@ -96,6 +96,315 @@ ui.add_css("""
   color: #0b1220 !important;
   border: 1px solid #5d6b86 !important;
 }
+.alt-motion-panel {
+  width: min(100%, 780px);
+  box-sizing: border-box;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0;
+  padding: 0;
+  background: #000000;
+  border: 2px solid #374151;
+  border-radius: 8px;
+  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.22), 0 4px 6px -4px rgba(0, 0, 0, 0.22);
+  overflow: hidden;
+}
+.alt-top-grid {
+  display: grid;
+  grid-template-columns: 36px repeat(4, minmax(0, 1fr));
+  gap: 0;
+  align-items: stretch;
+  width: 100%;
+}
+.alt-jog-grid {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr);
+  gap: 0;
+  align-items: stretch;
+  width: 100%;
+}
+.alt-move-title,
+.alt-status-controls,
+.alt-axis-group {
+  border-right: 1px solid #1f2937;
+}
+.alt-move-title {
+  min-width: 0;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(96, 165, 250, 0.55);
+  font-size: 0.74rem;
+  font-weight: 800;
+  line-height: 1.15;
+  text-transform: uppercase;
+  font-family: 'Share Tech Mono', monospace;
+  letter-spacing: 0;
+}
+.alt-axis-group {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 7px 8px 8px 8px;
+}
+.alt-status-controls {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: center;
+  gap: 7px;
+  padding: 7px 0 8px 0;
+  border-right: 0;
+}
+.alt-status-spacer {
+  height: 0.83rem;
+}
+.alt-axis-label {
+  color: #d1d5db;
+  font-size: 0.72rem;
+  font-weight: 700;
+  line-height: 1.15;
+  text-transform: uppercase;
+  text-align: center;
+  letter-spacing: 0;
+}
+.alt-axis-header {
+  position: relative;
+  width: 100%;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px;
+  align-items: center;
+  color: #d1d5db;
+  font-size: 0.72rem;
+  font-weight: 700;
+  line-height: 1.15;
+  text-transform: uppercase;
+  text-align: center;
+  letter-spacing: 0;
+}
+.alt-axis-title {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  white-space: nowrap;
+}
+.alt-axis-sign {
+  color: #f9fafb;
+  font-size: 1.05rem;
+  font-weight: 900;
+  line-height: 1;
+  justify-self: center;
+}
+.alt-axis-buttons {
+  width: 100%;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px;
+}
+.alt-motion-btn {
+  width: 100%;
+  min-width: 0;
+  height: 44px;
+  min-height: 44px;
+  font-weight: 800;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
+}
+.alt-motion-btn .q-btn__content {
+  gap: 6px;
+}
+.alt-motion-btn .q-icon {
+  font-size: 30px;
+}
+.alt-jog-rows {
+  min-width: 0;
+  display: grid;
+  grid-template-rows: repeat(3, auto);
+  width: 100%;
+}
+.alt-jog-row {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 58px minmax(0, 1fr);
+  column-gap: 8px;
+  align-items: center;
+  padding: 8px 8px;
+  border-bottom: 1px solid #1f2937;
+}
+.alt-jog-row:last-child {
+  border-bottom: 0;
+}
+.alt-jog-axis {
+  min-width: 0;
+  height: 35px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: #d1d5db;
+  font-size: 0.68rem;
+  font-weight: 800;
+  line-height: 1.08;
+  text-align: center;
+  text-transform: uppercase;
+}
+.alt-jog-unit {
+  color: rgba(209, 213, 219, 0.82);
+  font-size: 0.6rem;
+  font-weight: 700;
+  margin-top: 3px;
+}
+.alt-jog-side {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 20px repeat(6, minmax(34px, 1fr));
+  gap: 7px;
+  align-items: center;
+}
+.alt-jog-side-right {
+  grid-template-columns: repeat(6, minmax(34px, 1fr)) 20px;
+}
+.alt-jog-direction {
+  color: #d1d5db;
+  font-size: 1.05rem;
+  font-weight: 800;
+  line-height: 1;
+  text-align: center;
+  text-transform: uppercase;
+}
+.alt-jog-steps {
+  min-width: 0;
+  display: contents;
+}
+.alt-jog-step-btn {
+  width: 100%;
+  min-width: 0;
+  color: #ffffff !important;
+  border: 1px solid rgba(255, 255, 255, 0.16) !important;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+}
+.alt-step-row,
+.alt-command-row {
+  width: 100%;
+  box-sizing: border-box;
+  display: grid;
+  align-items: center;
+  border-top: 1px solid #1f2937;
+  padding: 7px 18px 0 54px;
+}
+.alt-step-row {
+  position: relative;
+  grid-template-columns: repeat(7, 48px);
+  gap: 8px;
+  min-height: 42px;
+  padding-top: 7px;
+  padding-bottom: 7px;
+  justify-content: center;
+  padding-left: 18px;
+  padding-right: 18px;
+}
+.alt-step-label {
+  position: absolute;
+  right: calc(50% + 200px);
+  top: 50%;
+  transform: translateY(-50%);
+  width: 78px;
+  color: #d1d5db;
+  font-size: 0.72rem;
+  font-weight: 700;
+  line-height: 1.15;
+  text-transform: uppercase;
+  text-align: center;
+  letter-spacing: 0;
+}
+.alt-step-btn {
+  width: 48px;
+  height: 35px;
+  min-height: 35px;
+  padding: 0;
+  font-size: 0.86rem;
+  font-weight: 800;
+}
+.alt-command-row {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  padding: 7px 24px 10px 24px;
+}
+.alt-command-row-5 {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+.alt-command-row-6 {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+.alt-command-btn {
+  width: 100%;
+  justify-self: center;
+  height: 45px;
+  min-height: 45px;
+  padding: 0 10px;
+  font-size: 0.86rem;
+  font-weight: 800;
+}
+.alt-command-btn .q-btn__content {
+  gap: 8px;
+  flex-wrap: nowrap;
+}
+.alt-command-btn .block {
+  line-height: 1.05;
+}
+.alt-command-btn .q-icon {
+  font-size: 21px;
+}
+.alt-status-controls .alt-command-btn {
+  width: calc(100% - 24px);
+  align-self: center;
+  height: 44px;
+  min-height: 44px;
+  font-size: 0.86rem;
+}
+.alt-status-controls .alt-command-btn .q-icon {
+  font-size: 21px;
+}
+.session-header {
+  position: relative;
+  overflow: hidden;
+  background-image:
+    linear-gradient(90deg, rgba(4, 10, 18, 0.88), rgba(8, 18, 30, 0.68) 42%, rgba(4, 10, 18, 0.9)),
+    url('/images/bar_bg2.png');
+  background-size: cover;
+  background-position: 50% 50%;
+  border-radius: 8px;
+  color: #f8fafc;
+}
+.session-header::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-bottom: 1px solid rgba(125, 211, 252, 0.35);
+  box-shadow: inset 0 -12px 24px rgba(14, 165, 233, 0.16);
+}
+.session-header > * {
+  position: relative;
+  z-index: 1;
+}
+.session-header .q-field--outlined .q-field__control {
+  background: rgba(248, 250, 252, 0.9);
+}
+.session-header .q-field--readonly .q-field__control::before {
+  border-style: solid;
+}
+.session-header .q-field__native,
+.session-header .q-field__input {
+  color: #111827;
+}
 .side-menu-button .q-btn__content {
   display: flex;
   flex-wrap: nowrap;
@@ -246,11 +555,13 @@ def main_page():
     log_dialog = control.build_log_dialog()
 
     with ui.column().classes('w-full h-screen min-h-0 gap-0'):
-        with ui.row().classes('w-full h-14 shrink-0 items-center gap-3 px-3 bg-gray-100 border-b border-gray-300'):
+        with ui.row().classes(
+            'session-header h-14 shrink-0 items-center gap-3 px-3 mx-2 mt-2'
+        ).style('width: calc(100% - 1rem);'):
             menu_button = ui.button(icon='menu').props('flat round dense')
-            ui.label('HALS Control').classes('text-lg font-bold text-gray-800')
+            ui.label('HALS Control').classes('text-lg font-bold text-white')
             ui.element('div').classes('w-6')
-            ui.label('Session Folder').classes('text-sm font-semibold text-gray-600')
+            ui.label('Session Folder').classes('text-sm font-semibold text-slate-100')
             project_path_input = ui.input(
                 value=NO_SESSION_FOLDER_TEXT,
             ).props('dense outlined readonly').classes('w-[360px] max-w-[34vw]')
@@ -259,7 +570,7 @@ def main_page():
                 icon='folder_open',
                 on_click=lambda: select_session_folder(),
             ).props('color=primary dense')
-            ui.label('Save Name').classes('text-sm font-semibold text-gray-600')
+            ui.label('Save Name').classes('text-sm font-semibold text-slate-100')
             project_title_input = ui.input(value=project.get_project_name()).props('dense outlined').classes('w-48')
 
             def session_folder_value() -> str | None:
@@ -276,7 +587,9 @@ def main_page():
                 selected = await _browse_measurement_folder(
                     project_path_input,
                     project_title_input,
-                    on_project_loaded=(lambda: rebuild_grid_panel()) if rebuild else None,
+                    on_project_loaded=(
+                        lambda: rebuild_grid_panel()
+                    ) if rebuild else None,
                 )
                 return selected
 
@@ -369,6 +682,13 @@ def main_page():
                             'Settings',
                             icon='settings',
                         ).props('flat align=left no-caps').classes('side-menu-button w-full h-10 justify-start text-sm')
+                        shutdown_button = ui.button(
+                            'Shutdown Program',
+                            icon='power_settings_new',
+                            on_click=control.shutdown_from_ui,
+                        ).props('flat align=left no-caps color=negative').classes(
+                            'side-menu-button w-full h-10 justify-start text-sm'
+                        )
                     menu_visible = {'value': True}
 
                     def toggle_menu():
@@ -385,14 +705,43 @@ def main_page():
                         machine_panel = ui.column().classes('w-full h-full min-w-0 overflow-auto')
                         audio_panel = ui.column().classes('w-full h-full min-w-0 overflow-auto')
 
-                        with machine_panel:
-                            control.build_control_pane(log_dialog)
-                        with audio_panel:
-                            audio_setup.build_audio_setup_pane(
-                                control.scanner_app.config_file,
-                                show_live_capture=lambda: show_live_capture(),
-                            )
+                        def cancel_panel_timers(panel):
+                            descendants = getattr(panel, "descendants", None)
+                            elements = descendants() if callable(descendants) else []
+                            for element in list(elements):
+                                cancel = getattr(element, "cancel", None)
+                                if callable(cancel):
+                                    try:
+                                        cancel()
+                                    except Exception:
+                                        pass
+
+                        def rebuild_machine_panel():
+                            was_visible = machine_panel.visible
+                            cancel_panel_timers(machine_panel)
+                            machine_panel.clear()
+                            control.scanner_app.greyable_buttons = []
+                            with machine_panel:
+                                control.build_control_pane(log_dialog)
+                            machine_panel.set_visibility(False)
+                            machine_panel.set_visibility(was_visible)
+
+                        rebuild_machine_panel()
+
+                        def rebuild_audio_panel():
+                            was_visible = audio_panel.visible
+                            cancel_panel_timers(audio_panel)
+                            audio_panel.clear()
+                            with audio_panel:
+                                audio_setup.build_audio_setup_pane(
+                                    control.scanner_app.config_file,
+                                    show_live_capture=lambda: show_live_capture(),
+                                )
                             audio_panel.set_visibility(False)
+                            audio_panel.set_visibility(was_visible)
+
+                        rebuild_audio_panel()
+                        audio_panel.set_visibility(False)
 
             with splitter.after:
                 with ui.element('div').classes('w-full h-full min-h-0 min-w-0 overflow-hidden'):
@@ -428,6 +777,7 @@ def main_page():
 
                     def rebuild_grid_panel():
                         was_visible = grid_panel.visible
+                        cancel_panel_timers(grid_panel)
                         grid_panel.clear()
                         with grid_panel:
                             build_grid_gen_ui(
@@ -439,6 +789,8 @@ def main_page():
                             )
                         grid_panel.set_visibility(False)
                         grid_panel.set_visibility(was_visible)
+
+                    project.on_project_changed(rebuild_audio_panel)
 
                     with grid_panel:
                         rebuild_grid_panel()
@@ -455,6 +807,7 @@ def main_page():
                         hide_menu()
 
                     def show_audio_setup():
+                        rebuild_audio_panel()
                         machine_panel.set_visibility(False)
                         audio_panel.set_visibility(True)
                         show_live_capture()
@@ -485,9 +838,15 @@ def main_page():
                         clear_button_colors()
                         settings_button.props('color=primary')
                         hide_menu()
+
+                        def apply_settings():
+                            control.scanner_app.reload_config_ui()
+                            rebuild_machine_panel()
+                            rebuild_audio_panel()
+
                         open_config_editor(
                             control.scanner_app.config_file,
-                            control.scanner_app.reload_config_ui,
+                            apply_settings,
                         )
 
                     live_capture_button.on('click', show_live_capture)

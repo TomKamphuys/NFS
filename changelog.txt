@@ -1,24 +1,73 @@
+
+--------
+31/05/26
+--------
+Updated  Machine Control and Audio Setup.
+
+Machine Control:
+
+Now uses a single DRO frame above the motion controls.
+An optional MCS row can be shown alongside the normal WCS row, with a toggle
+to enable / dissable in app settings.
+
+Updated the machine motion and command controls. Two motion-control layouts can
+be toggled in Settings: the default layout gives direct per-axis step-size
+access for Phi, Radius, and Height, while the alternative layout uses simpler
+direction buttons with a global step-size selection.
+
+Measurement-set controls now use one button for Start, Pause,
+and Resume, plus a separate Stop button. Pause waits at clean measurement point
+boundaries before the next position or sweep, while Stop cancels further points
+and returns through the existing safe scanner return sequence.
+
+The control pane layout is configurable from Settings without restarting the
+app. ReHome and hight offset controls are hidden by default. Shutdown Program
+now lives in the left menu under Settings.
+
+Scanner connection failures no longer prevent unrelated app features from
+loading. Missing or invalid COM ports now produce a clear warning
+but let the app run. A short GRBL response timeout avoids
+hanging on incorrect but valid COM ports.
+
+Audio Setup now has an explicit microphone SPL calibration workflow: it shows a
+held A-weighted mic reading, accepts a physical SPL meter reading, calculates and
+saves the SPL offset only when Calibrate is pressed, and also allows manually
+entering a known offset.
+
+Live Capture audio meters are labelled from -60 dB to
+0 dB, use RMS for the main bar, and show a slow-decay red peak marker. The
+sine generator play button switches to a stop icon while the tone is playing.
+
+Files touched:
+src/harmonic_drive/control.py
+src/harmonic_drive/gui.py
+src/harmonic_drive/config_editor.py
+src/harmonic_drive/audio_setup.py
+src/harmonic_drive/live_capture.py
+src/harmonic_drive/project.py
+src/nfs/audio.py
+src/nfs/grbl_controller.py
+src/nfs/nfs.py
+src/nfs/scanner.py
+tests/test_grbl_controller.py
+tests/test_near_field_scanner.py
+tests/test_project.py
+config.ini
+default_config.ini
+
 --------
 30/05/26
 --------
-Added fixed optional Grid Generator waypoints for post-processing visual
-setup: Reference Origin, Baffle Bottom Left, Baffle Top Left, and Baffle Top
-Right. The waypoint controls are arranged in two columns, with the original Top,
-Bottom, and Tweeter points on the left and the optional visualisation points on
-the right. The dynamic user-position add/remove buttons remain under the left
-column, while Total Points and Azimuth Density sit under the right column.
-The baffle corner UI labels are shortened to Baffle Bot L, Baffle Top L, and
-Baffle Top R so larger coordinate values fit more comfortably.
-Reference Origin is labelled as Ref Origin in the UI. The waypoint panel now
-notes that Top, Bottom, and Tweeter are required, while Ref Origin, baffle
-corners, and additional points aid exported response-data visualisation. The
-add/remove controls are labelled as Additional points.
-The generated CSV metadata payload now includes ref_origin_pos,
-baffle_bot_l_pos, baffle_top_l_pos, and baffle_top_r_pos so the visualisation
-waypoints are available alongside the existing top, bottom, tweeter, and
-user-position metadata.
-Added regression coverage confirming dynamic user_position_* entries are
-preserved in the final planned CSV output.
+Added optional Grid Generator visualisation waypoints for post-processing:
+Ref Origin plus the baffle bottom-left, top-left, and top-right corners. The
+three baffle corner waypoints support visualisation of a sloped baffle plane.
+The waypoint UI is now split into required measurement points and optional
+visualisation points, with additional user markers still supported.
+
+Generated grid CSV metadata now includes the reference-origin and baffle-corner
+positions alongside the existing top, bottom, tweeter, and user-position
+metadata. Added regression coverage for preserving dynamic user_position_*
+entries in planned CSV output.
 
 Files touched:
 HALS_Projects/HALS_Test_Session/HALS_Test_Session_grid.csv
