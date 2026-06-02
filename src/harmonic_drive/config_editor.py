@@ -47,6 +47,7 @@ DISPLAY_LABELS = {
     "show_rehome_button": "Show ReHome button",
     "show_height_offset_controls": "Show height offset controls",
     "default_project_dir": "Default session folder",
+    "cal_tool_height": "Calibration tool height (mm)",
     "use_alternative_motion_controls": "Use alternative motion controls",
 }
 
@@ -177,6 +178,10 @@ EDITABLE_SCHEMA: Dict[str, List[SchemaEntry]] = {
     "scanner": [
         ("feed_rate", "int",
          "GRBL feed rate (mm/min) used for moves between measurement points.", None),
+        ("cal_tool_height", "float",
+         "Height of the calibration tool used when setting WCS zero. The current "
+         "machine height is assigned this value, placing WCS Z0 below it.",
+         None),
     ],
     "grbl_streamer": [
         ("type", "choice",
@@ -587,8 +592,12 @@ def _build_scanner_panel(parser, static_inputs: Dict[Tuple[str, str], object]) -
     ui.label("Scanner").classes("text-base font-semibold")
     for key, kind, tooltip, options in EDITABLE_SCHEMA["scanner"]:
         if not parser.has_option("scanner", key):
-            continue
-        raw = _strip_inline_comment(parser.get("scanner", key))
+            if key == "cal_tool_height":
+                raw = "0.0"
+            else:
+                continue
+        else:
+            raw = _strip_inline_comment(parser.get("scanner", key))
         el = _build_input(key, kind, raw, options)
         el.tooltip(tooltip)
         static_inputs[("scanner", key)] = el

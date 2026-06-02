@@ -11,7 +11,12 @@ class Scanner:
     Controls the movement of a scanner in cylindrical coordinates (radial, angular, vertical).
     Combines planar and angular movement capabilities and manages scanner's position.
     """
-    def __init__(self, grbl_controller: IGrblController, feed_rate):
+    def __init__(
+        self,
+        grbl_controller: IGrblController,
+        feed_rate,
+        cal_tool_height: float = 0.0,
+    ):
         """
         Initialize the Scanner with a controller and feed rate.
 
@@ -20,6 +25,7 @@ class Scanner:
         """
         self._grbl_controller = grbl_controller
         self._feed_rate = feed_rate
+        self._cal_tool_height = cal_tool_height
 
     def radial_move_to(self, r: float) -> None:
         """Move to the specified radial position."""
@@ -126,10 +132,20 @@ class Scanner:
         """Reset scanner Work Coordinate System (Persistent)."""
         # G10 L20 P2 sets the CURRENT position as the zero point for G55 (P2).
         # Unlike G92, this is saved to EEPROM and survives restarts.
+        # Vertical scanner height maps to GRBL X. If a calibration tool is
+        # fitted, the current tool-top position should read as that height so
+        # WCS Z0 is below it by the tool height.
         self._grbl_controller.force_position_update()
 
-        self._grbl_controller.send(f'G10 L20 P2 X0 Y0 Z0')  # G55
-        self._grbl_controller.send(f'G10 L20 P1 X0 Y0 Z0')  # G54
+        self._grbl_controller.send(
+            f'G10 L20 P2 X{self._cal_tool_height:.4f} Y0 Z0'
+        )  # G55
+        self._grbl_controller.send(
+            f'G10 L20 P1 X{self._cal_tool_height:.4f} Y0 Z0'
+        )  # G54
+        logger.info(
+            f"WCS zero set with {self._cal_tool_height:g} mm calibration tool height"
+        )
 
     def set_speaker_center_above_stool(self, height: float) -> None:
         """
@@ -230,10 +246,15 @@ class ScannerFactory:
         grbl_section = config_parser.get(section, 'controller')
         grbl_controller = GrblControllerFactory.create(grbl_section, config_file)
         feed_rate = config_parser.getfloat(section, 'feed_rate')
+        cal_tool_height = config_parser.getfloat(
+            section,
+            'cal_tool_height',
+            fallback=0.0,
+        )
 
         # If a scanner instance already exists, we might want to just update its feed_rate
         # but for simplicity and to follow "reloadable" request, we create a new Scanner
         # wrapping the SAME grbl_controller (which is a singleton).
-        scanner = Scanner(grbl_controller, feed_rate)
+        scanner = Scanner(grbl_controller, feed_rate, cal_tool_height)
 
         return scanner

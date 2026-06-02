@@ -823,6 +823,8 @@ async def safe_move(func, *args):
 
 async def zero_nfs_then_apply_height_offset(height_value: float):
     await run.io_bound(get_scanner().set_as_zero)
+    if not height_value:
+        return
     await run.io_bound(
         get_scanner().set_speaker_center_above_stool,
         height_value,

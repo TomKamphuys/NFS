@@ -145,6 +145,7 @@ def test_on_ok_scanner_grbl_connection_fields(tmp_path):
     config_file.write_text(
         "[scanner]\n"
         "feed_rate = 35000\n"
+        "cal_tool_height = 0.0\n"
         "\n"
         "[grbl_streamer]\n"
         "type = Mock\n"
@@ -163,8 +164,11 @@ def test_on_ok_scanner_grbl_connection_fields(tmp_path):
     com_port.value = "COM8"
     baudrate = MagicMock()
     baudrate.value = "250000"
+    cal_tool_height = MagicMock()
+    cal_tool_height.value = "30.0"
 
     static_inputs = {
+        ("scanner", "cal_tool_height"): cal_tool_height,
         ("grbl_streamer", "type"): grbl_type,
         ("grbl_streamer", "baudrate"): baudrate,
         ("windows", "port"): com_port,
@@ -181,10 +185,12 @@ def test_on_ok_scanner_grbl_connection_fields(tmp_path):
     assert saved.get("grbl_streamer", "type") == "Arduino"
     assert saved.get("grbl_streamer", "baudrate") == "250000"
     assert saved.get("windows", "port") == "COM8"
+    assert saved.get("scanner", "cal_tool_height") == "30.0"
     assert not saved.has_option("scanner", "type")
     assert not saved.has_option("scanner", "port")
     dialog.close.assert_called_once()
     on_apply.assert_called_once()
+
 
 def test_on_ok_motion_manager_dynamic(tmp_path):
     config_file = tmp_path / "config.ini"

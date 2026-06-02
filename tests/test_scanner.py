@@ -1,7 +1,7 @@
 from unittest.mock import Mock, call
 import pytest
 from nfs.datatypes import CylindricalPosition, GrblMachineState
-from nfs.scanner import Scanner
+from nfs.scanner import Scanner, ScannerFactory
 
 
 @pytest.fixture
@@ -123,8 +123,47 @@ def test_set_as_zero(scanner, mock_grbl):
     scanner.set_as_zero()
     # mock_grbl.force_position_update.assert_called_once()
     mock_grbl.send.assert_has_calls([
-        call('G10 L20 P2 X0 Y0 Z0'),
-        call('G10 L20 P1 X0 Y0 Z0')
+        call('G10 L20 P2 X0.0000 Y0 Z0'),
+        call('G10 L20 P1 X0.0000 Y0 Z0')
+    ])
+
+
+def test_set_as_zero_applies_cal_tool_height(mock_grbl):
+    scanner = Scanner(mock_grbl, feed_rate=1000, cal_tool_height=30.0)
+
+    scanner.set_as_zero()
+
+    mock_grbl.send.assert_has_calls([
+        call('G10 L20 P2 X30.0000 Y0 Z0'),
+        call('G10 L20 P1 X30.0000 Y0 Z0'),
+    ])
+
+
+def test_scanner_factory_reads_cal_tool_height(tmp_path, monkeypatch):
+    config_file = tmp_path / "config.ini"
+    config_file.write_text(
+        "[scanner]\n"
+        "controller = grbl_streamer\n"
+        "feed_rate = 1000\n"
+        "cal_tool_height = 30.0\n"
+        "\n"
+        "[grbl_streamer]\n"
+        "type = Mock\n"
+    )
+    mock_controller = Mock()
+
+    monkeypatch.setattr(
+        "nfs.scanner.GrblControllerFactory.create",
+        lambda _section, _config_file: mock_controller,
+    )
+    monkeypatch.setattr("nfs.scanner.setup_logging", lambda _config_file: None)
+
+    scanner = ScannerFactory.create(str(config_file))
+
+    scanner.set_as_zero()
+    mock_controller.send.assert_has_calls([
+        call('G10 L20 P2 X30.0000 Y0 Z0'),
+        call('G10 L20 P1 X30.0000 Y0 Z0'),
     ])
 
 

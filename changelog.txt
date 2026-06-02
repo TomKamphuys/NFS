@@ -2,6 +2,24 @@
 --------
 02/06/26
 --------
+Added scanner calibration tool height. The WCS zero command can now account for
+a fixed calibration tool height so the true Z zero is below the current machine
+position by the configured calibration tool height.
+
+Updated tests.
+
+Files touched:
+src/nfs/scanner.py
+src/harmonic_drive/config_editor.py
+tests/test_scanner.py
+tests/test_config_editor.py
+tests/test_control.py
+config.ini
+
+
+--------
+02/06/26
+--------
 Swapped Phi + and - symbols for CCW and CW labels.
 
 --------
