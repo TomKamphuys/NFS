@@ -1,4 +1,5 @@
 import argparse
+import multiprocessing
 import os
 import sys
 
@@ -228,6 +229,15 @@ def main_page():
 
 
 def main():
+    # Required for NiceGUI's native (pywebview) mode when running as a frozen
+    # PyInstaller executable: ``mp.Process`` is used to spawn the pywebview
+    # window in a child process, and on Windows ``freeze_support`` must be
+    # called at the very start of ``main`` so the child process re-enters the
+    # bootstrap correctly. Without this, the child process never opens the
+    # native window and the app silently falls back to "ready to go on
+    # http://127.0.0.1:8000" with no GUI window visible to the user.
+    multiprocessing.freeze_support()
+
     parser = argparse.ArgumentParser(description='Near-field scanner UI')
     parser.add_argument(
         '--config',
