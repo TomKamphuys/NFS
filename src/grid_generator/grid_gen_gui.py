@@ -381,4 +381,4 @@ if __name__ in {"__main__", "__mp_main__"}:
         build_grid_gen_ui()
         
     # Run the app
-    ui.run(title="Coord Viewer Plotly Demo", port=8080, dark=False)
+    ui.run(title="Coord Viewer Plotly Demo", port=8080, dark=False, native=True)

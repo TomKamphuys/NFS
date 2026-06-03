@@ -7,6 +7,16 @@ from loguru import logger
 
 _initialized = False
 
+# On Windows, prevent every `git ...` invocation from briefly flashing a
+# console window when the host process is a windowed (no-console) PyInstaller
+# build. Without this flag, each subprocess.check_output() call allocates a
+# fresh console because the parent has none — producing the "6-8 terminal-like
+# windows flashing by during startup" symptom users reported.
+if sys.platform == "win32":
+    _NO_WINDOW_KWARGS = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)}
+else:
+    _NO_WINDOW_KWARGS = {}
+
 
 def get_git_info(repo_path: str = None):
     """
@@ -15,23 +25,32 @@ def get_git_info(repo_path: str = None):
     :param repo_path: Path to the git repository.
     :return: A dictionary with version, branch, commit, and status, or None if failed.
     """
+    # In a frozen (PyInstaller) build there is no git repository next to the
+    # executable, so every `git` call would fail anyway — and on Windows each
+    # failed invocation still flashes a console window. Skip outright.
+    if getattr(sys, "frozen", False):
+        return None
     try:
         # Get branch name
-        branch = subprocess.check_output(['git', 'rev-parse', '--abbrev-ref', 'HEAD'], 
-                                         stderr=subprocess.DEVNULL, cwd=repo_path).decode().strip()
+        branch = subprocess.check_output(['git', 'rev-parse', '--abbrev-ref', 'HEAD'],
+                                         stderr=subprocess.DEVNULL, cwd=repo_path,
+                                         **_NO_WINDOW_KWARGS).decode().strip()
         # Get commit hash
-        commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], 
-                                         stderr=subprocess.DEVNULL, cwd=repo_path).decode().strip()
+        commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'],
+                                         stderr=subprocess.DEVNULL, cwd=repo_path,
+                                         **_NO_WINDOW_KWARGS).decode().strip()
         # Check for dirty status
-        status = subprocess.check_output(['git', 'status', '--porcelain'], 
-                                         stderr=subprocess.DEVNULL, cwd=repo_path).decode().strip()
+        status = subprocess.check_output(['git', 'status', '--porcelain'],
+                                         stderr=subprocess.DEVNULL, cwd=repo_path,
+                                         **_NO_WINDOW_KWARGS).decode().strip()
         is_dirty = "DIRTY" if status else "CLEAN"
-        
+
         # Get human-readable version (tags)
         try:
-            version = subprocess.check_output(['git', 'describe', '--tags', '--always'], 
-                                              stderr=subprocess.DEVNULL, cwd=repo_path).decode().strip()
-        except:
+            version = subprocess.check_output(['git', 'describe', '--tags', '--always'],
+                                              stderr=subprocess.DEVNULL, cwd=repo_path,
+                                              **_NO_WINDOW_KWARGS).decode().strip()
+        except Exception:
             version = commit[:7]
 
         return {

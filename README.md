@@ -87,7 +87,41 @@ uv sync --no-dev
 ```bash
 uv run harmonic-drive
 ```
-The UI will be automatically opened. In case it isn't, it is accessible at `http://localhost:8080`.
+The UI will be automatically opened in a native window. In case it isn't, it is accessible at `http://localhost:8080`.
+
+---
+
+## 📦 Building a standalone application (PyInstaller)
+
+End-users do not need Python or `uv` installed — a packaged executable can be
+produced with [PyInstaller](https://pyinstaller.org/).
+
+### Build it locally (Windows)
+
+```bash
+uv sync --all-groups
+uv run pyinstaller packaging/nfs.spec --noconfirm --clean
+```
+
+The build output lands in `dist/nfs/`. Ship that **entire folder** (not just
+`nfs.exe`): it contains `config.ini`, the bundled `images/` and
+`images_grid_gen/` assets, every `nfs.plugins.*` module, and the NiceGUI /
+Plotly / pywebview / PortAudio runtime resources. Users can edit
+`config.ini` next to the executable to point at their own hardware.
+
+### Automated builds via GitHub Actions
+
+The workflow [`.github/workflows/build.yml`](.github/workflows/build.yml)
+runs the same PyInstaller command on `windows-latest` for every push to
+`master`, every pull request, and every `v*` tag:
+
+- Each run uploads `nfs-windows-<ref>.zip` as a downloadable workflow
+  **artifact** (Actions tab → run → Artifacts).
+- Pushing a tag like `v0.2.0` additionally publishes a **GitHub Release**
+  with the zip attached, so end-users can simply download and unzip.
+
+Build directories (`build/`, `dist/`, ad-hoc `*.spec` files at the repo
+root) are git-ignored, so committing after a local build stays clean.
 
 
 ## Use Pycharm (currently mostly used as development is still causing rapid changes)

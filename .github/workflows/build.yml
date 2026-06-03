@@ -1,0 +1,65 @@
+name: Build Windows executable
+
+# Builds a standalone PyInstaller distribution of the HALS / NFS GUI on every
+# push to ``master`` and for tagged releases.  The resulting zip is published
+# as a workflow artifact and, for tags starting with ``v``, attached to a
+# GitHub Release.
+on:
+  push:
+    branches: [master]
+    tags: ['v*']
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13.5'
+          cache: 'pip'
+
+      - name: Install project and build dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          # Install the project itself (so entry points and package_data are
+          # resolvable) together with PyInstaller.
+          pip install . pyinstaller
+
+      - name: Build with PyInstaller
+        shell: pwsh
+        run: |
+          pyinstaller packaging/nfs.spec --noconfirm --clean
+
+      - name: Package distribution as zip
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}"
+          if ([string]::IsNullOrEmpty($version)) { $version = "dev" }
+          # github.ref_name can contain characters that aren't valid in file
+          # names (e.g. "31/merge" for pull requests). Replace anything that
+          # isn't alphanumeric / dot / dash / underscore with a dash so the
+          # resulting zip path is always a valid Windows file name.
+          $version = $version -replace '[^A-Za-z0-9._-]', '-'
+          Compress-Archive -Path dist/nfs/* -DestinationPath "dist/nfs-windows-$version.zip"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nfs-windows
+          path: dist/nfs-windows-*.zip
+          if-no-files-found: error
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/nfs-windows-*.zip
