@@ -511,7 +511,7 @@ class ESP32Duino(IGrblController):
     :type _connection: ClientConnection
     """
     UNLOCK_COMMAND = "$X"  # Command to unlock and clear any alarm
-    ACK_TIMEOUT_S = 3.0
+    PROBE_ACK_TIMEOUT_S = 3.0
 
     def __init__(self, connection: GrblStreamerClientConnection) -> None:
         """
@@ -524,7 +524,7 @@ class ESP32Duino(IGrblController):
 
     def _unlock(self) -> None:
         """Initialize the connection by unlocking and clearing the buffer."""
-        self.send(self.UNLOCK_COMMAND)
+        self.send(self.UNLOCK_COMMAND, ack_timeout_s=self.PROBE_ACK_TIMEOUT_S)
 
     def shutdown(self) -> None:
         """
@@ -538,15 +538,16 @@ class ESP32Duino(IGrblController):
         logger.info('Disconnecting from GRBL device')
         self._connection.close()
 
-    def send(self, message: str) -> None:
+    def send(self, message: str, ack_timeout_s: Optional[float] = None) -> None:
         """
         Send a G-code command and wait for acknowledgment.
 
         :param message: The command to send.
+        :param ack_timeout_s: Optional timeout for startup/probe commands only.
         """
         self._connection.send(message + '\n')
         logger.trace(f'Sending message to GRBL device: {message}')
-        self._wait_for_ack()
+        self._wait_for_ack(ack_timeout_s)
 
     def _send_immediate(self, message: str) -> None:
         """
@@ -647,12 +648,12 @@ class ESP32Duino(IGrblController):
         """
         self._connection.set_on_state_update_callback(callback)
 
-    def _wait_for_ack(self, timeout_s: float = ACK_TIMEOUT_S) -> None:
+    def _wait_for_ack(self, timeout_s: Optional[float] = None) -> None:
         """
         Wait until an 'ok' acknowledgment is received from the hardware.
         """
-        deadline = time.monotonic() + timeout_s
-        while time.monotonic() < deadline:
+        deadline = time.monotonic() + timeout_s if timeout_s is not None else None
+        while deadline is None or time.monotonic() < deadline:
             time.sleep(0.01)
             result = self._receive().rstrip()
             if result != "":

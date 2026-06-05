@@ -161,8 +161,8 @@ def test_esp32_duino_initialization_times_out_without_grbl_response(monkeypatch)
 
 def test_esp32_duino_send():
     mock_conn = Mock()
-    # 1. Init: _unlock calls send which calls _wait_for_ack. Need "ok".
-    # 2. Test send("G0 X10"): calls _wait_for_ack. Need "ok".
+    # 1. Init: _unlock calls send with a probe timeout. Need "ok".
+    # 2. Test send("G0 X10"): waits for ack without a movement timeout. Need "ok".
     mock_conn.receive.side_effect = ["ok", "", "ok"]
 
     controller = ESP32Duino(mock_conn)
@@ -171,6 +171,21 @@ def test_esp32_duino_send():
     controller.send("G0 X10")
     mock_conn.send.assert_called_with("G0 X10\n")
     assert mock_conn.receive.call_count >= 3
+
+
+def test_esp32_duino_send_does_not_use_probe_timeout(monkeypatch):
+    mock_conn = Mock()
+    mock_conn.receive.return_value = "ok"
+    controller = ESP32Duino.__new__(ESP32Duino)
+    controller._connection = mock_conn
+
+    def fail_monotonic():
+        raise AssertionError("normal sends should not use the probe timeout")
+
+    monkeypatch.setattr("nfs.grbl_controller.time.monotonic", fail_monotonic)
+
+    controller.send("G0 X10")
+    mock_conn.send.assert_called_with("G0 X10\n")
 
 
 def test_esp32_duino_send_and_wait_for_move_ready():

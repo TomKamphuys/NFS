@@ -1,5 +1,17 @@
 
 --------
+05/06/26
+--------
+Fixed GRBL timeout handling. The short timeout is now only used for the initial
+controller-present probe, rather than being applied to all transmitted GRBL
+requests. Normal commands now wait indefinitely for their ack again, preserving
+move and homing synchronization behavior.
+
+Files touched:
+src/nfs/grbl_controller.py
+tests/test_grbl_controller.py
+
+--------
 04/06/26
 --------
 Added temporary NiceGUI timer identity logging so deleted-parent-slot errors
