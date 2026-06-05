@@ -1556,15 +1556,19 @@ def initialize_app(config_file: str):
     scanner_app.log_handler = log_handler
 
 
-async def load_app(status_label, finish_splash):
+async def load_app(finish_splash, status_callback=None):
+    def set_status(message):
+        if status_callback is not None:
+            status_callback(message)
+
     try:
         if scanner_app._is_loaded:
-            status_label.set_text("Ready!")
+            set_status("Ready!")
             await finish_splash()
             return
 
-        await run.io_bound(scanner_app.load_config, status_label.set_text)
-        status_label.set_text(
+        await run.io_bound(scanner_app.load_config, set_status)
+        set_status(
             "Ready (scanner unavailable)" if scanner_app.load_warning else "Ready!"
         )
 
@@ -1582,7 +1586,7 @@ async def load_app(status_label, finish_splash):
 
     except Exception as exc:
         logger.error(f"Initialization error: {exc}")
-        status_label.set_text(f"Error: {exc}")
+        set_status(f"Error: {exc}")
         ui.notify(f"Initialization error: {exc}", type='negative')
     finally:
         await finish_splash()

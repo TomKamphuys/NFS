@@ -5,6 +5,7 @@ import configparser
 from typing import Any, Dict
 
 from nicegui import ui
+from nicegui.timer import Timer as BackgroundTimer
 
 from harmonic_drive import control, project
 from harmonic_drive.config_editor import (
@@ -17,6 +18,9 @@ from harmonic_drive.config_editor import (
     save_config_values,
 )
 from nfs.audio import get_audio_meter_state, get_devices_and_channels, get_supported_sample_rates
+
+
+_cal_meter_timer: BackgroundTimer | None = None
 
 
 def _read_config(config_file: str) -> configparser.ConfigParser:
@@ -97,6 +101,11 @@ def _device_options_for_api(catalog: dict, capability: str, audio_api: str) -> D
 
 
 def build_audio_setup_pane(config_file: str, show_live_capture=None):
+    global _cal_meter_timer
+    if _cal_meter_timer is not None:
+        _cal_meter_timer.cancel()
+        _cal_meter_timer = None
+
     parser = _read_config(config_file)
     catalog = get_devices_and_channels()
     inputs: Dict[tuple[str, str], Any] = {}
@@ -316,6 +325,12 @@ def build_audio_setup_pane(config_file: str, show_live_capture=None):
 
         def refresh_cal_meter() -> None:
             nonlocal held_cal_level_dbfs
+            global _cal_meter_timer
+            if getattr(cal_level_label, "is_deleted", False):
+                if _cal_meter_timer is not None:
+                    _cal_meter_timer.cancel()
+                    _cal_meter_timer = None
+                return
             state = get_audio_meter_state()
             if not state.get("active"):
                 return
@@ -329,7 +344,7 @@ def build_audio_setup_pane(config_file: str, show_live_capture=None):
             cal_meter_peaks.clear()
             cal_level_label.set_text(_format_dbfs(held_cal_level_dbfs))
 
-        ui.timer(0.2, refresh_cal_meter)
+        _cal_meter_timer = BackgroundTimer(0.2, refresh_cal_meter)
         calc_offset_button.on(
             "click",
             control.log_button_click("Calibrate SPL dB Offset", calculate_spl_offset),

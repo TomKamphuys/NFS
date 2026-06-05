@@ -9,6 +9,7 @@ from nicegui import app, run, ui
 from grid_generator.grid_gen_gui import build_grid_gen_ui, register_grid_image_files
 from harmonic_drive import audio_setup, control, live_capture, project
 from harmonic_drive.config_editor import open_config_editor
+from harmonic_drive.timer_debug import install_timer_identity_logging
 
 
 NO_SESSION_FOLDER_TEXT = "No session folder selected"
@@ -439,22 +440,9 @@ def _build_splash():
             'width: 100%; height: 100%; object-fit: cover; '
             'position: absolute; top: 0; left: 0;'
         )
-        with ui.column().classes('w-full items-start justify-end h-full p-8 relative'):
-            with ui.row().classes('items-center'):
-                status_label = ui.label('Initializing').classes(
-                    'text-xl font-bold text-white shadow-sm'
-                )
-                dots_label = ui.label('.').classes(
-                    'text-xl font-bold text-white'
-                )
-
-            def update_dots():
-                dots_label.set_text('.' * ((len(dots_label.text) % 3) + 1))
-
-            ui.timer(0.5, update_dots)
 
     async def finish_splash():
-        ui.timer(2.0, lambda: splash.style('transition: opacity 1s; opacity: 0;'))
+        ui.timer(2.0, lambda: splash.style('transition: opacity 1s; opacity: 0;'), once=True)
 
         def safe_delete():
             try:
@@ -462,9 +450,9 @@ def _build_splash():
             except Exception:
                 pass
 
-        ui.timer(3.0, safe_delete)
+        ui.timer(3.0, safe_delete, once=True)
 
-    return status_label, finish_splash
+    return finish_splash
 
 
 def _get_current_position():
@@ -546,10 +534,10 @@ async def _browse_project_folder(path_input, title_input, on_project_loaded=None
 
 @ui.page('/')
 def main_page():
-    status_label, finish_splash = _build_splash()
+    finish_splash = _build_splash()
 
     async def start_load():
-        await control.load_app(status_label, finish_splash)
+        await control.load_app(finish_splash)
 
     ui.timer(0, start_load, once=True)
 
@@ -860,6 +848,8 @@ def main_page():
 
 
 def main():
+    install_timer_identity_logging()
+
     parser = argparse.ArgumentParser(description='Near-field scanner UI')
     parser.add_argument(
         '--config',

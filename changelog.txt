@@ -1,5 +1,25 @@
 
 --------
+04/06/26
+--------
+Added temporary NiceGUI timer identity logging so deleted-parent-slot errors
+report the timer callback, interval, and creation stack.
+
+Fixed the Generate Grid timer failure. Generate Grid can activate the
+project folder, which rebuilds the Audio Setup panel and recreates the SPL
+calibration meter timer. That timer now uses a module-owned background timer,
+avoiding the deleted parent slot error.
+
+Simplified the startup splash to remove the dot animation timer. The app loader
+now uses an optional status callback instead of requiring a splash label object.
+
+Files touched:
+src/harmonic_drive/gui.py
+src/harmonic_drive/control.py
+src/harmonic_drive/audio_setup.py
+src/harmonic_drive/timer_debug.py
+
+--------
 02/06/26
 --------
 Added scanner calibration tool height. The WCS zero command can now account for
