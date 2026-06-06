@@ -728,6 +728,12 @@ async def watch_measurement_points():
 
     while True:
         try:
+            try:
+                from harmonic_drive import control
+                control.refresh_measurement_progress()
+            except Exception as exc:
+                logger.debug(f"Measurement progress refresh skipped: {exc}")
+
             all_csv_files = []
             root_pos_csv = project.get_project_dir() / 'measurement_positions.csv'
             if root_pos_csv.exists():

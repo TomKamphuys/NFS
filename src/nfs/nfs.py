@@ -3,7 +3,7 @@ import shutil
 import threading
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Any, Callable, Optional
 
 from .logging_config import setup_logging, log_version_info
 from loguru import logger
@@ -55,6 +55,14 @@ class NearFieldScanner:
         self._measurement_pause_requested = threading.Event()
         self._measurement_stop_requested = threading.Event()
         self._measurement_running = False
+        self._measurement_progress_lock = threading.Lock()
+        self._measurement_progress = {
+            "status": "ready",
+            "current": 0,
+            "total": 0,
+            "timestamp": time.monotonic(),
+            "eta_seconds": None,
+        }
         self._clear_position_log()
 
     def _single_measurements_dir(self) -> Path:
@@ -135,6 +143,10 @@ class NearFieldScanner:
     def is_measurement_set_paused(self) -> bool:
         return self._measurement_pause_requested.is_set()
 
+    def get_measurement_progress(self) -> dict[str, Any]:
+        with self._measurement_progress_lock:
+            return dict(self._measurement_progress)
+
     def _wait_while_measurement_paused(self) -> bool:
         if self._measurement_pause_requested.is_set():
             logger.info("Measurement set paused.")
@@ -144,7 +156,12 @@ class NearFieldScanner:
             time.sleep(0.1)
         return not self._measurement_stop_requested.is_set()
 
-    def take_measurement_set(self, measurement_set_name: str | None = None, overwrite: bool = False) -> None:
+    def take_measurement_set(
+        self,
+        measurement_set_name: str | None = None,
+        overwrite: bool = False,
+        progress_callback: Optional[Callable[[dict[str, Any]], None]] = None,
+    ) -> None:
         """
         Take a full set of measurements.
         :return: nothing
@@ -152,6 +169,11 @@ class NearFieldScanner:
         self._measurement_pause_requested.clear()
         self._measurement_stop_requested.clear()
         self._measurement_running = True
+        current = 0
+        total = 0
+        started_at = None
+        eta_seconds = None
+        stopped_early = False
 
         # 1. Setup this measurement set's output directory
         session_name = self._safe_measurement_set_name(measurement_set_name)
@@ -183,10 +205,19 @@ class NearFieldScanner:
 
             self._measurement_motion_manager.move_to_safe_starting_radius()
             total = self._measurement_motion_manager.total_points()
-            current = 0
+            started_at = time.monotonic()
+            self._emit_measurement_progress(
+                progress_callback,
+                "started",
+                current,
+                total,
+                timestamp=started_at,
+                eta_seconds=eta_seconds,
+            )
             while not self._measurement_motion_manager.ready():
                 if not self._wait_while_measurement_paused():
                     logger.info("Measurement set stopped before next point.")
+                    stopped_early = True
                     break
 
                 self._measurement_motion_manager.next()
@@ -195,6 +226,7 @@ class NearFieldScanner:
 
                 if self._measurement_stop_requested.is_set():
                     logger.info("Measurement set stopped after current move.")
+                    stopped_early = True
                     break
 
                 current += 1
@@ -205,18 +237,66 @@ class NearFieldScanner:
                 self._append_position_to_file(position)
 
                 self._audio.measure_ir(position)
+                timestamp = time.monotonic()
+                if started_at is not None and total > 0 and current >= 2:
+                    seconds_per_point = (timestamp - started_at) / current
+                    eta_seconds = seconds_per_point * max(0, total - current)
+                self._emit_measurement_progress(
+                    progress_callback,
+                    "point_complete",
+                    current,
+                    total,
+                    timestamp=timestamp,
+                    eta_seconds=eta_seconds,
+                )
 
             self._measurement_motion_manager.reset()
             self._measurement_motion_manager.move_to_safe_starting_radius()
             self._scanner.angular_move_to(0.0)
 
         finally:
+            final_current = current
+            if not stopped_early and total > 0:
+                final_current = total
+            finished_eta = 0 if total > 0 and final_current >= total else eta_seconds
+            self._emit_measurement_progress(
+                progress_callback,
+                "finished",
+                final_current,
+                total,
+                eta_seconds=finished_eta,
+            )
             self._measurement_running = False
             self._measurement_pause_requested.clear()
             self._measurement_stop_requested.clear()
             # 5. Cleanup: Restore paths and remove session log sink
             logger.info(f"Measurement set {session_name} complete.")
             logger.remove(sink_id)
+
+    def _emit_measurement_progress(
+        self,
+        progress_callback: Optional[Callable[[dict[str, Any]], None]],
+        status: str,
+        current: int,
+        total: int,
+        timestamp: float | None = None,
+        eta_seconds: float | None = None,
+    ) -> None:
+        event = {
+            "status": status,
+            "current": current,
+            "total": total,
+            "timestamp": timestamp if timestamp is not None else time.monotonic(),
+            "eta_seconds": eta_seconds,
+        }
+        with self._measurement_progress_lock:
+            self._measurement_progress = dict(event)
+        if progress_callback is None:
+            return
+        try:
+            progress_callback(dict(event))
+        except Exception as exc:
+            logger.warning(f"Measurement progress callback failed: {exc}")
 
     def set_project_directory(self, project_dir: str | Path) -> None:
         self._project_dir = Path(project_dir)

@@ -1,5 +1,42 @@
 
 --------
+06/06/26
+--------
+Made long-running measurement/audio notifications robust against browser
+refreshes and reconnects. Completion toasts now use the client captured when
+the action starts; if that client has gone away, the toast is skipped and the
+backend work continues without raising a deleted parent-slot error.
+
+Added small guards around post-await UI updates for measurement buttons, sine
+icons, and safe-move button re-enabling so stale UI elements do not interrupt
+measurement, audio, or motion completion paths.
+
+Project change callbacks that belong to deleted browser clients are now removed
+from the global callback list after their first stale-client failure, preventing
+old rebuilt pages from repeatedly producing deleted-client warnings.
+
+Audio meters now expire stale active readings if audio callbacks stop arriving,
+so the SPL and Live Capture meters do not remain active after a sine stream is
+stopped unexpectedly or the browser reconnects during tone generation.
+
+Removed the temporary NiceGUI timer identity hook from normal app startup.
+
+Added a measurement progress counter in the Machine Control pane. The bar
+shows percent complete, measured points versus total points, and a backend
+estimated time remaining that starts after the first two completed points and
+updates on each point after that. Progress state is stored by the measurement
+backend so the display can recover after a browser refresh.
+
+Files touched:
+src/harmonic_drive/control.py
+src/harmonic_drive/gui.py
+src/harmonic_drive/live_capture.py
+src/harmonic_drive/project.py
+src/nfs/nfs.py
+src/nfs/audio.py
+tests/test_near_field_scanner.py
+
+--------
 05/06/26
 --------
 Fixed GRBL timeout handling. The short timeout is now only used for the initial

@@ -9,7 +9,6 @@ from nicegui import app, run, ui
 from grid_generator.grid_gen_gui import build_grid_gen_ui, register_grid_image_files
 from harmonic_drive import audio_setup, control, live_capture, project
 from harmonic_drive.config_editor import open_config_editor
-from harmonic_drive.timer_debug import install_timer_identity_logging
 
 
 NO_SESSION_FOLDER_TEXT = "No session folder selected"
@@ -436,13 +435,13 @@ def _build_splash():
         'position: fixed; top: 25%; left: 25%; width: 50%; height: 50%; '
         'z-index: 9999; background: transparent; opacity: 1;'
     ) as splash:
-        ui.image('/images/splash.png').style(
-            'width: 100%; height: 100%; object-fit: cover; '
+        ui.image('/images/splash.png').props('tag=img').style(
+            'width: 100%; height: 100%; object-fit: contain; '
             'position: absolute; top: 0; left: 0;'
         )
 
     async def finish_splash():
-        ui.timer(2.0, lambda: splash.style('transition: opacity 1s; opacity: 0;'), once=True)
+        splash.style('transition: opacity 0.6s; opacity: 0;')
 
         def safe_delete():
             try:
@@ -450,7 +449,7 @@ def _build_splash():
             except Exception:
                 pass
 
-        ui.timer(3.0, safe_delete, once=True)
+        ui.timer(0.7, safe_delete, once=True)
 
     return finish_splash
 
@@ -848,8 +847,6 @@ def main_page():
 
 
 def main():
-    install_timer_identity_logging()
-
     parser = argparse.ArgumentParser(description='Near-field scanner UI')
     parser.add_argument(
         '--config',

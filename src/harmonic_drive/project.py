@@ -94,6 +94,14 @@ def _notify_project_changed() -> None:
         try:
             callback()
         except Exception as exc:
+            message = str(exc).lower()
+            if "deleted" in message or "slot" in message:
+                try:
+                    _callbacks.remove(callback)
+                except ValueError:
+                    pass
+                logger.debug(f"Removed stale project change callback: {exc}")
+                continue
             logger.warning(f"Project change callback failed: {exc}")
 
 

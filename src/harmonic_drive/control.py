@@ -9,10 +9,10 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
-from nicegui import app, run, ui
+from nicegui import app, context, run, ui
 
 from harmonic_drive.config_editor import (
     check_audio_device_ids_on_startup,
@@ -42,6 +42,10 @@ freq_input = None
 dur_input = None
 measurement_start_button = None
 measurement_stop_button = None
+measurement_progress_panel = None
+measurement_progress_fill = None
+measurement_progress_percent_label = None
+measurement_progress_detail_label = None
 pos_r = None
 pos_t = None
 pos_z = None
@@ -60,6 +64,86 @@ on_config_loaded = None
 measurement_set_title_provider = None
 project_root_provider = None
 session_folder_guard = None
+measurement_progress_state = {
+    "eta_seconds": None,
+    "current": 0,
+    "total": 0,
+    "status": "Ready",
+}
+
+NOTIFY_ARG_MAP = {
+    "close_button": "closeBtn",
+    "multi_line": "multiLine",
+}
+
+
+def _current_client():
+    try:
+        return context.client
+    except RuntimeError:
+        return None
+
+
+def _client_can_receive_notifications(client) -> bool:
+    try:
+        has_socket_connection = getattr(client, "has_socket_connection", False)
+        if callable(has_socket_connection):
+            has_socket_connection = has_socket_connection()
+        return (
+            client is not None
+            and not getattr(client, "is_deleted", False)
+            and not getattr(client, "_deleted", False)
+            and bool(has_socket_connection)
+        )
+    except RuntimeError:
+        return False
+
+
+def _safe_notify(client, message: Any, **kwargs) -> None:
+    if not _client_can_receive_notifications(client):
+        logger.debug("UI notification skipped because the browser client is no longer available: {}", message)
+        return
+
+    options = {"message": str(message)}
+    for key, value in kwargs.items():
+        options[NOTIFY_ARG_MAP.get(key, key)] = value
+    try:
+        client.outbox.enqueue_message("notify", options, client.id)
+    except RuntimeError as exc:
+        logger.debug("UI notification skipped because the browser client became unavailable: {}; {}", message, exc)
+
+
+def _is_deleted(element) -> bool:
+    return element is None or bool(
+        getattr(element, "is_deleted", False)
+        or getattr(element, "_deleted", False)
+    )
+
+
+def _safe_enable(element) -> None:
+    if not _is_deleted(element):
+        try:
+            element.enable()
+        except RuntimeError as exc:
+            logger.info("Skipped enabling deleted UI element: {}", exc)
+
+
+def _safe_disable(element) -> None:
+    if not _is_deleted(element):
+        try:
+            element.disable()
+        except RuntimeError as exc:
+            logger.info("Skipped disabling deleted UI element: {}", exc)
+
+
+def _safe_update_element(update) -> None:
+    try:
+        update()
+    except RuntimeError as exc:
+        if "deleted" in str(exc).lower() or "slot" in str(exc).lower():
+            logger.info("Skipped update for unavailable UI element: {}", exc)
+            return
+        raise
 
 
 def set_on_config_loaded(callback):
@@ -97,18 +181,18 @@ def register_sine_controls(level, frequency, duration, button, button_icon=None)
 
 
 def _set_sine_button_icon(icon_name: str) -> None:
-    if play_button_icon:
-        play_button_icon.set_name(icon_name)
-        play_button_icon.update()
+    if not _is_deleted(play_button_icon):
+        _safe_update_element(lambda: play_button_icon.set_name(icon_name))
+        _safe_update_element(play_button_icon.update)
         return
-    if play_button:
+    if not _is_deleted(play_button):
         try:
             play_button.set_icon(icon_name)
             play_button._props['icon'] = icon_name
-            play_button.update()
+            _safe_update_element(play_button.update)
         except AttributeError:
             play_button.props(f"icon={icon_name}")
-            play_button.update()
+            _safe_update_element(play_button.update)
 
 
 def _get_audio_target(purpose: str):
@@ -436,7 +520,10 @@ def audio_worker():
             else:
                 logger.error(f"Audio worker failed: {exc}")
         finally:
-            loop.call_soon_threadsafe(done_event.set)
+            try:
+                loop.call_soon_threadsafe(done_event.set)
+            except RuntimeError as exc:
+                logger.warning(f"Audio worker could not notify browser task completion: {exc}")
             audio_queue.task_done()
 
     try:
@@ -551,7 +638,7 @@ def _update_measurement_buttons() -> None:
         and hasattr(nfs, "is_measurement_set_paused")
         and nfs.is_measurement_set_paused()
     )
-    if measurement_start_button is not None:
+    if not _is_deleted(measurement_start_button):
         if paused:
             _set_measurement_primary_button("Resume", "play_arrow", "primary")
         elif running:
@@ -562,19 +649,151 @@ def _update_measurement_buttons() -> None:
                 "play_arrow",
                 "primary",
             )
-        measurement_start_button.enable()
-    if measurement_stop_button is not None:
+        _safe_enable(measurement_start_button)
+    if not _is_deleted(measurement_stop_button):
         if running:
-            measurement_stop_button.enable()
+            _safe_enable(measurement_stop_button)
         else:
-            measurement_stop_button.disable()
+            _safe_disable(measurement_stop_button)
 
 
 def _set_measurement_primary_button(text: str, icon: str, color: str) -> None:
-    if measurement_start_button is None:
+    if _is_deleted(measurement_start_button):
         return
-    measurement_start_button.set_text(text)
-    measurement_start_button.props(f"icon={icon} color={color}")
+    _safe_update_element(lambda: measurement_start_button.set_text(text))
+    _safe_update_element(lambda: measurement_start_button.props(f"icon={icon} color={color}"))
+
+
+def _format_duration(seconds: float | None) -> str:
+    if seconds is None:
+        return "Calculating..."
+    seconds = max(0, int(round(seconds)))
+    hours, remainder = divmod(seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    if hours:
+        return f"{hours}h {minutes:02d}m"
+    if minutes:
+        return f"{minutes}m {seconds:02d}s"
+    return f"{seconds}s"
+
+
+def _reset_measurement_progress() -> None:
+    measurement_progress_state["eta_seconds"] = None
+    measurement_progress_state["current"] = 0
+    measurement_progress_state["total"] = 0
+    measurement_progress_state["status"] = "Ready"
+    _redraw_measurement_progress(sync_backend=False)
+
+
+def _handle_measurement_progress(event: dict[str, Any]) -> None:
+    _store_measurement_progress(event)
+    _redraw_measurement_progress(sync_backend=False)
+
+
+def _store_measurement_progress(event: dict[str, Any]) -> None:
+    status = str(event.get("status", ""))
+    current = int(event.get("current") or 0)
+    total = int(event.get("total") or 0)
+    eta_seconds = event.get("eta_seconds")
+    measurement_progress_state["eta_seconds"] = (
+        float(eta_seconds) if eta_seconds is not None else None
+    )
+
+    if status == "finished" and total > 0 and current >= total:
+        measurement_progress_state["eta_seconds"] = 0
+
+    if status == "ready":
+        label_status = "Ready"
+    elif status == "finished" and total > 0 and current >= total:
+        label_status = "Complete"
+    elif status == "finished" and (total <= 0 or current < total):
+        label_status = "Stopped"
+    else:
+        label_status = "Running"
+    measurement_progress_state["current"] = current
+    measurement_progress_state["total"] = total
+    measurement_progress_state["status"] = label_status
+
+
+def _sync_measurement_progress_from_backend() -> None:
+    nfs = get_nfs()
+    if nfs is not None and hasattr(nfs, "get_measurement_progress"):
+        try:
+            _store_measurement_progress(nfs.get_measurement_progress())
+            return
+        except Exception as exc:
+            logger.debug(f"Could not refresh measurement progress from backend: {exc}")
+
+    if (
+        measurement_progress_state.get("status") == "Running"
+        and nfs is not None
+        and hasattr(nfs, "is_measurement_set_running")
+        and not nfs.is_measurement_set_running()
+    ):
+        total = int(measurement_progress_state.get("total") or 0)
+        measurement_progress_state["current"] = total
+        measurement_progress_state["eta_seconds"] = 0
+        measurement_progress_state["status"] = "Complete" if total > 0 else "Ready"
+
+
+def _redraw_measurement_progress(sync_backend: bool = True) -> None:
+    if sync_backend:
+        _sync_measurement_progress_from_backend()
+    _update_measurement_progress_display(
+        int(measurement_progress_state.get("current") or 0),
+        int(measurement_progress_state.get("total") or 0),
+        str(measurement_progress_state.get("status") or "Ready"),
+    )
+
+
+def refresh_measurement_progress() -> None:
+    _redraw_measurement_progress()
+
+
+def _update_measurement_progress_display(current: int, total: int, status: str) -> None:
+    if _is_deleted(measurement_progress_panel):
+        return
+
+    percent = (current / total * 100) if total > 0 else 0.0
+    percent = max(0.0, min(100.0, percent))
+    eta_text = _format_duration(measurement_progress_state.get("eta_seconds"))
+    detail = (
+        f"{status} - {current} of {total} points - ETA {eta_text}"
+        if total > 0 else
+        f"{status} - waiting for measurement points"
+    )
+
+    _safe_update_element(lambda: measurement_progress_panel.set_visibility(True))
+    if not _is_deleted(measurement_progress_fill):
+        _safe_update_element(lambda: measurement_progress_fill.style(
+            f"width: {percent:.1f}%; transition: width 0.25s ease;"
+        ))
+    if not _is_deleted(measurement_progress_percent_label):
+        _safe_update_element(lambda: measurement_progress_percent_label.set_text(f"{percent:.1f}%"))
+    if not _is_deleted(measurement_progress_detail_label):
+        _safe_update_element(lambda: measurement_progress_detail_label.set_text(detail))
+
+
+def _build_measurement_progress_panel() -> None:
+    global measurement_progress_panel, measurement_progress_fill
+    global measurement_progress_percent_label, measurement_progress_detail_label
+
+    with ui.column().classes(
+        "w-[536px] max-w-full gap-1 mt-1 rounded border border-gray-300 bg-white p-2"
+    ) as measurement_progress_panel:
+        with ui.element("div").classes(
+            "relative h-7 w-full overflow-hidden rounded bg-gray-200"
+        ):
+            measurement_progress_fill = ui.element("div").classes(
+                "absolute left-0 top-0 h-full bg-blue-600"
+            ).style("width: 0%; transition: width 0.25s ease;")
+            measurement_progress_percent_label = ui.label("0.0%").classes(
+                "absolute inset-0 flex items-center justify-center text-xs font-bold text-white"
+            ).style("text-shadow: 0 1px 2px rgba(0, 0, 0, 0.7);")
+        measurement_progress_detail_label = ui.label(
+            "Ready - waiting for measurement points"
+        ).classes("w-full truncate text-xs font-semibold text-gray-700")
+    _redraw_measurement_progress()
 
 
 def pause_measurement_set():
@@ -606,6 +825,7 @@ def rehome():
 
 
 async def toggle_measurement_set():
+    client = _current_client()
     nfs = get_nfs()
     if (
         nfs is not None
@@ -613,7 +833,7 @@ async def toggle_measurement_set():
         and nfs.is_measurement_set_paused()
     ):
         nfs.resume_measurement_set()
-        ui.notify("Measurement set resumed")
+        _safe_notify(client, "Measurement set resumed")
         _update_measurement_buttons()
         return
     if (
@@ -622,7 +842,7 @@ async def toggle_measurement_set():
         and nfs.is_measurement_set_running()
     ):
         nfs.pause_measurement_set()
-        ui.notify("Measurement set will pause after the current operation")
+        _safe_notify(client, "Measurement set will pause after the current operation")
         _update_measurement_buttons()
         return
 
@@ -645,7 +865,7 @@ async def toggle_measurement_set():
     overwrite = False
 
     if not loaded_grid_file_exists(target_dir):
-        ui.notify("No grid file loaded. Please generate one first.", type="warning")
+        _safe_notify(client, "No grid file loaded. Please generate one first.", type="warning")
         return
 
     if measurement_outputs_exist(target_dir):
@@ -662,7 +882,7 @@ async def toggle_measurement_set():
         dialog.open()
         choice = await decision
         if choice == "cancel":
-            ui.notify("Measurement cancelled", type="warning")
+            _safe_notify(client, "Measurement cancelled", type="warning")
             return
         overwrite = True
         measurement_dir = target_dir / "measurement_set"
@@ -681,43 +901,55 @@ async def toggle_measurement_set():
     from harmonic_drive import live_capture
     live_capture.reset_live_capture_session()
 
-    ui.notify('Measurement started')
+    _safe_notify(client, 'Measurement started')
     for button in scanner_app.greyable_buttons:
-        button.disable()
+        _safe_disable(button)
     _update_measurement_buttons()
+    completed = False
     try:
         loop = asyncio.get_running_loop()
         done = asyncio.Event()
+        _reset_measurement_progress()
+
         audio_queue.put((
             nfs.take_measurement_set,
             (measurement_set_name, overwrite),
             done,
             loop,
         ))
-        if measurement_stop_button is not None:
-            measurement_stop_button.enable()
-        if measurement_start_button is not None:
+        if not _is_deleted(measurement_stop_button):
+            _safe_enable(measurement_stop_button)
+        if not _is_deleted(measurement_start_button):
             _set_measurement_primary_button("Pause", "pause", "warning")
-            measurement_start_button.enable()
+            _safe_enable(measurement_start_button)
         await done.wait()
+        completed = True
     except Exception as exc:
         logger.error(f"Measurement task failed: {exc}")
-        ui.notify(f"Error: {exc}", type='negative')
+        _safe_notify(client, f"Error: {exc}", type='negative')
     finally:
-        live_capture.update_live_capture_plots()
-        ui.notify('Measurement finished')
-        for button in scanner_app.greyable_buttons:
-            button.enable()
+        _redraw_measurement_progress()
+        still_running = bool(
+            nfs is not None
+            and hasattr(nfs, "is_measurement_set_running")
+            and nfs.is_measurement_set_running()
+        )
+        if completed:
+            _safe_notify(client, 'Measurement finished')
+        if not still_running:
+            for button in scanner_app.greyable_buttons:
+                _safe_enable(button)
         _update_measurement_buttons()
 
 
 async def async_single_measurement_task():
+    client = _current_client()
     if not await _ensure_session_folder_selected():
         return
 
-    ui.notify('Single measurement started')
+    _safe_notify(client, 'Single measurement started')
     for button in scanner_app.greyable_buttons:
-        button.disable()
+        _safe_disable(button)
     try:
         title = (
             measurement_set_title_provider()
@@ -743,15 +975,16 @@ async def async_single_measurement_task():
         await done.wait()
     except Exception as exc:
         logger.error(f"Single measurement failed: {exc}")
-        ui.notify(f"Error: {exc}", type='negative')
+        _safe_notify(client, f"Error: {exc}", type='negative')
     finally:
-        ui.notify('Single measurement finished')
+        _safe_notify(client, 'Single measurement finished')
         for button in scanner_app.greyable_buttons:
-            button.enable()
+            _safe_enable(button)
 
 
 async def async_test_sweep_task():
-    ui.notify('Test sweep started')
+    client = _current_client()
+    _safe_notify(client, 'Test sweep started')
     try:
         sweep_func, sweep_args = _get_test_sweep_call()
         loop = asyncio.get_running_loop()
@@ -762,16 +995,23 @@ async def async_test_sweep_task():
         result = result_holder.get('result')
         if result is not None:
             from harmonic_drive import live_capture
-            live_capture.set_preview_ir(result)
+            try:
+                live_capture.set_preview_ir(result)
+            except RuntimeError as exc:
+                if "slot" in str(exc).lower() or "deleted" in str(exc).lower():
+                    logger.info("Skipped test sweep preview refresh because the browser context is no longer available: {}", exc)
+                else:
+                    raise
     except Exception as exc:
         logger.error(f"Test sweep failed: {exc}")
-        ui.notify(f"Error: {exc}", type='negative')
+        _safe_notify(client, f"Error: {exc}", type='negative')
     finally:
-        ui.notify('Test sweep finished')
+        _safe_notify(client, 'Test sweep finished')
 
 
 async def async_play_sine_task():
     global is_playing, sine_target
+    client = _current_client()
     if is_playing:
         if sine_target is not None:
             sine_target.stop_sine()
@@ -788,7 +1028,7 @@ async def async_play_sine_task():
         sine_target = _get_sine_audio_target()
     except Exception as exc:
         logger.error(f"Could not initialize sine audio backend: {exc}")
-        ui.notify(f"Audio unavailable: {exc}", type='negative')
+        _safe_notify(client, f"Audio unavailable: {exc}", type='negative')
         sine_target = None
         return
 
@@ -802,7 +1042,7 @@ async def async_play_sine_task():
         await done.wait()
     except Exception as exc:
         logger.error(f"Play sine failed: {exc}")
-        ui.notify(f"Error: {exc}", type='negative')
+        _safe_notify(client, f"Error: {exc}", type='negative')
         sine_target = None
     finally:
         if dur is not None:
@@ -813,12 +1053,12 @@ async def async_play_sine_task():
 
 async def safe_move(func, *args):
     for button in scanner_app.greyable_buttons:
-        button.disable()
+        _safe_disable(button)
     try:
         await run.io_bound(func, *args)
     finally:
         for button in scanner_app.greyable_buttons:
-            button.enable()
+            _safe_enable(button)
 
 
 async def zero_nfs_then_apply_height_offset(height_value: float):
@@ -1427,6 +1667,7 @@ def build_control_pane(log_dialog):
                     stop_measurement_set,
                 ),
             ).props('color=negative').style('width: 260px')
+        _build_measurement_progress_panel()
         _update_measurement_buttons()
 
         with ui.row().classes('items-center mt-1 gap-4'):

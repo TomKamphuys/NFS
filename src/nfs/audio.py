@@ -56,6 +56,7 @@ import sounddevice as sd  # noqa: E402
 
 
 _METER_EPS = 1e-12
+_METER_STALE_TIMEOUT_S = 1.5
 _METER_LOCK = threading.Lock()
 _METER_STATE = {
     "active": False,
@@ -192,6 +193,15 @@ def reset_audio_meter_state(active: bool = False) -> None:
 
 def get_audio_meter_state() -> Dict[str, Any]:
     with _METER_LOCK:
+        if (
+            _METER_STATE["active"]
+            and _METER_STATE["updated_at"]
+            and time.time() - float(_METER_STATE["updated_at"]) > _METER_STALE_TIMEOUT_S
+        ):
+            _METER_STATE["active"] = False
+            _METER_STATE["outputs"] = _two_channel_meters(np.zeros((1, 2), dtype=np.float32))
+            _METER_STATE["inputs"] = _two_channel_meters(np.zeros((1, 2), dtype=np.float32))
+            _METER_STATE["a_weighted_inputs"] = _two_channel_meters(np.zeros((1, 2), dtype=np.float32))
         return {
             "active": bool(_METER_STATE["active"]),
             "updated_at": float(_METER_STATE["updated_at"]),
@@ -1565,6 +1575,7 @@ class MockInterfaceAudio(Audio):
     def stop_sine(self) -> None:
         """Stops sine playback."""
         logger.info("[MOCK-INTERFACE] Stopped sine playback")
+        reset_audio_meter_state(active=False)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1598,6 +1609,7 @@ class AudioMock(IAudio):
     def stop_sine(self) -> None:
         """Stops sine playback."""
         logger.info("[MOCK] Stopped sine playback")
+        reset_audio_meter_state(active=False)
 
 
 class AudioFactory:
