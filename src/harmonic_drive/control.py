@@ -18,7 +18,7 @@ from harmonic_drive.config_editor import (
     check_audio_device_ids_on_startup,
     set_file_measurement_points_filename,
 )
-from harmonic_drive import project
+from harmonic_drive import project, reconnect_debug
 from nfs import NearFieldScannerFactory, ScannerFactory
 from nfs.audio import AudioFactory
 from nfs.datatypes import CylindricalPosition
@@ -509,16 +509,21 @@ def audio_worker():
             func, args, done_event, loop = item
             result_holder = None
         try:
+            reconnect_debug.log_worker_event("start", func, f"queue_size={audio_queue.qsize()}")
             result = func(*args)
             if result_holder is not None:
                 result_holder['result'] = result
+            reconnect_debug.log_worker_event("finish", func, f"queue_size={audio_queue.qsize()}")
         except StopIteration:
             logger.info("Measurement sequence completed: all points processed.")
+            reconnect_debug.log_worker_event("stop-iteration", func)
         except Exception as exc:
             if "No more points" in str(exc):
                 logger.info("Measurement sequence completed: all points processed.")
+                reconnect_debug.log_worker_event("no-more-points", func)
             else:
                 logger.error(f"Audio worker failed: {exc}")
+                reconnect_debug.log_worker_event("error", func, repr(exc))
         finally:
             try:
                 loop.call_soon_threadsafe(done_event.set)
@@ -686,6 +691,7 @@ def _reset_measurement_progress() -> None:
 
 
 def _handle_measurement_progress(event: dict[str, Any]) -> None:
+    reconnect_debug.record_progress_update(event, source="callback")
     _store_measurement_progress(event)
     _redraw_measurement_progress(sync_backend=False)
 
@@ -737,6 +743,14 @@ def _sync_measurement_progress_from_backend() -> None:
 
 
 def _redraw_measurement_progress(sync_backend: bool = True) -> None:
+    reconnect_debug.record_progress_update(
+        {
+            "current": measurement_progress_state.get("current"),
+            "total": measurement_progress_state.get("total"),
+            "status": measurement_progress_state.get("status"),
+        },
+        source="redraw",
+    )
     if sync_backend:
         _sync_measurement_progress_from_backend()
     _update_measurement_progress_display(
@@ -826,6 +840,7 @@ def rehome():
 
 async def toggle_measurement_set():
     client = _current_client()
+    reconnect_debug.set_measurement_phase("measurement-set-handler")
     nfs = get_nfs()
     if (
         nfs is not None
@@ -902,6 +917,7 @@ async def toggle_measurement_set():
     live_capture.reset_live_capture_session()
 
     _safe_notify(client, 'Measurement started')
+    reconnect_debug.set_measurement_phase("measurement-set-running")
     for button in scanner_app.greyable_buttons:
         _safe_disable(button)
     _update_measurement_buttons()
@@ -926,6 +942,7 @@ async def toggle_measurement_set():
         completed = True
     except Exception as exc:
         logger.error(f"Measurement task failed: {exc}")
+        reconnect_debug.set_measurement_phase("measurement-set-error")
         _safe_notify(client, f"Error: {exc}", type='negative')
     finally:
         _redraw_measurement_progress()
@@ -936,6 +953,7 @@ async def toggle_measurement_set():
         )
         if completed:
             _safe_notify(client, 'Measurement finished')
+        reconnect_debug.set_measurement_phase("measurement-set-finished")
         if not still_running:
             for button in scanner_app.greyable_buttons:
                 _safe_enable(button)
@@ -944,10 +962,12 @@ async def toggle_measurement_set():
 
 async def async_single_measurement_task():
     client = _current_client()
+    reconnect_debug.set_measurement_phase("single-measurement-handler")
     if not await _ensure_session_folder_selected():
         return
 
     _safe_notify(client, 'Single measurement started')
+    reconnect_debug.set_measurement_phase("single-measurement-running")
     for button in scanner_app.greyable_buttons:
         _safe_disable(button)
     try:
@@ -975,15 +995,18 @@ async def async_single_measurement_task():
         await done.wait()
     except Exception as exc:
         logger.error(f"Single measurement failed: {exc}")
+        reconnect_debug.set_measurement_phase("single-measurement-error")
         _safe_notify(client, f"Error: {exc}", type='negative')
     finally:
         _safe_notify(client, 'Single measurement finished')
+        reconnect_debug.set_measurement_phase("single-measurement-finished")
         for button in scanner_app.greyable_buttons:
             _safe_enable(button)
 
 
 async def async_test_sweep_task():
     client = _current_client()
+    reconnect_debug.set_measurement_phase("test-sweep-running")
     _safe_notify(client, 'Test sweep started')
     try:
         sweep_func, sweep_args = _get_test_sweep_call()
@@ -1004,14 +1027,17 @@ async def async_test_sweep_task():
                     raise
     except Exception as exc:
         logger.error(f"Test sweep failed: {exc}")
+        reconnect_debug.set_measurement_phase("test-sweep-error")
         _safe_notify(client, f"Error: {exc}", type='negative')
     finally:
         _safe_notify(client, 'Test sweep finished')
+        reconnect_debug.set_measurement_phase("test-sweep-finished")
 
 
 async def async_play_sine_task():
     global is_playing, sine_target
     client = _current_client()
+    reconnect_debug.set_measurement_phase("sine-handler")
     if is_playing:
         if sine_target is not None:
             sine_target.stop_sine()
@@ -1033,6 +1059,7 @@ async def async_play_sine_task():
         return
 
     is_playing = True
+    reconnect_debug.set_measurement_phase("sine-running")
     _set_sine_button_icon('stop')
 
     try:
@@ -1042,12 +1069,14 @@ async def async_play_sine_task():
         await done.wait()
     except Exception as exc:
         logger.error(f"Play sine failed: {exc}")
+        reconnect_debug.set_measurement_phase("sine-error")
         _safe_notify(client, f"Error: {exc}", type='negative')
         sine_target = None
     finally:
         if dur is not None:
             is_playing = False
             sine_target = None
+            reconnect_debug.set_measurement_phase("sine-finished")
             _set_sine_button_icon('play_arrow')
 
 
@@ -1132,6 +1161,8 @@ def _set_position_labels(targets, pos, state=None):
 
 
 def update_scanner_position(pos=None, state=None, machine_pos=None):
+    reconnect_debug.record_scanner_update(state)
+
     def do_update():
         nonlocal pos, state, machine_pos
         if pos is None:

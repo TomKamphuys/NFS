@@ -7,7 +7,7 @@ from pathlib import Path
 from nicegui import app, run, ui
 
 from grid_generator.grid_gen_gui import build_grid_gen_ui, register_grid_image_files
-from harmonic_drive import audio_setup, control, live_capture, project
+from harmonic_drive import audio_setup, control, live_capture, project, reconnect_debug
 from harmonic_drive.config_editor import open_config_editor
 
 
@@ -533,6 +533,8 @@ async def _browse_project_folder(path_input, title_input, on_project_loaded=None
 
 @ui.page('/')
 def main_page():
+    reconnect_debug.log_page_created()
+    reconnect_debug.install_browser_probe()
     finish_splash = _build_splash()
 
     async def start_load():
@@ -856,6 +858,7 @@ def main():
     args, _ = parser.parse_known_args()
 
     control.initialize_app(args.config)
+    reconnect_debug.install()
     project.set_project_dir(Path(tempfile.gettempdir()) / "HALS_working_project", args.config)
     control.set_on_config_loaded(live_capture.update_live_capture_plots)
 
