@@ -16,6 +16,7 @@ def test_event_handler_initialization():
     handler = EventHandler()
     assert handler.get_received_message() == ''
     assert handler.get_current_position() is None
+    assert handler.get_machine_position() is None
     assert handler.get_state() == GrblMachineState.IDLE
     assert handler.get_state_raw() == "Idle"
 
@@ -28,11 +29,12 @@ def test_event_handler_on_rx_buffer_percent():
 
 def test_event_handler_on_stateupdate():
     handler = EventHandler()
-    # data format for on_stateupdate: (mode, submode, wpos, mpos, ...)
-    # wpos is expected at index 2, and it should be a tuple (X, Y, Z)
+    # data format for on_stateupdate: (mode, mpos, wpos)
+    # positions are tuples (X, Y, Z)
     # CylindricalPosition(wpos[1], wpos[2], wpos[0]) -> (Y, Z, X)
+    mpos = (1.0, 2.0, 3.0)
     wpos = (10.0, 20.0, 30.0)  # X=10, Y=20, Z=30
-    handler.on_grbl_event("on_stateupdate", "Run", 0, wpos)
+    handler.on_grbl_event("on_stateupdate", "Run", mpos, wpos)
 
     assert handler.get_state() == GrblMachineState.RUN
     assert handler.get_state_raw() == "Run"
@@ -40,6 +42,10 @@ def test_event_handler_on_stateupdate():
     assert pos.r() == 20.0  # Y
     assert pos.t() == 30.0  # Z
     assert pos.z() == 10.0  # X
+    machine_pos = handler.get_machine_position()
+    assert machine_pos.r() == 2.0
+    assert machine_pos.t() == 3.0
+    assert machine_pos.z() == 1.0
 
 
 def test_event_handler_on_stateupdate_callback_error():
@@ -49,8 +55,22 @@ def test_event_handler_on_stateupdate_callback_error():
 
     wpos = (10.0, 20.0, 30.0)
     # Should not raise exception because it's caught in EventHandler
-    handler.on_grbl_event("on_stateupdate", "Idle", 0, wpos)
+    handler.on_grbl_event("on_stateupdate", "Idle", (1.0, 2.0, 3.0), wpos)
     callback.assert_called_once()
+
+
+def test_event_handler_on_stateupdate_supports_legacy_callback():
+    handler = EventHandler()
+    calls = []
+    def callback(pos, state):
+        calls.append((pos, state))
+
+    handler.set_on_state_update_callback(callback)
+
+    handler.on_grbl_event("on_stateupdate", "Idle", (1.0, 2.0, 3.0), (4.0, 5.0, 6.0))
+
+    pos = handler.get_current_position()
+    assert calls == [(pos, GrblMachineState.IDLE)]
 
 
 def test_grbl_streamer_client_connection():
@@ -74,8 +94,9 @@ def test_grbl_streamer_client_connection():
     assert conn.receive() == "some message"
     assert handler.get_received_message() == ""
 
-    handler.on_grbl_event("on_stateupdate", "Idle", 0, (1, 2, 3))
+    handler.on_grbl_event("on_stateupdate", "Idle", (4, 5, 6), (1, 2, 3))
     assert conn.get_position() == CylindricalPosition(2, 3, 1)
+    assert conn.get_machine_position() == CylindricalPosition(5, 6, 4)
     assert conn.get_state() == GrblMachineState.IDLE
     assert conn.get_state_raw() == "Idle"
 
@@ -118,6 +139,31 @@ def test_grbl_controller_mock():
     mock.set_on_state_update_callback(lambda p, s: None)
 
 
+def test_grbl_controller_mock_simulated_dro_emits_motion_updates():
+    from nfs.grbl_controller import GrblControllerMockSimulatedDRO
+
+    mock = GrblControllerMockSimulatedDRO(
+        linear_speed_mm_s=50.0,
+        angular_speed_deg_s=50.0,
+        status_hz=100.0,
+    )
+    updates = []
+    mock.set_on_state_update_callback(
+        lambda position, state, machine_position=None: updates.append(
+            (position, state, machine_position)
+        )
+    )
+
+    mock.send_and_wait_for_move_ready("G0 X10 Y20 Z30")
+
+    assert mock.get_state() == GrblMachineState.IDLE
+    assert mock.get_position() == CylindricalPosition(20, 30, 10)
+    assert any(state == GrblMachineState.RUN for _position, state, _machine_position in updates)
+    assert updates[-1][1] == GrblMachineState.IDLE
+    assert updates[-1][0] == CylindricalPosition(20, 30, 10)
+    assert len(updates) > 2
+
+
 def test_esp32_duino_initialization():
     mock_conn = Mock()
     # __init__ calls _unlock which calls send which calls _wait_for_ack which calls _receive
@@ -127,10 +173,21 @@ def test_esp32_duino_initialization():
     mock_conn.send.assert_called_with("$X\n")
 
 
+def test_esp32_duino_initialization_times_out_without_grbl_response(monkeypatch):
+    mock_conn = Mock()
+    mock_conn.receive.return_value = ""
+    times = iter([0.0, 4.0])
+    monkeypatch.setattr("nfs.grbl_controller.time.monotonic", lambda: next(times))
+    monkeypatch.setattr("nfs.grbl_controller.time.sleep", lambda _s: None)
+
+    with pytest.raises(TimeoutError, match="No GRBL response"):
+        ESP32Duino(mock_conn)
+
+
 def test_esp32_duino_send():
     mock_conn = Mock()
-    # 1. Init: _unlock calls send which calls _wait_for_ack. Need "ok".
-    # 2. Test send("G0 X10"): calls _wait_for_ack. Need "ok".
+    # 1. Init: _unlock calls send with a probe timeout. Need "ok".
+    # 2. Test send("G0 X10"): waits for ack without a movement timeout. Need "ok".
     mock_conn.receive.side_effect = ["ok", "", "ok"]
 
     controller = ESP32Duino(mock_conn)
@@ -139,6 +196,21 @@ def test_esp32_duino_send():
     controller.send("G0 X10")
     mock_conn.send.assert_called_with("G0 X10\n")
     assert mock_conn.receive.call_count >= 3
+
+
+def test_esp32_duino_send_does_not_use_probe_timeout(monkeypatch):
+    mock_conn = Mock()
+    mock_conn.receive.return_value = "ok"
+    controller = ESP32Duino.__new__(ESP32Duino)
+    controller._connection = mock_conn
+
+    def fail_monotonic():
+        raise AssertionError("normal sends should not use the probe timeout")
+
+    monkeypatch.setattr("nfs.grbl_controller.time.monotonic", fail_monotonic)
+
+    controller.send("G0 X10")
+    mock_conn.send.assert_called_with("G0 X10\n")
 
 
 def test_esp32_duino_send_and_wait_for_move_ready():

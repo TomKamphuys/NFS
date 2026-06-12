@@ -1,4 +1,5 @@
 import csv
+from pathlib import Path
 
 from loguru import logger
 
@@ -16,6 +17,10 @@ class FileMeasurementPoints:
         self._points: list[CylindricalPosition] = []
         self._current_index = 0
         self._ready = False
+
+        if not Path(filename).exists():
+            logger.warning(f"Measurement points file not found: '{filename}'")
+            return
 
         with open(filename, newline="") as f:  # Open CSV file
             reader = csv.DictReader(f)  # Parse header-based rows

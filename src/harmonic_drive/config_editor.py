@@ -18,13 +18,21 @@ motion-manager / measurement-points implementations.
 from __future__ import annotations
 
 import configparser
+import shutil
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
 from loguru import logger
-from nicegui import ui
+from nicegui import run, ui
 
-from nfs.audio import get_devices_and_channels
+from nfs.audio import (
+    find_device_id_by_name,
+    get_devices_and_channels,
+    get_supported_sample_rates,
+)
+
+
+DEFAULT_CONFIG_FILENAME = "default_config.ini"
 
 
 # ---------------------------------------------------------------------------
@@ -33,6 +41,16 @@ from nfs.audio import get_devices_and_channels
 # Each entry: (key, kind, tooltip, options_or_none)
 # kind ∈ {"str", "int", "float", "bool", "choice", "opt_float"}
 SchemaEntry = Tuple[str, str, str, Optional[List[str]]]
+
+DISPLAY_LABELS = {
+    "level": "Terminal verbosity",
+    "show_machine_coordinate_system": "Show machine coordinates",
+    "show_rehome_button": "Show ReHome button",
+    "show_height_offset_controls": "Show height offset controls",
+    "default_project_dir": "Default session folder",
+    "cal_tool_height": "Calibration tool height (mm)",
+    "use_alternative_motion_controls": "Use alternative motion controls",
+}
 
 # ---------------------------------------------------------------------------
 # Type-driven schemas for the polymorphic motion_manager / measurement-points
@@ -120,6 +138,10 @@ EDITABLE_SCHEMA: Dict[str, List[SchemaEntry]] = {
         ("out_ch_spkr", "int", "Output channel driving the speaker under test.", None),
         ("out_ch_ref", "int",
          "Output channel routed back into the loopback input for timing reference.", None),
+        ("in_dev_name", "str", "Saved input device name used to recover from device ID changes.", None),
+        ("in_dev_hostapi", "str", "Saved input host API used to disambiguate audio devices.", None),
+        ("out_dev_name", "str", "Saved output device name used to recover from device ID changes.", None),
+        ("out_dev_hostapi", "str", "Saved output host API used to disambiguate audio devices.", None),
         ("fs", "int", "Sample rate in Hz. Must match the device's configured rate.", None),
         ("blocksize", "int",
          "Audio buffer size in samples. Must match the ASIO panel if applicable.", None),
@@ -148,7 +170,7 @@ EDITABLE_SCHEMA: Dict[str, List[SchemaEntry]] = {
         ("mic_tail_taper_ms", "float",
          "Short fade-out at end of capture, in ms (suppresses DC/noise).", None),
         ("debug_saves", "bool",
-         "If True, save raw loopback / reference / mic to Recordings/debug.", None),
+         "If True, save raw loopback / reference / mic to the measurement debug folder.", None),
         ("h2_test_db", "opt_float",
          "Inject 2nd harmonic at this dB level for distortion tests. 'None' to disable.", None),
         ("h3_test_db", "opt_float",
@@ -157,14 +179,67 @@ EDITABLE_SCHEMA: Dict[str, List[SchemaEntry]] = {
     "scanner": [
         ("feed_rate", "int",
          "GRBL feed rate (mm/min) used for moves between measurement points.", None),
+        ("cal_tool_height", "float",
+         "Height of the calibration tool used when setting WCS zero. The current "
+         "machine height is assigned this value, placing WCS Z0 below it.",
+         None),
+    ],
+    "grbl_streamer": [
+        ("type", "choice",
+         "GRBL controller backend. Arduino connects to the configured COM port; "
+         "Mock simulates the controller instantly; MockSimulatedDRO simulates "
+         "movement over time with DRO/status callbacks.",
+         ["Arduino", "Mock", "MockSimulatedDRO"]),
+        ("baudrate", "int", "Serial baudrate used for the GRBL connection.", None),
+        ("mock_linear_speed_mm_s", "float",
+         "MockSimulatedDRO linear movement speed in mm/s.", None),
+        ("mock_angular_speed_deg_s", "float",
+         "MockSimulatedDRO angular movement speed in degrees/s.", None),
+        ("mock_status_hz", "float",
+         "MockSimulatedDRO DRO/status callback rate in Hz.", None),
+    ],
+    "windows": [
+        ("port", "choice",
+         "Windows COM port used when the GRBL streamer type is Arduino.",
+         None),
     ],
     "logging": [
         ("level", "choice",
-         "Logger verbosity. TRACE is the most verbose, ERROR the least.",
+         "Terminal and file log verbosity. TRACE tells you almost everything; WARNING or ERROR keeps the terminal quiet.",
          ["TRACE", "DEBUG", "INFO", "WARNING", "ERROR"]),
         ("rotation", "str", "Log rotation policy (e.g. '100 MB' or '1 day').", None),
         ("retention", "str", "How long old logs are retained (e.g. '1 week').", None),
     ],
+    "app": [
+        ("show_machine_coordinate_system", "bool",
+         "Show a second orange DRO row using machine coordinates alongside the work coordinates.", None),
+        ("coord_viewer_backend", "choice",
+         "3D coordinate viewer used in the native Grid pane.",
+         ["matplotlib", "pyvista"]),
+        ("show_rehome_button", "bool",
+         "Show the ReHome command button in the machine control pane.", None),
+        ("show_height_offset_controls", "bool",
+         "Show the height offset input and Set height offset command in the machine control pane.", None),
+        ("auto_hide_left_menu", "bool",
+         "Automatically hide the left-hand navigation menu after selecting a view.", None),
+        ("default_project_dir", "str",
+         "Default parent folder used to create new session folders.", None),
+        ("use_alternative_motion_controls", "bool",
+         "Use a compact alternative layout for machine motion controls.", None),
+    ],
+    "debug": [
+        ("direct_progress_ui", "bool",
+         "Use direct worker progress callbacks instead of backend-polled progress. Leave off for normal use.", None),
+        ("in_app_log_viewer", "bool",
+         "Enable the browser-based System Log viewer. Leave off during measurement stability testing.", None),
+        ("deep_ui_diagnostics", "bool",
+         "NiceGUI/browser UI diagnostics for scanner/progress update diagnosis. Not used by the native PySide UI.", None),
+    ],
+}
+
+CONFIG_EDITOR_HIDDEN_SECTIONS = {"sweep", "grbl_streamer", "windows"}
+CONFIG_EDITOR_SECTION_KEYS = {
+    "audio": {"mode"},
 }
 
 
@@ -211,16 +286,507 @@ def _format_for_ini(kind: str, value) -> str:
 
 
 def _build_input(key: str, kind: str, current: str, options: Optional[List[str]]):
-    label = key
+    label = DISPLAY_LABELS.get(key, key.replace("_", " ").title())
     if kind == "bool":
         return ui.switch(label, value=_parse_bool(current))
     if kind == "choice":
-        opts = list(options or [])
-        if current and current not in opts:
-            opts = [*opts, current]
-        return ui.select(opts, value=current or (opts[0] if opts else ""), label=label) \
+        opts = dict(options) if isinstance(options, dict) else list(options or [])
+        if isinstance(opts, dict):
+            if current and current not in opts:
+                opts = {current: current, **opts}
+            value = current or (next(iter(opts)) if opts else "")
+        else:
+            if current and current not in opts:
+                opts = [*opts, current]
+            value = current or (opts[0] if opts else "")
+        return ui.select(opts, value=value, label=label) \
             .classes("w-full").props("outlined dense")
+    if key == "default_project_dir":
+        with ui.row().classes("w-full items-end gap-2"):
+            el = ui.input(label=label, value=current).classes("flex-1").props("outlined dense")
+            ui.button(
+                "Browse",
+                icon="folder_open",
+                on_click=lambda: _browse_folder_input(el),
+            ).props("color=primary dense")
+        return el
     return ui.input(label=label, value=current).classes("w-full").props("outlined dense")
+
+
+def _native_folder_picker(initial_dir: str, title: str = "Select Default Session Folder") -> str:
+    import tkinter as tk
+    from tkinter import filedialog
+
+    root = tk.Tk()
+    root.withdraw()
+    root.attributes("-topmost", True)
+    try:
+        return filedialog.askdirectory(
+            title=title,
+            initialdir=initial_dir,
+            mustexist=False,
+        )
+    finally:
+        root.destroy()
+
+
+async def _browse_folder_input(input_el) -> None:
+    initial_dir = str(Path(input_el.value or Path.home()).expanduser().resolve())
+    try:
+        selected = await run.io_bound(_native_folder_picker, initial_dir)
+    except Exception as exc:
+        ui.notify(f"Could not open folder browser: {exc}", type="negative")
+        return
+    if selected:
+        input_el.set_value(selected)
+
+
+def _default_config_path(path: Path) -> Path:
+    return path.with_name(DEFAULT_CONFIG_FILENAME)
+
+
+def restore_default_config(config_file: str | Path, on_apply: Callable[[], None] | None = None) -> bool:
+    path = Path(config_file)
+    default_path = _default_config_path(path)
+    if not default_path.exists():
+        ui.notify(f"Default config not found: {default_path}", type="negative")
+        return False
+
+    backup_path = path.with_suffix(".old")
+    try:
+        if path.exists():
+            shutil.copy2(path, backup_path)
+        shutil.copy2(default_path, path)
+    except OSError as exc:
+        logger.error(f"Failed to restore default config: {exc}")
+        ui.notify(f"Failed to restore defaults: {exc}", type="negative")
+        return False
+
+    logger.info(f"Restored default config from {default_path}")
+    if on_apply is not None:
+        on_apply()
+    ui.notify("Default configuration restored", type="positive")
+    return True
+
+
+class _ConfigValueRef:
+    """Tiny value holder so derived config values can be saved like UI elements."""
+
+    def __init__(self, value=""):
+        self.value = value
+
+
+def _device_options(catalog: dict, capability: str) -> Dict[int, str]:
+    channel_key = "input_channels" if capability == "input" else "output_channels"
+    return {
+        dev_id: f"ID {dev_id}: {info['name']} ({info['hostapi']})"
+        for dev_id, info in catalog.items()
+        if info.get(channel_key)
+    }
+
+
+def _channel_options(catalog: dict, dev_id, capability: str) -> List[int]:
+    try:
+        dev_id = int(dev_id)
+    except (TypeError, ValueError):
+        return []
+    channel_key = "input_channels" if capability == "input" else "output_channels"
+    return list(catalog.get(dev_id, {}).get(channel_key, []))
+
+
+def _sample_rate_options(rates: List[int]) -> Dict[int, str]:
+    return {
+        rate: f"{rate} (recommended)" if rate == 48000 else str(rate)
+        for rate in rates
+    }
+
+
+def _serial_port_options(current: str = "") -> Dict[str, str]:
+    current = _strip_inline_comment(current)
+    try:
+        from serial.tools import list_ports
+    except ImportError:
+        return {current: f"{current} (configured)"} if current else {}
+
+    ports = sorted(list_ports.comports(), key=lambda port: port.device)
+    options = {
+        port.device: (
+            port.device
+            if not getattr(port, "description", "")
+            else f"{port.device}: {port.description}"
+        )
+        for port in ports
+    }
+    if current and current not in options:
+        options = {current: f"{current} (configured, not currently detected)", **options}
+    return options
+
+
+def _set_select_options(select, options, value=None) -> None:
+    select.options = options
+    if value is not None:
+        select.value = value
+    select.update()
+
+
+def _build_audio_panel(parser, static_inputs: Dict[Tuple[str, str], object]) -> None:
+    """Render audio settings with device/channel selectors backed by sounddevice."""
+    section = "audio"
+    catalog = get_devices_and_channels()
+    refs = {
+        "in_dev_name": _ConfigValueRef(_strip_inline_comment(parser.get(section, "in_dev_name", fallback=""))),
+        "in_dev_hostapi": _ConfigValueRef(_strip_inline_comment(parser.get(section, "in_dev_hostapi", fallback=""))),
+        "out_dev_name": _ConfigValueRef(_strip_inline_comment(parser.get(section, "out_dev_name", fallback=""))),
+        "out_dev_hostapi": _ConfigValueRef(_strip_inline_comment(parser.get(section, "out_dev_hostapi", fallback=""))),
+    }
+
+    for key, ref in refs.items():
+        static_inputs[(section, key)] = ref
+
+    def current_int(key: str, fallback: int = 0) -> int:
+        raw = _strip_inline_comment(parser.get(section, key, fallback=str(fallback)))
+        try:
+            return int(float(raw))
+        except ValueError:
+            return fallback
+
+    mode_entry = next(e for e in EDITABLE_SCHEMA[section] if e[0] == "mode")
+    mode_raw = _strip_inline_comment(parser.get(section, "mode", fallback="hardware"))
+    mode_el = _build_input("mode", mode_entry[1], mode_raw, mode_entry[3])
+    mode_el.tooltip(mode_entry[2])
+    static_inputs[(section, "mode")] = mode_el
+
+    device_selects = {}
+    channel_selects = {}
+    fs_select = None
+
+    def sync_device_metadata(role: str) -> None:
+        select = device_selects.get(role)
+        if select is None:
+            return
+        try:
+            dev_id = int(select.value)
+        except (TypeError, ValueError):
+            dev_id = None
+        info = catalog.get(dev_id, {}) if dev_id is not None else {}
+        refs[f"{role}_dev_name"].value = info.get("name", "")
+        refs[f"{role}_dev_hostapi"].value = info.get("hostapi", "")
+
+    def refresh_channels(role: str) -> None:
+        capability = "input" if role == "in" else "output"
+        dev_select = device_selects.get(role)
+        if dev_select is None:
+            return
+        opts = _channel_options(catalog, dev_select.value, capability)
+        keys = ("ch_in_mic", "ch_in_loop") if role == "in" else ("ch_out_spkr", "ch_out_ref")
+        for key in keys:
+            ch_select = channel_selects.get(key)
+            if ch_select is None:
+                continue
+            current = ch_select.value
+            if current not in opts:
+                current = opts[0] if opts else None
+            _set_select_options(ch_select, opts, current)
+        sync_device_metadata(role)
+
+    def selected_device_id(role: str) -> Optional[int]:
+        try:
+            return int(device_selects[role].value)
+        except (KeyError, TypeError, ValueError):
+            return None
+
+    def refresh_sample_rates() -> None:
+        if fs_select is None:
+            return
+        current = fs_select.value
+        rates = get_supported_sample_rates(
+            selected_device_id("in"),
+            selected_device_id("out"),
+        )
+        if not rates and current:
+            rates = [int(current)]
+        elif current not in rates and rates:
+            current = rates[0]
+        _set_select_options(fs_select, _sample_rate_options(rates), current)
+
+    def refresh_devices() -> None:
+        nonlocal catalog
+        catalog = get_devices_and_channels()
+        for role, capability in (("in", "input"), ("out", "output")):
+            opts = _device_options(catalog, capability)
+            select = device_selects.get(role)
+            if select is None:
+                continue
+            current = select.value
+            if current not in opts:
+                current = next(iter(opts), None)
+            _set_select_options(select, opts, current)
+            refresh_channels(role)
+        refresh_sample_rates()
+        ui.notify("Audio device list refreshed", type="positive")
+
+    with ui.row().classes("w-full gap-2"):
+        in_options = _device_options(catalog, "input")
+        out_options = _device_options(catalog, "output")
+        in_value = current_int("in_dev")
+        out_value = current_int("out_dev")
+        if in_value not in in_options and in_options:
+            in_value = next(iter(in_options))
+        if out_value not in out_options and out_options:
+            out_value = next(iter(out_options))
+
+        in_select = ui.select(in_options, value=in_value, label="Input device") \
+            .classes("w-full").props("outlined dense")
+        out_select = ui.select(out_options, value=out_value, label="Output device") \
+            .classes("w-full").props("outlined dense")
+        device_selects["in"] = in_select
+        device_selects["out"] = out_select
+        static_inputs[(section, "in_dev")] = in_select
+        static_inputs[(section, "out_dev")] = out_select
+
+    with ui.row().classes("w-full gap-2"):
+        for key, label in (
+            ("in_ch_mic", "Mic input channel"),
+            ("in_ch_loop", "Loopback input channel"),
+        ):
+            opts = _channel_options(catalog, in_select.value, "input")
+            value = current_int(key)
+            if value not in opts and opts:
+                value = opts[0]
+            el = ui.select(opts, value=value, label=label).classes("w-full").props("outlined dense")
+            channel_selects[key] = el
+            static_inputs[(section, key)] = el
+
+    with ui.row().classes("w-full gap-2"):
+        for key, label in (
+            ("out_ch_spkr", "Speaker output channel"),
+            ("out_ch_ref", "Loopback output channel"),
+        ):
+            opts = _channel_options(catalog, out_select.value, "output")
+            value = current_int(key)
+            if value not in opts and opts:
+                value = opts[0]
+            el = ui.select(opts, value=value, label=label).classes("w-full").props("outlined dense")
+            channel_selects[key] = el
+            static_inputs[(section, key)] = el
+
+    for role in ("in", "out"):
+        def on_device_change(_e, r=role):
+            refresh_channels(r)
+            refresh_sample_rates()
+
+        device_selects[role].on("update:model-value", on_device_change)
+        sync_device_metadata(role)
+
+    fs_entry = next(e for e in EDITABLE_SCHEMA[section] if e[0] == "fs")
+    fs_value = current_int("fs", 48000)
+    fs_options = get_supported_sample_rates(selected_device_id("in"), selected_device_id("out"))
+    if not fs_options:
+        fs_options = [fs_value]
+    elif fs_value not in fs_options:
+        fs_value = fs_options[0]
+    fs_select = ui.select(_sample_rate_options(fs_options), value=fs_value, label="fs") \
+        .classes("w-full").props("outlined dense")
+    fs_select.tooltip(fs_entry[2])
+    static_inputs[(section, "fs")] = fs_select
+
+    skip_keys = {
+        "mode", "in_dev", "out_dev", "in_ch_mic", "in_ch_loop", "out_ch_spkr",
+        "out_ch_ref", "in_dev_name", "in_dev_hostapi", "out_dev_name", "out_dev_hostapi", "fs",
+    }
+    for key, kind, tooltip, options in EDITABLE_SCHEMA[section]:
+        if key in skip_keys:
+            continue
+        if not parser.has_option(section, key):
+            continue
+        raw = _strip_inline_comment(parser.get(section, key))
+        el = _build_input(key, kind, raw, options)
+        el.tooltip(tooltip)
+        static_inputs[(section, key)] = el
+
+    ui.button("Refresh Sound Devices", icon="refresh", on_click=refresh_devices).props("outline").classes("mt-4")
+    _prompt_for_audio_device_relink(parser, catalog, device_selects, refresh_channels, refresh_sample_rates)
+
+
+def _build_scanner_panel(parser, static_inputs: Dict[Tuple[str, str], object]) -> None:
+    """Render scanner settings plus GRBL connection settings."""
+    ui.label("Scanner").classes("text-base font-semibold")
+    for key, kind, tooltip, options in EDITABLE_SCHEMA["scanner"]:
+        if not parser.has_option("scanner", key):
+            if key == "cal_tool_height":
+                raw = "0.0"
+            else:
+                continue
+        else:
+            raw = _strip_inline_comment(parser.get("scanner", key))
+        el = _build_input(key, kind, raw, options)
+        el.tooltip(tooltip)
+        static_inputs[("scanner", key)] = el
+
+    ui.separator()
+    ui.label("GRBL connection").classes("text-base font-semibold")
+    for section, key, label in (
+        ("grbl_streamer", "type", "GRBL streamer type"),
+        ("grbl_streamer", "baudrate", "Baudrate"),
+        ("grbl_streamer", "mock_linear_speed_mm_s", "Mock linear speed mm/s"),
+        ("grbl_streamer", "mock_angular_speed_deg_s", "Mock angular speed deg/s"),
+        ("grbl_streamer", "mock_status_hz", "Mock DRO update Hz"),
+        ("windows", "port", "COM port"),
+    ):
+        if not parser.has_section(section):
+            continue
+        entry = next(e for e in EDITABLE_SCHEMA[section] if e[0] == key)
+        _key, kind, tooltip, options = entry
+        fallback = ""
+        if section == "grbl_streamer":
+            fallback = {
+                "mock_linear_speed_mm_s": "500.0",
+                "mock_angular_speed_deg_s": "180.0",
+                "mock_status_hz": "5.0",
+            }.get(key, "")
+        raw = _strip_inline_comment(parser.get(section, key, fallback=fallback))
+        if section == "windows" and key == "port":
+            options = _serial_port_options(raw)
+        el = _build_input(label, kind, raw, options)
+        el.tooltip(tooltip)
+        static_inputs[(section, key)] = el
+
+
+def _prompt_for_audio_device_relink(
+    parser,
+    catalog: dict,
+    device_selects: dict,
+    refresh_channels,
+    refresh_sample_rates,
+) -> None:
+    prompts = []
+    for role, capability in (("in", "input"), ("out", "output")):
+        id_key = f"{role}_dev"
+        name_key = f"{role}_dev_name"
+        api_key = f"{role}_dev_hostapi"
+        saved_name = _strip_inline_comment(parser.get("audio", name_key, fallback=""))
+        saved_api = _strip_inline_comment(parser.get("audio", api_key, fallback=""))
+        if not saved_name:
+            continue
+        try:
+            old_id = int(float(_strip_inline_comment(parser.get("audio", id_key, fallback="-1"))))
+        except ValueError:
+            old_id = -1
+        old_info = catalog.get(old_id)
+        if old_info and old_info.get("name") == saved_name and (
+            not saved_api or old_info.get("hostapi") == saved_api
+        ):
+            continue
+        new_id = find_device_id_by_name(
+            saved_name,
+            saved_api,
+            require_input=capability == "input",
+            require_output=capability == "output",
+        )
+        if new_id is not None and new_id != old_id:
+            prompts.append((role, saved_name, old_id, new_id))
+
+    for role, saved_name, old_id, new_id in prompts:
+        role_label = "input" if role == "in" else "output"
+        with ui.dialog() as prompt, ui.card().classes("w-[420px] max-w-full"):
+            ui.label("Audio device ID changed").classes("text-lg font-bold")
+            ui.label(
+                f"The {role_label} device '{saved_name}' appears to have changed "
+                f"from ID {old_id} to ID {new_id}. "
+                "Use this device?"
+            )
+            with ui.row().classes("w-full justify-end gap-2"):
+                ui.button("No", on_click=prompt.close).props("flat")
+
+                def accept(p=prompt, r=role, d=new_id):
+                    device_selects[r].value = d
+                    device_selects[r].update()
+                    refresh_channels(r)
+                    refresh_sample_rates()
+                    p.close()
+
+                ui.button("Use Device", on_click=accept).props("color=primary")
+        prompt.open()
+
+
+def check_audio_device_ids_on_startup(
+    config_file: str,
+    on_apply: Callable[[], None] | None = None,
+) -> None:
+    """Prompt when saved audio device names now resolve to different IDs."""
+    path = Path(config_file)
+    if not path.exists():
+        return
+
+    parser = configparser.ConfigParser(inline_comment_prefixes=("#", ";"))
+    parser.optionxform = str  # type: ignore[assignment]
+    parser.read(path)
+    if not parser.has_section("audio"):
+        return
+
+    catalog = get_devices_and_channels()
+    prompts = []
+    for role, capability in (("in", "input"), ("out", "output")):
+        id_key = f"{role}_dev"
+        name_key = f"{role}_dev_name"
+        api_key = f"{role}_dev_hostapi"
+        saved_name = _strip_inline_comment(parser.get("audio", name_key, fallback=""))
+        saved_api = _strip_inline_comment(parser.get("audio", api_key, fallback=""))
+        if not saved_name:
+            continue
+        try:
+            old_id = int(float(_strip_inline_comment(parser.get("audio", id_key, fallback="-1"))))
+        except ValueError:
+            old_id = -1
+
+        old_info = catalog.get(old_id)
+        if old_info and old_info.get("name") == saved_name and (
+            not saved_api or old_info.get("hostapi") == saved_api
+        ):
+            continue
+
+        new_id = find_device_id_by_name(
+            saved_name,
+            saved_api,
+            require_input=capability == "input",
+            require_output=capability == "output",
+        )
+        if new_id is not None and new_id != old_id:
+            prompts.append((role, saved_name, old_id, new_id))
+
+    def accept_device(prompt, role: str, new_id: int) -> None:
+        parser.set("audio", f"{role}_dev", str(new_id))
+        try:
+            import shutil
+            shutil.copy2(path, path.with_suffix(".old"))
+            with open(path, "w") as f:
+                parser.write(f)
+        except OSError as exc:
+            logger.error(f"Failed to update audio device ID: {exc}")
+            ui.notify(f"Failed to update audio device ID: {exc}", type="negative")
+            return
+
+        prompt.close()
+        ui.notify("Audio device ID updated", type="positive")
+        if on_apply is not None:
+            on_apply()
+
+    for role, saved_name, old_id, new_id in prompts:
+        role_label = "input" if role == "in" else "output"
+        with ui.dialog() as prompt, ui.card().classes("w-[420px] max-w-full"):
+            ui.label("Audio device ID changed").classes("text-lg font-bold")
+            ui.label(
+                f"The {role_label} device '{saved_name}' appears to have changed "
+                f"from ID {old_id} to ID {new_id}. "
+                "Use this device?"
+            )
+            with ui.row().classes("w-full justify-end gap-2"):
+                ui.button("No", on_click=prompt.close).props("flat")
+                ui.button(
+                    "Use Device",
+                    on_click=lambda p=prompt, r=role, d=new_id: accept_device(p, r, d),
+                ).props("color=primary")
+        prompt.open()
 
 
 # ---------------------------------------------------------------------------
@@ -281,6 +847,51 @@ def set_file_measurement_points_filename(
     return target_section
 
 
+def save_config_values(
+    config_file: str,
+    values: Dict[Tuple[str, str], object],
+    on_apply: Callable[[], None] | None = None,
+) -> None:
+    """Save selected config values through the same path as the config editor."""
+    path = Path(config_file)
+    if not path.exists():
+        raise FileNotFoundError(f"Config file not found: {path}")
+
+    parser = configparser.ConfigParser(inline_comment_prefixes=("#", ";"))
+    parser.optionxform = str  # type: ignore[assignment]
+    parser.read(path)
+
+    schema_lookup: Dict[Tuple[str, str], SchemaEntry] = {
+        (section, e[0]): e
+        for section, entries in EDITABLE_SCHEMA.items()
+        for e in entries
+    }
+
+    for (section, key), raw_value in values.items():
+        entry = schema_lookup.get((section, key))
+        if entry is None:
+            continue
+        kind = entry[1]
+        typed = _coerce(kind, "" if raw_value is None else str(raw_value))
+        if not parser.has_section(section):
+            parser.add_section(section)
+        parser.set(section, key, _format_for_ini(kind, typed))
+
+    backup_path = path.with_suffix(".old")
+    try:
+        import shutil
+        shutil.copy2(path, backup_path)
+        with open(path, "w", encoding="utf-8") as f:
+            parser.write(f)
+    except OSError as exc:
+        logger.error(f"Failed to backup or write config: {exc}")
+        raise
+
+    logger.info(f"Configuration values saved to {path}; rebuilding dependent objects.")
+    if on_apply is not None:
+        on_apply()
+
+
 def open_config_editor(config_file: str, on_apply: Callable[[], None]) -> None:
     path = Path(config_file)
     if not path.exists():
@@ -323,7 +934,7 @@ def open_config_editor(config_file: str, on_apply: Callable[[], None]) -> None:
 
         with ui.tabs().classes("w-full") as tabs:
             for section in EDITABLE_SCHEMA:
-                if parser.has_section(section):
+                if parser.has_section(section) and section not in CONFIG_EDITOR_HIDDEN_SECTIONS:
                     tab_objects[section] = ui.tab(section)
                     tab_order.append(section)
             if parser.has_section("motion_manager"):
@@ -349,28 +960,87 @@ def open_config_editor(config_file: str, on_apply: Callable[[], None]) -> None:
                     if section in EDITABLE_SCHEMA:
                         with ui.tab_panel(tab_objects[section]):
                             with ui.column().classes("w-full gap-2"):
-                                for key, kind, tooltip, options in EDITABLE_SCHEMA[section]:
-                                    if not parser.has_option(section, key):
-                                        continue
-                                    raw = _strip_inline_comment(parser.get(section, key))
-                                    el = _build_input(key, kind, raw, options)
-                                    el.tooltip(tooltip)
-                                    static_inputs[(section, key)] = el
                                 if section == "audio":
-                                    ui.button("List Sound Devices", on_click=_show_sound_devices) \
-                                        .props("outline").classes("mt-4")
+                                    visible_keys = CONFIG_EDITOR_SECTION_KEYS.get(section)
+                                    for key, kind, tooltip, options in EDITABLE_SCHEMA[section]:
+                                        if visible_keys is not None and key not in visible_keys:
+                                            continue
+                                        if not parser.has_option(section, key):
+                                            continue
+                                        raw = _strip_inline_comment(parser.get(section, key))
+                                        el = _build_input(key, kind, raw, options)
+                                        el.tooltip(tooltip)
+                                        static_inputs[(section, key)] = el
+                                elif section == "scanner":
+                                    _build_scanner_panel(parser, static_inputs)
+                                else:
+                                    for key, kind, tooltip, options in EDITABLE_SCHEMA[section]:
+                                        if not parser.has_option(section, key):
+                                            if (
+                                                section == "app"
+                                                and key in {
+                                                    "show_machine_coordinate_system",
+                                                    "show_rehome_button",
+                                                    "show_height_offset_controls",
+                                                "use_alternative_motion_controls",
+                                                }
+                                            ):
+                                                raw = (
+                                                    "True"
+                                                    if key in {
+                                                        "show_rehome_button",
+                                                        "show_height_offset_controls",
+                                                    }
+                                                    else "False"
+                                                )
+                                            else:
+                                                continue
+                                        else:
+                                            raw = _strip_inline_comment(parser.get(section, key))
+                                        el = _build_input(key, kind, raw, options)
+                                        el.tooltip(tooltip)
+                                        static_inputs[(section, key)] = el
 
                 # motion_manager (with inlined measurement-points subsection)
                 if "motion_manager" in tab_objects:
                     with ui.tab_panel(tab_objects["motion_manager"]):
                         _build_motion_manager_panel(parser, dyn)
 
-        with ui.row().classes("w-full justify-end mt-4 gap-2"):
-            ui.button("Cancel", on_click=dialog.close).props("flat")
+        def confirm_restore_defaults():
+            default_path = _default_config_path(path)
+            if not default_path.exists():
+                ui.notify(f"Default config not found: {default_path}", type="negative")
+                return
+
+            with ui.dialog() as confirm, ui.card().classes("w-[420px] max-w-full"):
+                ui.label("Restore default settings?").classes("text-lg font-bold")
+                ui.label(
+                    "This will replace the current config.ini with default_config.ini "
+                    "and save a .old backup."
+                ).classes("text-sm text-gray-700")
+                with ui.row().classes("w-full justify-end gap-2"):
+                    ui.button("Cancel", on_click=confirm.close).props("flat")
+
+                    def do_restore():
+                        if restore_default_config(path, on_apply):
+                            confirm.close()
+                            dialog.close()
+
+                    ui.button("Restore Defaults", on_click=do_restore).props("color=negative")
+            confirm.open()
+
+        with ui.row().classes("w-full justify-between mt-4 gap-2"):
             ui.button(
-                "OK",
-                on_click=lambda: _on_ok(parser, path, static_inputs, dyn, dialog, on_apply),
-            ).props("color=primary")
+                "Restore Defaults",
+                icon="restart_alt",
+                on_click=confirm_restore_defaults,
+            ).props("outline color=negative")
+            with ui.row().classes("gap-2"):
+                ui.button("Cancel", on_click=dialog.close).props("flat")
+                ui.button(
+                    "OK",
+                    on_click=lambda: _on_ok(parser, path, static_inputs, dyn, dialog, on_apply),
+                ).props("color=primary")
 
     dialog.open()
 

@@ -29,14 +29,19 @@ dependencies = [
   "soundfile>=0.13.1",
   "scipy-stubs~=1.16.3",
   "nicegui[highcharts]>=2.24.2",
+  "pyside6>=6.11.1",
+  "pyvista>=0.48.4",
+  "pyvistaqt>=0.11.4",
 ]
 
 [project.optional-dependencies]
 dev = ["pytest", "pylint", "mypy"]
+native = ["PySide6>=6.8", "matplotlib>=3.9", "pyvista>=0.48.4", "pyvistaqt>=0.11.4"]
 
 [project.scripts]
 nfs-app = "nfs.nfs_app:main"
 harmonic-drive = "harmonic_drive.gui:main"
+harmonic-drive-qt = "harmonic_drive_qt.main:main"
 
 [project.entry-points."nfs.measurement_points"]
 cylindrical = "nfs.plugins.cylindrical_measurement_points:register"

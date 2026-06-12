@@ -73,7 +73,11 @@ def log_version_info(project_name: str = "NFS Project", repo_path: str = None, l
         logger.info("=" * 50)
 
 
-def setup_logging(config_file: str = "config.ini", project_name: str = "NFS Project"):
+def setup_logging(
+    config_file: str = "config.ini",
+    project_name: str = "NFS Project",
+    force: bool = False,
+):
     """
     Sets up logging for the application using loguru.
     Configures loggers based on settings in the provided configuration file.
@@ -86,10 +90,12 @@ def setup_logging(config_file: str = "config.ini", project_name: str = "NFS Proj
     retention = 1 week
     """
     global _initialized
-    if _initialized:
+    was_initialized = _initialized
+    if _initialized and not force:
         return
 
-    # Remove default handler
+    # Remove default/stale handlers. With force=True this lets the native UI apply
+    # a changed terminal verbosity without requiring a restart.
     logger.remove()
 
     # Default values
@@ -127,16 +133,18 @@ def setup_logging(config_file: str = "config.ini", project_name: str = "NFS Proj
             format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {name}:{function}:{line} - {message}"
         )
 
-    logger.info(f"Logging initialized at level {level}")
+    action = "reconfigured" if was_initialized else "initialized"
+    logger.info(f"Logging {action} at level {level}")
     if log_file:
         logger.info(f"Logging to file: {log_file}")
 
-    log_version_info(project_name)
-    
-    # Also log NFS version if this is another project
-    if project_name != "NFS Project":
-        nfs_path = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        log_version_info("NFS Project", repo_path=nfs_path, log_env=False)
+    if not was_initialized:
+        log_version_info(project_name)
+        
+        # Also log NFS version if this is another project
+        if project_name != "NFS Project":
+            nfs_path = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            log_version_info("NFS Project", repo_path=nfs_path, log_env=False)
     
     _initialized = True
 

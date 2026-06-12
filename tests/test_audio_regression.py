@@ -74,13 +74,10 @@ def test_measure_ir_regression(mock_config, tmp_path):
         # r100.0 -> r100p0, ph0.0 -> ph0p0, z10.0 -> z10p0
         base_name = "REGRESSION_r100p0_ph0p0_z10p0"
 
-        # Audio class uses self.rec_dir for recordings and self.rec_dir / "debug" for metrics
-        # If set_session_directory(tmp_path) is called:
-        # self.rec_dir = tmp_path / "Recordings"
-        # self.debug_dir = tmp_path / "Recordings" / "debug"
+        # Audio class uses the session directory directly for IR files and debug output.
 
-        metrics_file = tmp_path / "Recordings" / "debug" / f"{base_name}_metrics.json"
-        ir_file = tmp_path / "Recordings" / f"{base_name}_ir.wav"
+        metrics_file = tmp_path / "debug" / f"{base_name}_metrics.json"
+        ir_file = tmp_path / f"{base_name}_ir.wav"
 
         assert metrics_file.exists(), f"Metrics file not found at {metrics_file}. Root files: {list(tmp_path.glob('**/*'))}"
         assert ir_file.exists(), f"IR file not found at {ir_file}."

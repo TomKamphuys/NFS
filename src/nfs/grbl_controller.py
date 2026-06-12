@@ -1,5 +1,8 @@
 import configparser
+import math
+import re
 import sys
+import threading
 import time
 from abc import ABC, abstractmethod
 from typing import Optional
@@ -76,6 +79,14 @@ class IGrblController(ABC):
         """
         pass
 
+    def get_machine_position(self) -> Optional[CylindricalPosition]:
+        """
+        Return the current machine-coordinate cylindrical position, if available.
+
+        :return: A CylindricalPosition object or None.
+        """
+        return self.get_position()
+
     @abstractmethod
     def get_state(self) -> GrblMachineState:
         """
@@ -99,7 +110,7 @@ class IGrblController(ABC):
         """
         Register a callback for state and position updates.
 
-        :param callback: A callable that receives (position, state).
+        :param callback: A callable that receives (position, state, machine_position).
         """
         pass
 
@@ -131,7 +142,7 @@ class GrblControllerMock(IGrblController):
         x_match = re.search(r'X([-+]?\d*\.?\d+)', message)
         y_match = re.search(r'Y([-+]?\d*\.?\d+)', message)
         z_match = re.search(r'Z([-+]?\d*\.?\d+)', message)
-        
+
         if x_match:
             self._pos_z = float(x_match.group(1))
 
@@ -162,6 +173,9 @@ class GrblControllerMock(IGrblController):
     def get_position(self) -> CylindricalPosition:
         return CylindricalPosition(self._pos_r, self._pos_t, self._pos_z)
 
+    def get_machine_position(self) -> CylindricalPosition:
+        return self.get_position()
+
     def get_state(self) -> GrblMachineState:
         return GrblMachineState.IDLE
 
@@ -176,6 +190,223 @@ class GrblControllerMock(IGrblController):
         pass
 
 
+def _target_from_message(
+    message: str,
+    current_r: float,
+    current_t: float,
+    current_z: float,
+) -> Optional[tuple[float, float, float]]:
+    x_match = re.search(r'X([-+]?\d*\.?\d+)', message, re.IGNORECASE)
+    y_match = re.search(r'Y([-+]?\d*\.?\d+)', message, re.IGNORECASE)
+    z_match = re.search(r'Z([-+]?\d*\.?\d+)', message, re.IGNORECASE)
+    if not any((x_match, y_match, z_match)):
+        return None
+    target_r = current_r
+    target_t = current_t
+    target_z = current_z
+    if x_match:
+        target_z = float(x_match.group(1))
+    if y_match:
+        target_r = float(y_match.group(1))
+    if z_match:
+        target_t = float(z_match.group(1))
+    return target_r, target_t, target_z
+
+
+class GrblControllerMockSimulatedDRO(IGrblController):
+    """
+    Mock GRBL controller with real-time movement and DRO/status callbacks.
+
+    This is intended for reproducing UI load from real GRBLHAL status reports
+    while running without hardware. The plain Mock controller remains instant
+    and quiet.
+    """
+    def __init__(
+        self,
+        *,
+        linear_speed_mm_s: float = 500.0,
+        angular_speed_deg_s: float = 180.0,
+        status_hz: float = 5.0,
+    ):
+        self._pos_r = 0.0
+        self._pos_t = 0.0
+        self._pos_z = 0.0
+        self._machine_pos_r = 0.0
+        self._machine_pos_t = 0.0
+        self._machine_pos_z = 0.0
+        self._state = GrblMachineState.IDLE
+        self._state_raw = "Idle"
+        self._on_state_update_callback = None
+        self._linear_speed_mm_s = max(1.0, float(linear_speed_mm_s))
+        self._angular_speed_deg_s = max(1.0, float(angular_speed_deg_s))
+        self._status_interval_s = 1.0 / max(1.0, float(status_hz))
+        self._lock = threading.Lock()
+        self._motion_done = threading.Event()
+        self._motion_done.set()
+        self._shutdown = False
+
+    def shutdown(self) -> None:
+        logger.trace(f'MockingShutting down')
+        self._shutdown = True
+        self._motion_done.set()
+
+    def send(self, message: str) -> None:
+        logger.trace(f'Mocking sending message: {message}')
+        if self._is_motion_command(message):
+            self._start_motion(message)
+            return
+        target = self._target_from_message(message)
+        if target is not None:
+            with self._lock:
+                self._pos_r, self._pos_t, self._pos_z = target
+                self._machine_pos_r, self._machine_pos_t, self._machine_pos_z = target
+            self._emit_state_update()
+
+    def send_and_wait_for_move_ready(self, message: str) -> None:
+        logger.trace(f'Mocking send and wait: {message}')
+        self.send(message)
+        self._motion_done.wait()
+
+    def killalarm(self) -> None:
+        logger.trace(f'Mocking killalarm')
+        with self._lock:
+            self._state = GrblMachineState.IDLE
+            self._state_raw = "Idle"
+        self._emit_state_update()
+
+    def softreset(self) -> None:
+        logger.trace(f'Mocking softreset')
+        self.killalarm()
+
+    def hold(self) -> None:
+        logger.trace(f'Mocking hold')
+        with self._lock:
+            self._state = GrblMachineState.IDLE
+            self._state_raw = "Hold:0"
+        self._motion_done.set()
+        self._emit_state_update()
+
+    def get_position(self) -> CylindricalPosition:
+        with self._lock:
+            return CylindricalPosition(self._pos_r, self._pos_t, self._pos_z)
+
+    def get_machine_position(self) -> CylindricalPosition:
+        with self._lock:
+            return CylindricalPosition(
+                self._machine_pos_r,
+                self._machine_pos_t,
+                self._machine_pos_z,
+            )
+
+    def get_state(self) -> GrblMachineState:
+        with self._lock:
+            return self._state
+
+    def get_state_raw(self) -> str:
+        with self._lock:
+            return self._state_raw
+
+    def set_on_state_update_callback(self, callback) -> None:
+        self._on_state_update_callback = callback
+        self._emit_state_update()
+
+    def force_position_update(self):
+        logger.trace(f'Mocking force position update')
+        self._emit_state_update()
+
+    def _is_motion_command(self, message: str) -> bool:
+        stripped = message.strip().upper()
+        return stripped.startswith(("G0", "G00", "G1", "G01", "G2", "G02", "G3", "G03", "$H"))
+
+    def _target_from_message(self, message: str) -> Optional[tuple[float, float, float]]:
+        with self._lock:
+            return _target_from_message(
+                message,
+                self._pos_r,
+                self._pos_t,
+                self._pos_z,
+            )
+
+    def _start_motion(self, message: str) -> None:
+        if message.strip().upper().startswith("$H"):
+            target = (0.0, 0.0, 0.0)
+        else:
+            target = self._target_from_message(message)
+            if target is None:
+                self._emit_state_update()
+                return
+
+        self._motion_done.wait()
+        with self._lock:
+            start = (self._pos_r, self._pos_t, self._pos_z)
+            self._state = GrblMachineState.RUN
+            self._state_raw = "Run"
+            self._motion_done.clear()
+
+        duration = self._motion_duration(start, target)
+        thread = threading.Thread(
+            target=self._run_motion,
+            args=(start, target, duration),
+            name="GrblControllerMockStatus",
+            daemon=True,
+        )
+        thread.start()
+
+    def _motion_duration(self, start: tuple[float, float, float], target: tuple[float, float, float]) -> float:
+        linear_delta = math.hypot(target[0] - start[0], target[2] - start[2])
+        angular_delta = abs(target[1] - start[1])
+        return max(
+            linear_delta / self._linear_speed_mm_s,
+            angular_delta / self._angular_speed_deg_s,
+            self._status_interval_s,
+        )
+
+    def _run_motion(
+        self,
+        start: tuple[float, float, float],
+        target: tuple[float, float, float],
+        duration_s: float,
+    ) -> None:
+        started_at = time.monotonic()
+        while not self._shutdown:
+            elapsed = time.monotonic() - started_at
+            fraction = min(1.0, elapsed / duration_s) if duration_s > 0 else 1.0
+            pos = tuple(
+                start_value + (target_value - start_value) * fraction
+                for start_value, target_value in zip(start, target)
+            )
+            with self._lock:
+                self._pos_r, self._pos_t, self._pos_z = pos
+                self._machine_pos_r, self._machine_pos_t, self._machine_pos_z = pos
+            self._emit_state_update()
+            if fraction >= 1.0:
+                break
+            time.sleep(self._status_interval_s)
+
+        with self._lock:
+            self._pos_r, self._pos_t, self._pos_z = target
+            self._machine_pos_r, self._machine_pos_t, self._machine_pos_z = target
+            self._state = GrblMachineState.IDLE
+            self._state_raw = "Idle"
+        self._emit_state_update()
+        self._motion_done.set()
+
+    def _emit_state_update(self) -> None:
+        callback = self._on_state_update_callback
+        if callback is None:
+            return
+        position = self.get_position()
+        machine_position = self.get_machine_position()
+        state = self.get_state()
+        try:
+            try:
+                callback(position, state, machine_position)
+            except TypeError:
+                callback(position, state)
+        except Exception as exc:
+            logger.error(f"Error in mock state update callback: {exc}")
+
+
 class EventHandler:
     """
     Handles events from the GRBL streamer and maintains the current state and position.
@@ -186,6 +417,7 @@ class EventHandler:
         """
         self._received_message = ''
         self._current_position = None
+        self._machine_position = None
 
         self._state: GrblMachineState = GrblMachineState.IDLE
         self._state_raw: str = "Idle"
@@ -196,7 +428,7 @@ class EventHandler:
         """
         Set the callback function for state updates.
 
-        :param callback: A callable that receives (position, state).
+        :param callback: A callable that receives (position, state, machine_position).
         """
         self._on_state_update_callback = callback
 
@@ -223,6 +455,14 @@ class EventHandler:
         :return: A CylindricalPosition object.
         """
         return self._current_position
+
+    def get_machine_position(self) -> Optional[CylindricalPosition]:
+        """
+        Get the current machine-coordinate cylindrical position.
+
+        :return: A CylindricalPosition object, or None if not reported yet.
+        """
+        return self._machine_position
 
     def get_state(self) -> GrblMachineState:
         """
@@ -254,13 +494,29 @@ class EventHandler:
                 self._state_raw = str(data[0])
                 self._state = GrblMachineState.from_grbl_mode(data[0])
 
+                if isinstance(data[1], tuple):
+                    mpos = data[1]
+                    self._machine_position = CylindricalPosition(
+                        mpos[1], mpos[2], mpos[0]
+                    )
+
                 if isinstance(data[2], tuple):
                     wpos = data[2]
                     self._current_position = CylindricalPosition(wpos[1], wpos[2], wpos[0])
 
                 if self._on_state_update_callback:
                     try:
-                        self._on_state_update_callback(self._current_position, self._state)
+                        try:
+                            self._on_state_update_callback(
+                                self._current_position,
+                                self._state,
+                                self._machine_position,
+                            )
+                        except TypeError:
+                            self._on_state_update_callback(
+                                self._current_position,
+                                self._state,
+                            )
                     except Exception as e:
                         logger.error(f"Error in state update callback: {e}")
 
@@ -337,11 +593,38 @@ class GrblControllerFactory:
             grbl_streamer.send_immediately("$10=2")  # Force the report format to match what we expect.
 
             connection = GrblStreamerClientConnection(grbl_streamer, event_handler)
-            instance = ESP32Duino(connection)
+            try:
+                instance = ESP32Duino(connection)
+            except Exception:
+                try:
+                    connection.close()
+                except Exception as close_exc:
+                    logger.warning(f"Failed to close GRBL connection after probe failure: {close_exc}")
+                raise
             GrblControllerFactory._instance = instance
             return instance
         elif type_to_build == 'Mock':
             instance = GrblControllerMock()
+            GrblControllerFactory._instance = instance
+            return instance
+        elif type_to_build in {'MockSimulatedDRO', 'MockWithDRO'}:
+            instance = GrblControllerMockSimulatedDRO(
+                linear_speed_mm_s=config_parser.getfloat(
+                    section,
+                    'mock_linear_speed_mm_s',
+                    fallback=500.0,
+                ),
+                angular_speed_deg_s=config_parser.getfloat(
+                    section,
+                    'mock_angular_speed_deg_s',
+                    fallback=180.0,
+                ),
+                status_hz=config_parser.getfloat(
+                    section,
+                    'mock_status_hz',
+                    fallback=5.0,
+                ),
+            )
             GrblControllerFactory._instance = instance
             return instance
         else:
@@ -411,6 +694,14 @@ class GrblStreamerClientConnection:
         """
         return self._event_handler.get_current_position()
 
+    def get_machine_position(self) -> Optional[CylindricalPosition]:
+        """
+        Get the current machine-coordinate position from the event handler.
+
+        :return: A CylindricalPosition object, or None if not reported yet.
+        """
+        return self._event_handler.get_machine_position()
+
     def get_state(self) -> GrblMachineState:
         """
         Get the current state from the event handler.
@@ -460,6 +751,7 @@ class ESP32Duino(IGrblController):
     :type _connection: ClientConnection
     """
     UNLOCK_COMMAND = "$X"  # Command to unlock and clear any alarm
+    PROBE_ACK_TIMEOUT_S = 3.0
 
     def __init__(self, connection: GrblStreamerClientConnection) -> None:
         """
@@ -472,7 +764,7 @@ class ESP32Duino(IGrblController):
 
     def _unlock(self) -> None:
         """Initialize the connection by unlocking and clearing the buffer."""
-        self.send(self.UNLOCK_COMMAND)
+        self.send(self.UNLOCK_COMMAND, ack_timeout_s=self.PROBE_ACK_TIMEOUT_S)
 
     def shutdown(self) -> None:
         """
@@ -486,15 +778,16 @@ class ESP32Duino(IGrblController):
         logger.info('Disconnecting from GRBL device')
         self._connection.close()
 
-    def send(self, message: str) -> None:
+    def send(self, message: str, ack_timeout_s: Optional[float] = None) -> None:
         """
         Send a G-code command and wait for acknowledgment.
 
         :param message: The command to send.
+        :param ack_timeout_s: Optional timeout for startup/probe commands only.
         """
         self._connection.send(message + '\n')
         logger.trace(f'Sending message to GRBL device: {message}')
-        self._wait_for_ack()
+        self._wait_for_ack(ack_timeout_s)
 
     def _send_immediate(self, message: str) -> None:
         """
@@ -563,6 +856,14 @@ class ESP32Duino(IGrblController):
         """
         return self._connection.get_position()
 
+    def get_machine_position(self) -> Optional[CylindricalPosition]:
+        """
+        Get the current machine-coordinate cylindrical position.
+
+        :return: A CylindricalPosition object, or None if not reported yet.
+        """
+        return self._connection.get_machine_position()
+
     def get_state(self) -> GrblMachineState:
         """
         Get the current machine state.
@@ -587,18 +888,21 @@ class ESP32Duino(IGrblController):
         """
         self._connection.set_on_state_update_callback(callback)
 
-    def _wait_for_ack(self) -> None:
+    def _wait_for_ack(self, timeout_s: Optional[float] = None) -> None:
         """
         Wait until an 'ok' acknowledgment is received from the hardware.
         """
-        ready = False
-        while not ready:
+        deadline = time.monotonic() + timeout_s if timeout_s is not None else None
+        while deadline is None or time.monotonic() < deadline:
             time.sleep(0.01)
             result = self._receive().rstrip()
             if result != "":
                 logger.trace(f'Received: {result}')
             if "ok" in result:
-                ready = True
+                return
+        raise TimeoutError(
+            "No GRBL response received after opening the serial port"
+        )
 
     def _receive(self) -> str:
         """
