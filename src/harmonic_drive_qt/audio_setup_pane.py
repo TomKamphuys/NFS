@@ -17,7 +17,7 @@ from harmonic_drive.config_editor import (
 from nfs.audio import get_audio_meter_state, get_devices_and_channels, get_supported_sample_rates
 
 from .backend import BackendManager, Worker
-from .styles import light_combo, primary_button, toggle_style
+from .styles import primary_button, toggle_style
 from .qt_compat import (
     QCheckBox,
     QComboBox,
@@ -32,6 +32,7 @@ from .qt_compat import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QThreadPool,
     QTimer,
     QVBoxLayout,
@@ -148,7 +149,6 @@ class AudioSetupPane(QWidget):
         layout.addWidget(title)
 
         self.api_select = QComboBox()
-        light_combo(self.api_select)
         api_options = _audio_api_options(self.catalog)
         in_dev_id = _int_value(parser, "audio", "in_dev")
         out_dev_id = _int_value(parser, "audio", "out_dev")
@@ -159,10 +159,16 @@ class AudioSetupPane(QWidget):
             or self.catalog.get(out_dev_id, {}).get("hostapi")
             or (api_options[0] if api_options else "")
         )
-        self.api_select.addItems(api_options)
-        if current_api in api_options:
-            self.api_select.setCurrentText(current_api)
-        layout.addWidget(self._labeled("Audio API", self.api_select))
+        self._set_combo_items(
+            self.api_select,
+            api_options,
+            current_api,
+            styled_field=True,
+            fit_to_contents=True,
+        )
+        api_field = self._labeled("Audio API", self.api_select)
+        api_field.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        layout.addWidget(api_field, 0, Qt.AlignmentFlag.AlignLeft)
 
         device_row = QHBoxLayout()
         self.in_device = QComboBox()
@@ -171,15 +177,6 @@ class AudioSetupPane(QWidget):
         self.in_loop_channel = QComboBox()
         self.out_speaker_channel = QComboBox()
         self.out_ref_channel = QComboBox()
-        for combo in (
-            self.in_device,
-            self.out_device,
-            self.in_mic_channel,
-            self.in_loop_channel,
-            self.out_speaker_channel,
-            self.out_ref_channel,
-        ):
-            light_combo(combo)
         device_row.addWidget(self._device_group("Input", self.in_device, self.in_mic_channel, self.in_loop_channel))
         device_row.addWidget(self._device_group("Output", self.out_device, self.out_speaker_channel, self.out_ref_channel, output=True))
         layout.addLayout(device_row)
@@ -196,9 +193,8 @@ class AudioSetupPane(QWidget):
         self.level = self._spin(_float_value(parser, "sweep", "sweep_level_dbfs", -20.0), -120, 0, "", 1)
         self.level.setFixedWidth(110)
         self.fs = QComboBox()
-        light_combo(self.fs)
+        self.fs.setProperty("fitToContents", True)
         self._populate_sample_rates(_int_value(parser, "audio", "fs", 48000))
-        self.fs.setFixedWidth(96)
         row = QHBoxLayout()
         row.addWidget(self._labeled_with_unit("Output level", self.level, "dBFS"))
         row.addWidget(self._labeled_with_unit("FS", self.fs, "Hz"))
@@ -380,7 +376,6 @@ class AudioSetupPane(QWidget):
         advanced.setChecked(False)
         adv = QGridLayout(advanced)
         self.naming = QComboBox()
-        light_combo(self.naming)
         self.naming.addItems(["tom", "dimitri"])
         self.naming.setCurrentText(_value(parser, "sweep", "naming_convention", "dimitri"))
         self.align = QCheckBox("Align to first marker")
@@ -494,16 +489,9 @@ class AudioSetupPane(QWidget):
             )
             return
         widget.setStyleSheet(
-            f"QComboBox {{ border: none; background: {fill}; font-size: 13px; color: #0f172a; padding: 1px 18px 1px 0; }}"
+            f"QComboBox {{ border: none; background: {fill}; font-size: 10pt; color: #0f172a; padding: 1px 18px 1px 0; }}"
             "QComboBox::drop-down { border: none; width: 16px; }"
         )
-        view = widget.view() if hasattr(widget, "view") else None
-        if view is not None:
-            view.setStyleSheet(
-                f"QListView {{ background: {fill}; color: #111827; border: 1px solid #bfc8d4; outline: 0; }}"
-                "QListView::item { min-height: 24px; padding: 3px 8px; }"
-                "QListView::item:selected { background: #dbeafe; color: #111827; }"
-            )
 
     def _connect_auto_apply_controls(self) -> None:
         controls = [
@@ -525,7 +513,14 @@ class AudioSetupPane(QWidget):
     def _combo_data(self, combo: QComboBox) -> Any:
         return combo.currentData()
 
-    def _set_combo_items(self, combo: QComboBox, options: dict | list, current=None) -> None:
+    def _set_combo_items(
+        self,
+        combo: QComboBox,
+        options: dict | list,
+        current=None,
+        styled_field: bool = True,
+        fit_to_contents: bool | None = None,
+    ) -> None:
         combo.blockSignals(True)
         combo.clear()
         if isinstance(options, dict):
@@ -536,8 +531,12 @@ class AudioSetupPane(QWidget):
                 combo.addItem(str(item), item)
         self._set_combo_data(combo, current)
         combo.blockSignals(False)
-        light_combo(combo)
-        self._apply_tinted_combo_style(combo)
+        if styled_field:
+            self._apply_tinted_combo_style(combo)
+        should_fit = combo.property("fitToContents") if fit_to_contents is None else fit_to_contents
+        if should_fit:
+            combo.setProperty("fitToContents", True)
+            self._fit_combo_to_contents(combo, options)
 
     def _set_combo_data(self, combo: QComboBox, value) -> None:
         if value is None:
@@ -546,6 +545,17 @@ class AudioSetupPane(QWidget):
             if combo.itemData(index) == value:
                 combo.setCurrentIndex(index)
                 return
+
+    def _fit_combo_to_contents(self, combo: QComboBox, options: list | dict) -> None:
+        if isinstance(options, dict):
+            labels = [str(label) for label in options.values()]
+        else:
+            labels = [str(item) for item in options]
+        longest = max(labels, key=len, default="")
+        combo.setMinimumContentsLength(max(12, len(longest)))
+        combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
+        combo.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        combo.setFixedWidth(combo.sizeHint().width())
 
     def selected_device_id(self, role: str) -> int | None:
         value = self._combo_data(self.in_device if role == "in" else self.out_device)
@@ -584,7 +594,12 @@ class AudioSetupPane(QWidget):
             rates = [int(current)]
         elif rates and current not in rates:
             current = rates[0]
-        self._set_combo_items(self.fs, _sample_rate_options(rates), current)
+        self._set_combo_items(
+            self.fs,
+            _sample_rate_options(rates),
+            current,
+            styled_field=True,
+        )
 
     def refresh_devices_for_api(self) -> None:
         self._populate_devices("in", self.selected_device_id("in"))

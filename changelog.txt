@@ -1,5 +1,23 @@
 
 --------
+13/06/26
+--------
+Expanded the native Qt Settings pane motion-manager tab. The tab now exposes
+ the motion-manager type and dynamic type-specific fields such as safe_radius.
+
+Fixed native Qt Audio Setup combo styling. The Audio API and FS dropdowns now
+render as normal framed fields sized to their contents, while the tinted
+device/channel controls remain visually distinct. Dropdown popup font warnings
+were resolved by using point-sized fonts for the shared Qt stylesheet.
+
+Files touched:
+src/harmonic_drive_qt/settings_dialog.py
+src/harmonic_drive_qt/audio_setup_pane.py
+src/harmonic_drive_qt/styles.py
+tests/test_qt_settings_dialog.py
+tests/test_qt_audio_setup_pane.py
+
+--------
 12/06/26
 --------
 Added a native Qt UI under src/harmonic_drive_qt built with PySide6. The new UI

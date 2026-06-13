@@ -7,6 +7,8 @@ from harmonic_drive.config_editor import (
     DISPLAY_LABELS,
     EDITABLE_SCHEMA,
     CONFIG_EDITOR_HIDDEN_SECTIONS,
+    MEASUREMENT_POINTS_TYPES,
+    MOTION_MANAGER_TYPES,
     _parse_bool,
     _strip_inline_comment,
     _format_for_ini,
@@ -53,6 +55,23 @@ class SettingsDialog(QDialog):
         
         self.inputs = {}
         self.tab_sections: dict[str, int] = {}
+        self.motion_manager_extra_keys = {
+            key
+            for entries in MOTION_MANAGER_TYPES.values()
+            for key, _kind, _tooltip, _options in entries
+        }
+        self.motion_manager_extra_widgets = {}
+        self.motion_manager_mp_section_name = _strip_inline_comment(
+            self.parser.get("motion_manager", "measurement_points", fallback="")
+        )
+        self.measurement_points_extra_keys = {
+            key
+            for entries in MEASUREMENT_POINTS_TYPES.values()
+            for key, _kind, _tooltip, _options in entries
+        }
+        self.measurement_points_extra_widgets = {}
+        self.measurement_points_section_input = None
+        self.measurement_points_type_input = None
         
         self.setWindowTitle("Edit configuration")
         self.resize(760, 560)
@@ -144,8 +163,10 @@ class SettingsDialog(QDialog):
                     options = list(_serial_port_options(raw).keys())
                 self._add_field(layout, grbl_sec, key, label, entry[1], raw, options)
         elif section == "motion_manager":
-            lbl = QLabel("Motion Manager configurations are partially supported in native UI.")
+            lbl = QLabel("Motion Manager")
+            lbl.setStyleSheet("font-weight: bold; font-size: 14px;")
             layout.addWidget(lbl)
+            self._build_motion_manager_fields(layout)
         else:
             self._build_fields(layout, section, EDITABLE_SCHEMA.get(section, []))
             
@@ -167,6 +188,173 @@ class SettingsDialog(QDialog):
             raw = _strip_inline_comment(self.parser.get(section, key))
             label = DISPLAY_LABELS.get(key, key.replace('_', ' ').capitalize())
             self._add_field(layout, section, key, label, kind, raw, options)
+
+    def _build_motion_manager_fields(self, layout) -> None:
+        raw_type = _strip_inline_comment(
+            self.parser.get("motion_manager", "type", fallback="")
+        )
+        type_widget, _type_row = self._add_field(
+            layout,
+            "motion_manager",
+            "type",
+            "Motion Manager Type",
+            "choice",
+            raw_type,
+            self._options_with_current(list(MOTION_MANAGER_TYPES.keys()), raw_type),
+        )
+
+        for key, kind, tooltip, options in self._all_motion_manager_fields():
+            raw = _strip_inline_comment(
+                self.parser.get("motion_manager", key, fallback="")
+            )
+            label = DISPLAY_LABELS.get(key, key.replace('_', ' ').title())
+            _widget, row = self._add_field(
+                layout, "motion_manager", key, label, kind, raw, options
+            )
+            self.motion_manager_extra_widgets[key] = row
+
+        def update_extra_visibility(manager_type: str) -> None:
+            active_keys = {
+                key
+                for key, _kind, _tooltip, _options in MOTION_MANAGER_TYPES.get(
+                    manager_type, []
+                )
+            }
+            for key, row in self.motion_manager_extra_widgets.items():
+                row.setVisible(key in active_keys)
+
+        if isinstance(type_widget, QComboBox):
+            type_widget.currentTextChanged.connect(update_extra_visibility)
+            update_extra_visibility(type_widget.currentText())
+
+        separator = QFrame()
+        separator.setFrameShape(QFrame.Shape.HLine if hasattr(QFrame, "Shape") else 4)
+        separator.setStyleSheet("color: #e2e8f0; margin-top: 8px; margin-bottom: 8px;")
+        layout.addWidget(separator)
+
+        lbl = QLabel("Measurement Points")
+        lbl.setStyleSheet("font-weight: bold; font-size: 14px;")
+        layout.addWidget(lbl)
+        self._build_measurement_points_fields(layout)
+
+    def _build_measurement_points_fields(self, layout) -> None:
+        mp_section_name = self.motion_manager_mp_section_name
+        current_type = ""
+        if mp_section_name and self.parser.has_section(mp_section_name):
+            current_type = _strip_inline_comment(
+                self.parser.get(mp_section_name, "type", fallback="")
+            )
+        else:
+            current_type = _strip_inline_comment(
+                self.parser.get("motion_manager", "measurement_points_type", fallback="")
+            )
+            if not current_type:
+                fallback_type = _strip_inline_comment(
+                    self.parser.get("motion_manager", "type", fallback="")
+                )
+                if fallback_type in MEASUREMENT_POINTS_TYPES:
+                    current_type = fallback_type
+
+        self.measurement_points_section_input, _section_row = self._add_field(
+            layout,
+            "__motion_manager_ui__",
+            "measurement_points_section",
+            "Measurement Points Section",
+            "str",
+            mp_section_name,
+            None,
+        )
+        self.measurement_points_type_input, _type_row = self._add_field(
+            layout,
+            "__motion_manager_ui__",
+            "measurement_points_type",
+            "Measurement Points Type",
+            "choice",
+            current_type,
+            self._options_with_current(list(MEASUREMENT_POINTS_TYPES.keys()), current_type),
+        )
+
+        for key, kind, tooltip, options in self._all_measurement_points_fields():
+            raw = self._measurement_points_raw_value(mp_section_name, key)
+            label = DISPLAY_LABELS.get(key, key.replace('_', ' ').title())
+            _widget, row = self._add_field(
+                layout, "__measurement_points__", key, label, kind, raw, options
+            )
+            self.measurement_points_extra_widgets[key] = row
+
+        def update_measurement_points_fields(*_args) -> None:
+            mp_type = self._combo_or_text(self.measurement_points_type_input)
+            section_name = self._line_text(self.measurement_points_section_input)
+            active_keys = {
+                key
+                for key, _kind, _tooltip, _options in MEASUREMENT_POINTS_TYPES.get(
+                    mp_type, []
+                )
+            }
+            for key, row in self.measurement_points_extra_widgets.items():
+                row.setVisible(key in active_keys)
+                if key in active_keys:
+                    widget, _kind = self.inputs[("__measurement_points__", key)]
+                    self._set_widget_text(
+                        widget, self._measurement_points_raw_value(section_name, key)
+                    )
+
+        if isinstance(self.measurement_points_type_input, QComboBox):
+            self.measurement_points_type_input.currentTextChanged.connect(
+                update_measurement_points_fields
+            )
+        if isinstance(self.measurement_points_section_input, QLineEdit):
+            self.measurement_points_section_input.textChanged.connect(
+                update_measurement_points_fields
+            )
+        update_measurement_points_fields()
+
+    def _all_motion_manager_fields(self):
+        seen = set()
+        for entries in MOTION_MANAGER_TYPES.values():
+            for entry in entries:
+                key = entry[0]
+                if key in seen:
+                    continue
+                seen.add(key)
+                yield entry
+
+    def _all_measurement_points_fields(self):
+        seen = set()
+        for entries in MEASUREMENT_POINTS_TYPES.values():
+            for entry in entries:
+                key = entry[0]
+                if key in seen:
+                    continue
+                seen.add(key)
+                yield entry
+
+    def _options_with_current(self, options, current):
+        if current and current not in options:
+            return [*options, current]
+        return options
+
+    def _measurement_points_raw_value(self, section_name: str, key: str) -> str:
+        target_section = section_name or "motion_manager"
+        if not self.parser.has_section(target_section):
+            return ""
+        return _strip_inline_comment(self.parser.get(target_section, key, fallback=""))
+
+    def _combo_or_text(self, widget) -> str:
+        if isinstance(widget, QComboBox):
+            data = widget.currentData()
+            return str(data) if data is not None else widget.currentText()
+        return self._line_text(widget)
+
+    def _line_text(self, widget) -> str:
+        return widget.text().strip() if isinstance(widget, QLineEdit) else ""
+
+    def _set_widget_text(self, widget, raw: str) -> None:
+        if isinstance(widget, QComboBox):
+            if widget.currentText() != raw:
+                widget.setCurrentText(raw)
+        elif isinstance(widget, QLineEdit) and widget.text() != raw:
+            widget.setText(raw)
 
     def _add_field(self, layout, section, key, label, kind, raw, options):
         w = QWidget()
@@ -216,9 +404,41 @@ class SettingsDialog(QDialog):
             l.addWidget(widget)
         layout.addWidget(w)
         self.inputs[(section, key)] = (widget, kind)
+        return widget, w
 
     def save(self):
+        selected_motion_manager_type = None
+        motion_manager_widget = self.inputs.get(("motion_manager", "type"))
+        if motion_manager_widget is not None:
+            widget, _kind = motion_manager_widget
+            data = widget.currentData() if isinstance(widget, QComboBox) else None
+            selected_motion_manager_type = (
+                str(data) if data is not None else widget.currentText()
+            )
+            if selected_motion_manager_type not in MOTION_MANAGER_TYPES:
+                QMessageBox.warning(
+                    self,
+                    "Error",
+                    f"Invalid value for motion manager type: {selected_motion_manager_type}",
+                )
+                return
+
+        active_motion_manager_keys = set()
+        if selected_motion_manager_type is not None:
+            active_motion_manager_keys = {
+                key
+                for key, _kind, _tooltip, _options in MOTION_MANAGER_TYPES[
+                    selected_motion_manager_type
+                ]
+            }
+
         for (section, key), (widget, kind) in self.inputs.items():
+            if section in {"__motion_manager_ui__", "__measurement_points__"}:
+                continue
+            if section == "motion_manager" and key in self.motion_manager_extra_keys:
+                if key not in active_motion_manager_keys:
+                    continue
+
             if kind == "bool":
                 raw = "True" if widget.isChecked() else "False"
             elif isinstance(widget, QComboBox):
@@ -229,13 +449,88 @@ class SettingsDialog(QDialog):
                 
             try:
                 typed = _coerce(kind, raw)
+                if kind == "optional_float" and typed is None:
+                    if self.parser.has_option(section, key):
+                        self.parser.remove_option(section, key)
+                    continue
                 self.parser.set(section, key, _format_for_ini(kind, typed))
             except Exception as e:
                 QMessageBox.warning(self, "Error", f"Invalid value for {key}: {e}")
                 return
+
+        if self.parser.has_section("motion_manager"):
+            for key in self.motion_manager_extra_keys - active_motion_manager_keys:
+                if self.parser.has_option("motion_manager", key):
+                    self.parser.remove_option("motion_manager", key)
+
+        if not self._save_measurement_points_fields():
+            return
                 
         with open(self.config_file, "w") as f:
             self.parser.write(f)
             
         self.on_apply()
         self.accept()
+
+    def _save_measurement_points_fields(self) -> bool:
+        if self.measurement_points_type_input is None:
+            return True
+
+        mp_type = self._combo_or_text(self.measurement_points_type_input).strip()
+        if not mp_type:
+            QMessageBox.warning(self, "Error", "Measurement points type must be set")
+            return False
+
+        new_mp_section = self._line_text(self.measurement_points_section_input)
+        old_mp_section = self.motion_manager_mp_section_name
+
+        if old_mp_section and old_mp_section != new_mp_section and self.parser.has_section(old_mp_section):
+            self.parser.remove_section(old_mp_section)
+
+        if new_mp_section:
+            self.parser.set("motion_manager", "measurement_points", new_mp_section)
+            if not self.parser.has_section(new_mp_section):
+                self.parser.add_section(new_mp_section)
+            target_section = new_mp_section
+            type_key = "type"
+        else:
+            if self.parser.has_option("motion_manager", "measurement_points"):
+                self.parser.remove_option("motion_manager", "measurement_points")
+            target_section = "motion_manager"
+            type_key = "measurement_points_type"
+
+        self.parser.set(target_section, type_key, mp_type)
+
+        active_keys = {
+            key
+            for key, _kind, _tooltip, _options in MEASUREMENT_POINTS_TYPES.get(mp_type, [])
+        }
+        for key in active_keys:
+            widget, kind = self.inputs[("__measurement_points__", key)]
+            raw = self._combo_or_text(widget) if isinstance(widget, QComboBox) else widget.text()
+            try:
+                typed = _coerce(kind, raw)
+                if kind == "optional_float" and typed is None:
+                    if self.parser.has_option(target_section, key):
+                        self.parser.remove_option(target_section, key)
+                    continue
+                self.parser.set(target_section, key, _format_for_ini(kind, typed))
+            except Exception as e:
+                QMessageBox.warning(self, "Error", f"Invalid value for {key}: {e}")
+                return False
+
+        known_base_keys = {"type", "measurement_points_type"}
+        for stale_key in (known_base_keys | self.measurement_points_extra_keys) - (
+            known_base_keys | active_keys
+        ):
+            if target_section == "motion_manager" and stale_key in {
+                "type",
+                "safe_radius",
+                "measurement_points",
+                "measurement_points_type",
+            }:
+                continue
+            if self.parser.has_option(target_section, stale_key):
+                self.parser.remove_option(target_section, stale_key)
+
+        return True

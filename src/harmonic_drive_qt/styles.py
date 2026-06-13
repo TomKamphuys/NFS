@@ -23,7 +23,7 @@ def app_stylesheet() -> str:
         background: #ffffff;
         color: {TEXT};
         font-family: "Segoe UI";
-        font-size: 13px;
+        font-size: 10pt;
     }}
     QMainWindow, QStackedWidget, QScrollArea, QScrollArea > QWidget > QWidget {{
         background: #ffffff;
