@@ -13,6 +13,10 @@ from loguru import logger
 from nfs.datatypes import CylindricalPosition, GrblMachineState
 
 
+def _debug_serial_comms_enabled(config_parser: configparser.ConfigParser) -> bool:
+    return config_parser.getboolean("debug", "serial_comms", fallback=False)
+
+
 class IGrblController(ABC):
     """
     Represents an interface for a GRBL controller.
@@ -411,7 +415,7 @@ class EventHandler:
     """
     Handles events from the GRBL streamer and maintains the current state and position.
     """
-    def __init__(self):
+    def __init__(self, debug_serial: bool = False):
         """
         Initialize the EventHandler.
         """
@@ -423,6 +427,7 @@ class EventHandler:
         self._state_raw: str = "Idle"
 
         self._on_state_update_callback = None
+        self._debug_serial = debug_serial
 
     def set_on_state_update_callback(self, callback):
         """
@@ -487,8 +492,13 @@ class EventHandler:
         :param event: The event name.
         :param data: Additional data associated with the event.
         """
+        if getattr(self, "_debug_serial", False):
+            logger.debug("GRBL serial event: event={!r} data={!r}", event, data)
+
         if event == "on_rx_buffer_percent":
             self._received_message = 'ok'
+            if self._debug_serial:
+                logger.debug("GRBL serial ACK inferred from rx buffer event")
         if event == "on_stateupdate":
             if len(data) >= 3:
                 self._state_raw = str(data[0])
@@ -573,8 +583,9 @@ class GrblControllerFactory:
             config_parser = configparser.ConfigParser(inline_comment_prefixes="#")
             config_parser.read(config_file)
             section = 'grbl_streamer'
+            debug_serial = _debug_serial_comms_enabled(config_parser)
 
-            event_handler = EventHandler()
+            event_handler = EventHandler(debug_serial=debug_serial)
             grbl_streamer = GrblStreamer(event_handler.on_grbl_event)
 
             port = None
@@ -586,15 +597,22 @@ class GrblControllerFactory:
             baudrate = config_parser.getint(section, 'baudrate')
 
             grbl_streamer.setup_logging()
+            if debug_serial:
+                logger.info("GRBL serial debug enabled")
+                logger.info("GRBL serial opening port={} baudrate={}", port, baudrate)
             grbl_streamer.cnect(port, baudrate)
             logger.info('Waiting for gbrl to initialize..')
+            if debug_serial:
+                logger.info("GRBL serial startup wait: 3.0s")
             time.sleep(3)
             grbl_streamer.incremental_streaming = True
+            if debug_serial:
+                logger.info("GRBL serial sending startup status mask command: $10=2")
             grbl_streamer.send_immediately("$10=2")  # Force the report format to match what we expect.
 
-            connection = GrblStreamerClientConnection(grbl_streamer, event_handler)
+            connection = GrblStreamerClientConnection(grbl_streamer, event_handler, debug_serial=debug_serial)
             try:
-                instance = ESP32Duino(connection)
+                instance = ESP32Duino(connection, debug_serial=debug_serial)
             except Exception:
                 try:
                     connection.close()
@@ -635,7 +653,12 @@ class GrblStreamerClientConnection:
     """
     Manages a connection to a GRBL streamer.
     """
-    def __init__(self, grbl_streamer: GrblStreamer, event_handler: EventHandler) -> None:
+    def __init__(
+        self,
+        grbl_streamer: GrblStreamer,
+        event_handler: EventHandler,
+        debug_serial: bool = False,
+    ) -> None:
         """
         Initialize the connection.
 
@@ -644,6 +667,7 @@ class GrblStreamerClientConnection:
         """
         self._event_handler = event_handler
         self._grbl_streamer = grbl_streamer
+        self._debug_serial = debug_serial
 
     def killalarm(self) -> None:
         """
@@ -674,6 +698,8 @@ class GrblStreamerClientConnection:
         :param message: The message string.
         """
         logger.trace(f'GrblStreamerClientConnection: Sending message: {message}')
+        if getattr(self, "_debug_serial", False):
+            logger.debug("GRBL serial TX: {!r}", message)
         self._grbl_streamer.send_immediately(message)
 
     def receive(self):
@@ -684,6 +710,8 @@ class GrblStreamerClientConnection:
         """
         message = self._event_handler.get_received_message()
         self._event_handler.set_received_message('')
+        if self._debug_serial and message:
+            logger.debug("GRBL serial RX buffer: {!r}", message)
         return message
 
     def get_position(self) -> CylindricalPosition:
@@ -753,17 +781,20 @@ class ESP32Duino(IGrblController):
     UNLOCK_COMMAND = "$X"  # Command to unlock and clear any alarm
     PROBE_ACK_TIMEOUT_S = 3.0
 
-    def __init__(self, connection: GrblStreamerClientConnection) -> None:
+    def __init__(self, connection: GrblStreamerClientConnection, debug_serial: bool = False) -> None:
         """
         Initialize the ESP32Duino controller.
 
         :param connection: The connection instance to use.
         """
         self._connection = connection
+        self._debug_serial = debug_serial
         self._unlock()
 
     def _unlock(self) -> None:
         """Initialize the connection by unlocking and clearing the buffer."""
+        if getattr(self, "_debug_serial", False):
+            logger.info("GRBL serial probing controller with {}", self.UNLOCK_COMMAND)
         self.send(self.UNLOCK_COMMAND, ack_timeout_s=self.PROBE_ACK_TIMEOUT_S)
 
     def shutdown(self) -> None:
@@ -787,6 +818,12 @@ class ESP32Duino(IGrblController):
         """
         self._connection.send(message + '\n')
         logger.trace(f'Sending message to GRBL device: {message}')
+        if getattr(self, "_debug_serial", False):
+            logger.debug(
+                "GRBL serial waiting for ACK: command={!r} timeout_s={}",
+                message,
+                ack_timeout_s,
+            )
         self._wait_for_ack(ack_timeout_s)
 
     def _send_immediate(self, message: str) -> None:
@@ -893,13 +930,21 @@ class ESP32Duino(IGrblController):
         Wait until an 'ok' acknowledgment is received from the hardware.
         """
         deadline = time.monotonic() + timeout_s if timeout_s is not None else None
+        if getattr(self, "_debug_serial", False):
+            logger.debug("GRBL serial ACK wait started timeout_s={}", timeout_s)
         while deadline is None or time.monotonic() < deadline:
             time.sleep(0.01)
             result = self._receive().rstrip()
             if result != "":
                 logger.trace(f'Received: {result}')
+                if getattr(self, "_debug_serial", False):
+                    logger.debug("GRBL serial ACK wait received: {!r}", result)
             if "ok" in result:
+                if getattr(self, "_debug_serial", False):
+                    logger.info("GRBL serial ACK received")
                 return
+        if getattr(self, "_debug_serial", False):
+            logger.error("GRBL serial ACK timeout after {}s", timeout_s)
         raise TimeoutError(
             "No GRBL response received after opening the serial port"
         )

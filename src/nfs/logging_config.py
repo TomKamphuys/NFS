@@ -103,6 +103,7 @@ def setup_logging(
     log_file = "scanner.log"
     rotation = "10 MB"
     retention = "1 week"
+    serial_comms_debug = False
 
     config = configparser.ConfigParser(inline_comment_prefixes="#")
     try:
@@ -112,9 +113,13 @@ def setup_logging(
                 log_file = config.get("logging", "file", fallback=log_file)
                 rotation = config.get("logging", "rotation", fallback=rotation)
                 retention = config.get("logging", "retention", fallback=retention)
+            serial_comms_debug = config.getboolean("debug", "serial_comms", fallback=False)
     except Exception as e:
         # If we can't read config, we'll use defaults and log the error once stderr logger is up
         print(f"Warning: Could not read logging config from {config_file}: {e}", file=sys.stderr)
+
+    if serial_comms_debug and level not in {"TRACE", "DEBUG"}:
+        level = "DEBUG"
 
     # Add stderr handler
     logger.add(sys.stderr, level=level,

@@ -232,6 +232,8 @@ EDITABLE_SCHEMA: Dict[str, List[SchemaEntry]] = {
          "Use direct worker progress callbacks instead of backend-polled progress. Leave off for normal use.", None),
         ("in_app_log_viewer", "bool",
          "Enable the browser-based System Log viewer. Leave off during measurement stability testing.", None),
+        ("serial_comms", "bool",
+         "Log GRBL serial connection/probe traffic during startup. Enable temporarily when diagnosing intermittent controller detection.", None),
         ("deep_ui_diagnostics", "bool",
          "NiceGUI/browser UI diagnostics for scanner/progress update diagnosis. Not used by the native PySide UI.", None),
     ],

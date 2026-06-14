@@ -14,6 +14,9 @@ Fixed plot lines drawing over the axis boundaries.
 Changed the Impulse Response plot to show the linear waveform and use mirrored
 dBFS labels.
 
+Added a debug serial comms toggle for GRBL startup diagnostics. When enabled,
+startup raises logging verbosity and records GRBL serial open/probe/ACK events.
+
 --------
 14/06/26
 --------
@@ -33,6 +36,11 @@ src/harmonic_drive_qt/audio_setup_pane.py
 src/harmonic_drive_qt/styles.py
 src/harmonic_drive_qt/main_window.py
 src/harmonic_drive_qt/widgets.py
+src/harmonic_drive_qt/settings_dialog.py
+src/harmonic_drive/config_editor.py
+src/nfs/grbl_controller.py
+src/nfs/logging_config.py
+config_default.ini
 
 --------
 13/06/26

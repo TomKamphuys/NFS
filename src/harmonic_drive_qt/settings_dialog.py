@@ -154,6 +154,7 @@ class SettingsDialog(QDialog):
                 ("grbl_streamer", "mock_angular_speed_deg_s", "Mock Angular Speed Deg/S"),
                 ("grbl_streamer", "mock_status_hz", "Mock Dro Update Hz"),
                 ("windows", "port", "Com Port"),
+                ("debug", "serial_comms", "Log serial comms on startup"),
             ):
                 if not self.parser.has_section(grbl_sec): continue
                 entry = next(e for e in EDITABLE_SCHEMA[grbl_sec] if e[0] == key)
