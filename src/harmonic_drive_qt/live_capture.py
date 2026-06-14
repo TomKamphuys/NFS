@@ -25,6 +25,7 @@ from .qt_compat import (
     QHBoxLayout,
     QFrame,
     QLabel,
+    QMessageBox,
     QPushButton,
     QScrollArea,
     QSize,
@@ -437,11 +438,15 @@ class LiveCapturePane(QWidget):
         self.fr_smoothing_fraction = 24
         self.viewer_backend = self._read_viewer_backend()
         self._pyvista_error: str | None = None
+        self._pyvista_fallback_message_shown = False
         self.progress_engine = self._create_progress_engine(self.viewer_backend)
         self.progress_canvas = None
         self.progress_widget: QWidget | None = None
+        self.progress_viewer_layout: QVBoxLayout | None = None
         self.progress_rotate_button: QPushButton | None = None
         self._build_ui()
+        if self._pyvista_error is not None:
+            QTimer.singleShot(0, self._show_pyvista_fallback_message)
 
         self.meter_timer = QTimer(self)
         self.meter_timer.setInterval(100)
@@ -570,6 +575,7 @@ class LiveCapturePane(QWidget):
         self.sections_layout.addStretch(1)
 
     def _install_progress_viewer(self, layout: QVBoxLayout) -> None:
+        self.progress_viewer_layout = layout
         self.progress_engine.toggle_readout(False)
         layout.setContentsMargins(10, 8, 10, 10)
         layout.setSpacing(8)
@@ -603,32 +609,32 @@ class LiveCapturePane(QWidget):
         top = QPushButton("TOP")
         top.setFixedWidth(44)
         top.setStyleSheet(btn_style)
-        top.clicked.connect(lambda: self.progress_engine.set_view(90, 0))
+        top.clicked.connect(lambda: self._call_progress_engine("top view", self.progress_engine.set_view, 90, 0))
         front = QPushButton("FRONT")
         front.setFixedWidth(54)
         front.setStyleSheet(btn_style)
-        front.clicked.connect(lambda: self.progress_engine.set_view(0, -90))
+        front.clicked.connect(lambda: self._call_progress_engine("front view", self.progress_engine.set_view, 0, -90))
         side = QPushButton("SIDE")
         side.setFixedWidth(46)
         side.setStyleSheet(btn_style)
-        side.clicked.connect(lambda: self.progress_engine.set_view(0, 0))
+        side.clicked.connect(lambda: self._call_progress_engine("side view", self.progress_engine.set_view, 0, 0))
 
         ortho = QCheckBox("Ortho")
         ortho.setStyleSheet(toggle_style() + "QCheckBox { font-weight: bold; }")
-        ortho.stateChanged.connect(lambda state: self.progress_engine.set_ortho(bool(state)))
+        ortho.stateChanged.connect(lambda state: self._call_progress_engine("ortho toggle", self.progress_engine.set_ortho, bool(state)))
         bounds = QCheckBox("Bounds")
         bounds.setStyleSheet(toggle_style() + "QCheckBox { font-weight: bold; }")
         bounds.setChecked(True)
-        bounds.stateChanged.connect(lambda state: self.progress_engine.set_bounds_visibility(bool(state)))
+        bounds.stateChanged.connect(lambda state: self._call_progress_engine("bounds toggle", self.progress_engine.set_bounds_visibility, bool(state)))
         grid = QCheckBox("Grid")
         grid.setStyleSheet(toggle_style() + "QCheckBox { font-weight: bold; }")
         grid.setChecked(False)
         self.progress_engine.set_grid_visibility(False)
-        grid.stateChanged.connect(lambda state: self.progress_engine.set_grid_visibility(bool(state)))
+        grid.stateChanged.connect(lambda state: self._call_progress_engine("grid toggle", self.progress_engine.set_grid_visibility, bool(state)))
 
         rot_speed = self._spin(5.0, 0.1, 180.0, " deg/s", decimals=1)
         rot_speed.setFixedWidth(88)
-        rot_speed.valueChanged.connect(self.progress_engine.set_rotation_speed)
+        rot_speed.valueChanged.connect(lambda value: self._call_progress_engine("rotation speed", self.progress_engine.set_rotation_speed, value))
         self.progress_rotate_button = QPushButton("ROTATE")
         self.progress_rotate_button.setFixedWidth(62)
         self.progress_rotate_button.setStyleSheet(btn_style)
@@ -653,14 +659,23 @@ class LiveCapturePane(QWidget):
         return spin
 
     def _toggle_progress_rotation(self) -> None:
-        if self.progress_engine.is_rotating:
-            self.progress_engine.stop_rotation()
-            if self.progress_rotate_button is not None:
-                self.progress_rotate_button.setText("ROTATE")
-        else:
-            self.progress_engine.start_rotation(45.0)
-            if self.progress_rotate_button is not None:
-                self.progress_rotate_button.setText("STOP")
+        try:
+            if self.progress_engine.is_rotating:
+                self.progress_engine.stop_rotation()
+                if self.progress_rotate_button is not None:
+                    self.progress_rotate_button.setText("ROTATE")
+            else:
+                self.progress_engine.start_rotation(45.0)
+                if self.progress_rotate_button is not None:
+                    self.progress_rotate_button.setText("STOP")
+        except Exception as exc:
+            self._fallback_to_matplotlib_progress_viewer(exc, "rotation toggle")
+
+    def _call_progress_engine(self, context: str, callback, *args) -> None:
+        try:
+            callback(*args)
+        except Exception as exc:
+            self._fallback_to_matplotlib_progress_viewer(exc, context)
 
     def _add_section(self, title: str, home_callback=None) -> tuple["LiveSection", QWidget]:
         section = LiveSection(title, self._move_section, home_callback)
@@ -815,7 +830,54 @@ class LiveCapturePane(QWidget):
             if self.progress_canvas is not None:
                 self.progress_canvas.draw_idle()
         except Exception as exc:
-            logger.debug(f"Could not refresh Qt coord viewer progress: {exc}")
+            if not self._fallback_to_matplotlib_progress_viewer(exc, "progress refresh"):
+                logger.debug(f"Could not refresh Qt coord viewer progress: {exc}")
+
+    def _fallback_to_matplotlib_progress_viewer(self, exc: Exception, context: str) -> bool:
+        if self.viewer_backend != "pyvista" or self.progress_viewer_layout is None:
+            return False
+        self._pyvista_error = str(exc)
+        logger.exception("PyVista live progress viewer failed during {}; falling back to Matplotlib", context)
+        try:
+            self.progress_engine.stop_rotation()
+            if hasattr(self.progress_engine, "shutdown"):
+                self.progress_engine.shutdown()
+        except Exception:
+            pass
+        if self.progress_widget is not None:
+            self.progress_viewer_layout.removeWidget(self.progress_widget)
+            self.progress_widget.setParent(None)
+            self.progress_widget.deleteLater()
+            self.progress_widget = None
+
+        self.viewer_backend = "matplotlib"
+        self.progress_engine = CoordViewerEngine()
+        self.progress_engine.toggle_readout(False)
+        self.progress_engine.set_bounds_visibility(True)
+        self.progress_engine.set_grid_visibility(False)
+        self.progress_canvas = None
+        self._install_progress_viewer(self.progress_viewer_layout)
+        self._show_pyvista_fallback_message()
+        try:
+            if self.grid_df is not None:
+                self.progress_engine.load_data(self.grid_df)
+                self.progress_engine.update_plot()
+            if self.progress_canvas is not None:
+                self.progress_canvas.draw_idle()
+        except Exception:
+            logger.exception("Could not reload live progress viewer after PyVista fallback")
+        return True
+
+    def _show_pyvista_fallback_message(self) -> None:
+        if self._pyvista_error is None or self._pyvista_fallback_message_shown:
+            return
+        self._pyvista_fallback_message_shown = True
+        QMessageBox.warning(
+            self,
+            "PyVista Viewer",
+            "Advanced 3D visualisation with PyVista failed, falling back to Matplotlib.\n\n"
+            f"{self._pyvista_error}",
+        )
 
     def refresh_ir_plots(self) -> None:
         latest_file, ir, fs = _load_latest_ir()

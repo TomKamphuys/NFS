@@ -1,5 +1,17 @@
 
 --------
+14/06/26
+--------
+Added 3D viewer resilience for machines where PyVista/VTK cannot start or render.
+Grid Generator and Live Capture 3D views now fall back to the Matplotlib 3D
+viewer and show a popup explaining that PyVista visualisation failed.
+
+Files touched:
+src/harmonic_drive_qt/grid_pane.py
+src/harmonic_drive_qt/live_capture.py
+src/grid/coord_viewer_core.py
+
+--------
 13/06/26
 --------
 Expanded the native Qt Settings pane motion-manager tab. The tab now exposes

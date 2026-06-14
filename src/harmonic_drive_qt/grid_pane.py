@@ -106,10 +106,13 @@ class GridGeneratorPane(QWidget):
         self.viewer_widget: QWidget | None = None
         self.viewer_layout: QVBoxLayout | None = None
         self._pyvista_error: str | None = None
+        self._pyvista_fallback_message_shown = False
         self.engine = self._create_viewer_engine(self.viewer_backend)
         self.viewer_more_popup: QFrame | None = None
         self.generated.connect(self._load_dataframe_on_ui)
         self._build_ui()
+        if self._pyvista_error is not None:
+            QTimer.singleShot(0, self._show_pyvista_fallback_message)
         self._load_existing_project_grid()
 
         self.sync_timer = QTimer(self)
@@ -862,8 +865,14 @@ class GridGeneratorPane(QWidget):
 
     def _load_dataframe_on_ui(self, df: pd.DataFrame, path_text: str) -> None:
         path = Path(path_text)
-        self.engine.load_data(df)
         self.current_viewer_input = df.copy()
+        try:
+            self.engine.load_data(self.current_viewer_input)
+        except Exception as exc:
+            if not self._fallback_to_matplotlib_viewer(exc, "generated grid load"):
+                logger.exception("Could not load generated grid into viewer")
+                QMessageBox.warning(self, "Grid Viewer", str(exc))
+                return
         self._redraw_viewer()
         self._update_slider_range()
         self.status_label.setText(f"Loaded {len(df)} points from {path.name}")
@@ -879,13 +888,17 @@ class GridGeneratorPane(QWidget):
             self._load_csv_path(Path(path))
 
     def _load_csv_path(self, path: Path) -> None:
+        self.current_viewer_input = str(path)
         try:
-            self.engine.load_data(str(path))
-            self.current_viewer_input = str(path)
+            self.engine.load_data(self.current_viewer_input)
             self._redraw_viewer()
             self._update_slider_range()
             self.status_label.setText(f"Loaded {self.engine.N} points from {path.name}")
         except Exception as exc:
+            if self._fallback_to_matplotlib_viewer(exc, "grid CSV load"):
+                self._update_slider_range()
+                self.status_label.setText(f"Loaded {self.engine.N} points from {path.name}")
+                return
             logger.exception("Could not load grid CSV")
             QMessageBox.warning(self, "Load Grid", str(exc))
 
@@ -904,7 +917,10 @@ class GridGeneratorPane(QWidget):
         self.scrub.blockSignals(False)
 
     def _set_current_index(self, idx: int) -> None:
-        self.engine.set_current_index(idx)
+        try:
+            self.engine.set_current_index(idx)
+        except Exception as exc:
+            self._fallback_to_matplotlib_viewer(exc, "scrub update")
 
     def _redraw_viewer(self) -> None:
         if self.canvas is not None:
@@ -912,8 +928,29 @@ class GridGeneratorPane(QWidget):
         elif hasattr(self.engine, "plotter"):
             try:
                 self.engine.plotter.render()
-            except Exception:
-                pass
+            except Exception as exc:
+                self._fallback_to_matplotlib_viewer(exc, "viewer render")
+
+    def _fallback_to_matplotlib_viewer(self, exc: Exception, context: str) -> bool:
+        if self.viewer_backend != "pyvista":
+            return False
+        self._pyvista_error = str(exc)
+        logger.exception("PyVista coordinate viewer failed during {}; falling back to Matplotlib", context)
+        self.status_label.setText("PyVista viewer failed; using Matplotlib 3D viewer.")
+        self._switch_viewer_backend("matplotlib")
+        self._show_pyvista_fallback_message()
+        return True
+
+    def _show_pyvista_fallback_message(self) -> None:
+        if self._pyvista_error is None or self._pyvista_fallback_message_shown:
+            return
+        self._pyvista_fallback_message_shown = True
+        QMessageBox.warning(
+            self,
+            "PyVista Viewer",
+            "Advanced 3D visualisation with PyVista failed, falling back to Matplotlib.\n\n"
+            f"{self._pyvista_error}",
+        )
 
     def refresh_from_config(self) -> None:
         requested_backend = self._read_viewer_backend()
@@ -939,11 +976,7 @@ class GridGeneratorPane(QWidget):
         self._install_viewer_widget()
 
         if self._pyvista_error is not None and backend == "pyvista":
-            QMessageBox.warning(
-                self,
-                "PyVista Viewer",
-                f"Could not start the PyVista viewer. Falling back to Matplotlib.\n\n{self._pyvista_error}",
-            )
+            self._show_pyvista_fallback_message()
 
         self.engine.set_speed(self.rate.value())
         self.engine.set_ortho(self.ortho.isChecked())
@@ -969,30 +1002,45 @@ class GridGeneratorPane(QWidget):
             pass
 
     def toggle_play(self) -> None:
-        if self.engine.is_playing:
-            self.engine.pause()
-            self.play_button.setText("Play")
-        else:
-            self.engine.play()
-            self.play_button.setText("Pause")
+        try:
+            if self.engine.is_playing:
+                self.engine.pause()
+                self.play_button.setText("Play")
+            else:
+                self.engine.play()
+                self.play_button.setText("Pause")
+        except Exception as exc:
+            self._fallback_to_matplotlib_viewer(exc, "playback toggle")
 
     def toggle_rotation(self) -> None:
-        if self.engine.is_rotating:
-            self.engine.stop_rotation()
-        else:
-            self.engine.start_rotation(self.rot_angle.value())
+        try:
+            if self.engine.is_rotating:
+                self.engine.stop_rotation()
+            else:
+                self.engine.start_rotation(self.rot_angle.value())
+        except Exception as exc:
+            self._fallback_to_matplotlib_viewer(exc, "rotation toggle")
 
     def _rewind(self) -> None:
-        self.engine.rewind()
-        self._update_slider_range()
+        try:
+            self.engine.rewind()
+            self._update_slider_range()
+        except Exception as exc:
+            self._fallback_to_matplotlib_viewer(exc, "rewind")
 
     def _step_back(self) -> None:
-        self.engine.step_back()
-        self._update_slider_range()
+        try:
+            self.engine.step_back()
+            self._update_slider_range()
+        except Exception as exc:
+            self._fallback_to_matplotlib_viewer(exc, "step back")
 
     def _step_fwd(self) -> None:
-        self.engine.step_fwd()
-        self._update_slider_range()
+        try:
+            self.engine.step_fwd()
+            self._update_slider_range()
+        except Exception as exc:
+            self._fallback_to_matplotlib_viewer(exc, "step forward")
 
     def _sync_viewer_controls(self) -> None:
         if self.scrub.maximum() != max(0, int(self.engine.N) - 1):

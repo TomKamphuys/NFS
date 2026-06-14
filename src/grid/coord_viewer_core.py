@@ -19,6 +19,7 @@ this engine inside a standalone Tkinter application.
 """
 
 import numpy as np  # Used for high-performance mathematical operations and arrays
+import matplotlib as mpl
 import matplotlib.pyplot as plt  # Core plotting library to create figures and axes
 import matplotlib.colors as mcolors  # Used to create custom color gradients
 import matplotlib.animation as animation  # Used to create background loops for playback
@@ -52,6 +53,7 @@ class CoordViewerEngine:
         self.use_ortho = False  # Toggle between orthographic and perspective 3D projections
         self.timer_interval_ms = 50  # How often the animation loop updates (in milliseconds)
         self.show_readout = True  # Toggle the text box showing coordinates
+        self._use_z_up_turntable_rotation()
 
         # --- Rotation Animation State ---
         # These variables handle the automated camera panning back and forth
@@ -84,10 +86,7 @@ class CoordViewerEngine:
         self.ax.set_ylabel("Y (m)")
         self.ax.set_zlabel("Z (m)")
         # Set the initial camera viewing angle (elevation and azimuth)
-        try:
-            self.ax.view_init(elev=30, azim=-45, roll=0)
-        except TypeError:
-            self.ax.view_init(elev=30, azim=-45)
+        self._set_view_z_up(30, -45)
 
         # Avoid playback redraws fighting Matplotlib's own camera drag loop.
         self.fig.canvas.mpl_connect('button_press_event', self._on_mouse_press)
@@ -160,8 +159,7 @@ class CoordViewerEngine:
             self.fig.canvas.draw_idle()
 
     def _enforce_camera_constraints(self):
-        # The primary cause of "propeller" or upside-down rotation is the elevation 
-        # going past 90 degrees or below -90 degrees. We clamp it here.
+        # Keep the azel turntable away from the singular straight-up/down view.
         needs_redraw = False
         if hasattr(self.ax, 'elev'):
             if self.ax.elev > 89.9:
@@ -170,12 +168,21 @@ class CoordViewerEngine:
             elif self.ax.elev < -89.9:
                 self.ax.elev = -89.9
                 needs_redraw = True
-        if hasattr(self.ax, 'roll'):
-            if self.ax.roll != 0:
-                self.ax.roll = 0
-                needs_redraw = True
         if needs_redraw:
             self.fig.canvas.draw_idle()
+
+    def _use_z_up_turntable_rotation(self):
+        if "axes3d.mouserotationstyle" in mpl.rcParams:
+            mpl.rcParams["axes3d.mouserotationstyle"] = "azel"
+
+    def _set_view_z_up(self, elev, azim):
+        try:
+            self.ax.view_init(elev=elev, azim=azim, roll=0, vertical_axis="z")
+        except TypeError:
+            try:
+                self.ax.view_init(elev=elev, azim=azim, roll=0)
+            except TypeError:
+                self.ax.view_init(elev=elev, azim=azim)
 
     def load_data(self, input_data):
         # Determine what type of data was passed in and standardize it into a Pandas DataFrame
@@ -454,10 +461,7 @@ class CoordViewerEngine:
         # Snap the camera to a specific angle
         if abs(abs(float(elev)) - 90.0) <= 1e-6:
             elev = 89.0 if float(elev) >= 0.0 else -89.0
-        try:
-            self.ax.view_init(elev=elev, azim=azim, roll=0)
-        except TypeError:
-            self.ax.view_init(elev=elev, azim=azim)
+        self._set_view_z_up(elev, azim)
         self._request_draw()
 
     def set_alpha(self, val):
@@ -580,10 +584,7 @@ class CoordViewerEngine:
         
         step = self.rotation_speed_deg_per_sec * (self.rotation_timer_interval_ms / 1000.0)
         new_azim = self.ax.azim + (step * self.rot_dir)
-        try:
-            self.ax.view_init(elev=self.ax.elev, azim=new_azim, roll=0)
-        except TypeError:
-            self.ax.view_init(elev=self.ax.elev, azim=new_azim)
+        self._set_view_z_up(self.ax.elev, new_azim)
         self.rot_accumulated += step
         
         # Reverse direction if we've hit our target sweep angle
