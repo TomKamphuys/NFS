@@ -6,10 +6,14 @@ Added 3D viewer resilience for machines where PyVista/VTK cannot start or render
 Grid Generator and Live Capture 3D views now fall back to the Matplotlib 3D
 viewer and show a popup explaining that PyVista visualisation failed.
 
+Moved the native Qt Audio Setup output level and FS controls onto the same top
+line as the Audio API selector.
+
 Files touched:
 src/harmonic_drive_qt/grid_pane.py
 src/harmonic_drive_qt/live_capture.py
 src/grid/coord_viewer_core.py
+src/harmonic_drive_qt/audio_setup_pane.py
 
 --------
 13/06/26
