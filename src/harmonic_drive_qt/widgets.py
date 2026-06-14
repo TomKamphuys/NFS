@@ -93,6 +93,7 @@ class LinePlot(QWidget):
         self.default_y_range: tuple[float, float] | None = None
         self.default_x_range: tuple[float, float] | None = None
         self.color_points_by_y = False
+        self.y_axis_mode = "linear"
         self._drag_origin: tuple[int, int] | None = None
         self._drag_current: tuple[int, int] | None = None
         self._plot_rect = None
@@ -109,6 +110,7 @@ class LinePlot(QWidget):
         log_x: bool = False,
         x_range: tuple[float, float] | None = None,
         y_range: tuple[float, float] | None = None,
+        y_axis_mode: str | None = None,
     ) -> None:
         self.x_values = [float(x) for x in x_values]
         self.y_values = [float(y) for y in y_values]
@@ -120,6 +122,7 @@ class LinePlot(QWidget):
         self.y_range = y_range
         self.default_x_range = x_range
         self.default_y_range = y_range
+        self.y_axis_mode = y_axis_mode or "linear"
         self.message = ""
         self.update()
 
@@ -162,6 +165,17 @@ class LinePlot(QWidget):
             return f"{value:.1f}"
         return f"{value:.2g}"
 
+    def _symmetric_dbfs_label(self, value: float, ymax_abs: float) -> str:
+        magnitude = abs(value) / max(ymax_abs, 1e-12)
+        if magnitude <= 1e-6:
+            return "-inf"
+        db = 20.0 * math.log10(min(1.0, magnitude))
+        if abs(db) < 0.05:
+            return "0"
+        if db <= -10:
+            return f"{db:.0f}"
+        return f"{db:.1f}".rstrip("0").rstrip(".")
+
     def _screen_to_data(self, px: int, py: int) -> tuple[float, float] | None:
         if self._plot_rect is None or self._data_bounds is None:
             return None
@@ -189,6 +203,12 @@ class LinePlot(QWidget):
         if event.button() == Qt.MouseButton.LeftButton and self._drag_origin and self._drag_current:
             ox, oy = self._drag_origin
             cx, cy = self._drag_current
+            if self._plot_rect is not None:
+                plot = self._plot_rect
+                ox = max(plot.left(), min(plot.right(), ox))
+                cx = max(plot.left(), min(plot.right(), cx))
+                oy = max(plot.top(), min(plot.bottom(), oy))
+                cy = max(plot.top(), min(plot.bottom(), cy))
             dx = abs(cx - ox)
             dy = abs(cy - oy)
             if max(dx, dy) > 8:
@@ -225,9 +245,6 @@ class LinePlot(QWidget):
         for i in range(6):
             y = plot.top() + int(plot.height() * i / 5)
             painter.drawLine(plot.left(), y, plot.right(), y)
-        for i in range(6):
-            x = plot.left() + int(plot.width() * i / 5)
-            painter.drawLine(x, plot.top(), x, plot.bottom())
 
         painter.setPen(QPen(QColor("#6b7280")))
         painter.setFont(QFont("Segoe UI", 8))
@@ -262,22 +279,50 @@ class LinePlot(QWidget):
         painter.setPen(QPen(QColor("#64748b")))
         painter.setFont(QFont("Segoe UI", 7))
         if self.log_x:
-            ticks = [20, 31.5, 63, 125, 250, 500, 1000, 2000, 4000, 8000, 16000]
+            painter.setPen(QPen(QColor("#edf2f7")))
+            for decade in (10, 100, 1000, 10000):
+                for multiple in range(2, 10):
+                    tick = decade * multiple
+                    tx = math.log10(tick)
+                    if xmin <= tx <= xmax:
+                        px = plot.left() + (tx - xmin) / (xmax - xmin) * plot.width()
+                        painter.drawLine(int(px), plot.top(), int(px), plot.bottom())
+            ticks = [20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000]
+            painter.setPen(QPen(QColor("#e5e7eb")))
+            for tick in ticks:
+                tx = math.log10(tick)
+                if xmin <= tx <= xmax:
+                    px = plot.left() + (tx - xmin) / (xmax - xmin) * plot.width()
+                    painter.drawLine(int(px), plot.top(), int(px), plot.bottom())
+            painter.setPen(QPen(QColor("#64748b")))
             for tick in ticks:
                 tx = math.log10(tick)
                 if xmin <= tx <= xmax:
                     px = plot.left() + (tx - xmin) / (xmax - xmin) * plot.width()
                     painter.drawLine(int(px), plot.bottom(), int(px), plot.bottom() + 4)
-                    painter.drawText(int(px) - 11, bounds.bottom() - 22, self._tick_label(tx, True))
+                    label = self._tick_label(tx, True)
+                    label_width = painter.fontMetrics().horizontalAdvance(label)
+                    label_x = int(px) - label_width // 2
+                    label_x = max(plot.left() - 2, min(plot.right() - label_width + 2, label_x))
+                    painter.drawText(label_x, bounds.bottom() - 22, label)
         else:
+            painter.setPen(QPen(QColor("#e5e7eb")))
+            for i in range(6):
+                x = plot.left() + int(plot.width() * i / 5)
+                painter.drawLine(x, plot.top(), x, plot.bottom())
+            painter.setPen(QPen(QColor("#64748b")))
             for i in range(6):
                 value = xmin + (xmax - xmin) * i / 5
                 px = plot.left() + plot.width() * i / 5
                 painter.drawText(int(px) - 12, bounds.bottom() - 22, self._tick_label(value, False))
-        for i in range(5):
-            value = ymin + (ymax - ymin) * i / 4
-            py = plot.bottom() - plot.height() * i / 4
-            painter.drawText(5, int(py) + 4, self._tick_label(value, False))
+        for i in range(6):
+            value = ymin + (ymax - ymin) * i / 5
+            py = plot.bottom() - plot.height() * i / 5
+            if self.y_axis_mode == "symmetric_dbfs":
+                label = self._symmetric_dbfs_label(value, max(abs(ymin), abs(ymax)))
+            else:
+                label = self._tick_label(value, False)
+            painter.drawText(5, int(py) + 4, label)
 
         points = []
         for x, y in zip(xs, ys):
@@ -285,6 +330,8 @@ class LinePlot(QWidget):
             py = plot.bottom() - (y - ymin) / (ymax - ymin) * plot.height()
             points.append((px, py))
 
+        painter.save()
+        painter.setClipRect(plot)
         painter.setPen(QPen(QColor("#2563eb"), 2))
         if self.scatter:
             for (px, py), y in zip(points, ys):
@@ -295,19 +342,24 @@ class LinePlot(QWidget):
         else:
             for (x1, y1), (x2, y2) in zip(points, points[1:]):
                 painter.drawLine(int(x1), int(y1), int(x2), int(y2))
+        painter.restore()
 
         if self._drag_origin is not None and self._drag_current is not None:
             ox, oy = self._drag_origin
             cx, cy = self._drag_current
+            ox = max(plot.left(), min(plot.right(), ox))
+            cx = max(plot.left(), min(plot.right(), cx))
+            oy = max(plot.top(), min(plot.bottom(), oy))
+            cy = max(plot.top(), min(plot.bottom(), cy))
             overlay = QColor("#3978bd")
             overlay.setAlpha(50)
             painter.setPen(QPen(QColor("#3978bd"), 1))
             if abs(cx - ox) >= abs(cy - oy):
-                left, right = sorted((max(plot.left(), ox), min(plot.right(), cx)))
+                left, right = sorted((ox, cx))
                 painter.fillRect(left, plot.top(), max(1, right - left), plot.height(), overlay)
                 painter.drawRect(left, plot.top(), max(1, right - left), plot.height())
             else:
-                top, bottom = sorted((max(plot.top(), oy), min(plot.bottom(), cy)))
+                top, bottom = sorted((oy, cy))
                 painter.fillRect(plot.left(), top, plot.width(), max(1, bottom - top), overlay)
                 painter.drawRect(plot.left(), top, plot.width(), max(1, bottom - top))
 

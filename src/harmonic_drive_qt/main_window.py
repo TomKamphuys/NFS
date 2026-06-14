@@ -66,7 +66,7 @@ class MainWindow(QMainWindow):
         self.config_file = config_file
         self.menu_auto_hide = _config_bool(config_file, "app", "auto_hide_left_menu", False)
         self.setWindowTitle("HALS Control")
-        self.resize(1920, 1200)
+        self.resize(1800, 1040)
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -140,7 +140,7 @@ class MainWindow(QMainWindow):
         
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.setChildrenCollapsible(False)
-        splitter.setHandleWidth(1)
+        splitter.setHandleWidth(8)
         self.splitter = splitter
         content_layout.addWidget(splitter, 1)
         root_layout.addWidget(content_area, 1)
@@ -179,16 +179,16 @@ class MainWindow(QMainWindow):
         splitter.addWidget(self.right_stack)
         splitter.setStretchFactor(0, 1)
         splitter.setStretchFactor(1, 1)
-        splitter.setSizes([750, 750])
-        QTimer.singleShot(0, self.reset_splitter_evenly)
+        QTimer.singleShot(0, self.set_default_splitter_sizes)
 
         self.show_machine()
         self.show_live_capture()
         self._apply_menu_auto_hide(initial=True)
 
-    def reset_splitter_evenly(self) -> None:
+    def set_default_splitter_sizes(self) -> None:
         available = max(1, self.splitter.width())
-        self.splitter.setSizes([available // 2, available - (available // 2)])
+        left_width = min(820, max(1, available - 1))
+        self.splitter.setSizes([left_width, available - left_width])
 
     def toggle_menu(self) -> None:
         self.menu.setVisible(not self.menu.isVisible())

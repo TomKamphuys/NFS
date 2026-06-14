@@ -169,8 +169,9 @@ class AudioSetupPane(QWidget):
         api_field = self._labeled("Audio API", self.api_select)
         api_field.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         top_settings_row = QHBoxLayout()
-        top_settings_row.setSpacing(10)
+        top_settings_row.setSpacing(8)
         top_settings_row.addWidget(api_field, 0, Qt.AlignmentFlag.AlignLeft)
+        top_settings_row.addSpacing(8)
         layout.addLayout(top_settings_row)
 
         device_row = QHBoxLayout()
@@ -223,15 +224,6 @@ class AudioSetupPane(QWidget):
         layout.addWidget(self._build_sine_group(parser))
         layout.addWidget(self._build_spl_group())
         layout.addWidget(self._build_sweep_group(parser))
-
-        action_row = QHBoxLayout()
-        test = QPushButton("   TEST SWEEP")
-        test.setFixedSize(160, 40)
-        primary_button(test)
-        test.clicked.connect(self.test_sweep)
-        action_row.addWidget(test)
-        action_row.addStretch(1)
-        layout.addLayout(action_row)
         layout.addStretch(1)
 
         self._connect_auto_apply_controls()
@@ -247,8 +239,8 @@ class AudioSetupPane(QWidget):
         group.setStyleSheet(f"QFrame {{ background: {fill}; border: 1px solid {color}; border-radius: 4px; }}")
         
         layout = QVBoxLayout(group)
-        layout.setContentsMargins(10, 8, 10, 10)
-        layout.setSpacing(8)
+        layout.setContentsMargins(10, 8, 10, 8)
+        layout.setSpacing(6)
         
         lbl = QLabel(title)
         lbl.setStyleSheet(f"color: {text_color}; font-weight: bold; font-size: 14px; border: none;")
@@ -256,16 +248,19 @@ class AudioSetupPane(QWidget):
         
         def add_field(label_text, widget):
             w = QWidget()
-            w.setStyleSheet(f"background: {fill}; border: 1px solid {color}; border-radius: 4px; padding: 4px;")
-            l = QVBoxLayout(w)
-            l.setContentsMargins(8, 2, 8, 2)
-            l.setSpacing(0)
+            w.setStyleSheet(f"background: {fill}; border: 1px solid {color}; border-radius: 4px;")
+            l = QHBoxLayout(w)
+            l.setContentsMargins(8, 3, 8, 3)
+            l.setSpacing(8)
             lbl = QLabel(label_text)
             lbl.setStyleSheet("color: #64748b; font-size: 10px; border: none;")
+            lbl.setMinimumWidth(126)
+            lbl.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
             widget.setProperty("toneFill", fill)
+            widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
             self._apply_tinted_combo_style(widget)
             l.addWidget(lbl)
-            l.addWidget(widget)
+            l.addWidget(widget, 1)
             layout.addWidget(w)
             
         add_field(f"{title} device", device)
@@ -295,7 +290,27 @@ class AudioSetupPane(QWidget):
         return group
 
     def _build_spl_group(self) -> QGroupBox:
+        tooltip_text = (
+            "<div style='color: #111827; font-weight: 400; font-size: 12px; white-space: pre;'>"
+            "1. Run the sine tone.<br>"
+            "2. Wait for Mic Level dBFS(A) to settle; it holds when stopped.<br>"
+            "3. Enter the physical SPL meter reading at the mic position.<br>"
+            "4. Press Calibrate to fill SPL dB Offset.<br>"
+            "5. Press Save Cal, or enter a known offset manually and save."
+            "</div>"
+        )
         group = QGroupBox("SPL Calibration")
+        help_badge = QLabel("?")
+        help_badge.setParent(group)
+        help_badge.setFixedSize(18, 18)
+        help_badge.move(114, 0)
+        help_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        help_badge.setToolTip(tooltip_text)
+        help_badge.setStyleSheet(
+            "background: #eef6ff; border: 1px solid #7db2e8; border-radius: 9px; "
+            "color: #3978bd; font-size: 12px; font-weight: 900;"
+        )
+
         row = QHBoxLayout(group)
         row.setSpacing(8)
         current_calibration = project.get_project_data().get("stage5_vars")
@@ -408,6 +423,15 @@ class AudioSetupPane(QWidget):
                 adv.addWidget(widget, row, col, 1, 2)
                 advanced_children.append(widget)
         layout.addWidget(advanced)
+        action_row = QHBoxLayout()
+        action_row.setContentsMargins(0, 2, 0, 0)
+        test = QPushButton("   TEST SWEEP")
+        test.setFixedSize(160, 40)
+        primary_button(test)
+        test.clicked.connect(self.test_sweep)
+        action_row.addWidget(test)
+        action_row.addStretch(1)
+        layout.addLayout(action_row)
         self._collapse_group_children(advanced, advanced_children)
         self.hpf_enable.stateChanged.connect(self.update_hpf_field_state)
         self.hpf_corr.stateChanged.connect(self.update_hpf_field_state)

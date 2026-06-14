@@ -40,6 +40,28 @@ from .styles import light_combo, toggle_style
 from .widgets import LevelMeter, LinePlot
 
 
+LIVE_CAPTURE_CONFIG_SECTION = "live_capture"
+PANEL_ORDER_CONFIG_KEY = "panel_order"
+VISIBLE_PANELS_CONFIG_KEY = "visible_panels"
+FREQUENCY_SMOOTHING_CONFIG_KEY = "frequency_smoothing_fraction"
+PANEL_LABELS = [
+    "Audio Meters",
+    "Measurement Positions",
+    "Frequency Response",
+    "3D Progress",
+    "Impulse Response",
+]
+DEFAULT_VISIBLE_PANELS = list(PANEL_LABELS)
+DEFAULT_PANEL_ORDER = list(PANEL_LABELS)
+DEFAULT_FREQUENCY_SMOOTHING_FRACTION = 24
+FREQUENCY_SMOOTHING_OPTIONS = {
+    0: "None",
+    3: "1/3",
+    6: "1/6",
+    12: "1/12",
+    24: "1/24",
+}
+
 GRID_SRC = Path(__file__).resolve().parents[1] / "grid"
 if str(GRID_SRC) not in sys.path:
     sys.path.insert(0, str(GRID_SRC))
@@ -219,11 +241,41 @@ def _smooth_fractional_octave(freqs: np.ndarray, mag_db: np.ndarray, fraction: i
     return 20 * np.log10((sums / counts) + 1e-12)
 
 
+def _auto_db_range(values: np.ndarray, *, headroom_db: float = 5.0, span_db: float = 50.0) -> tuple[float, float]:
+    finite = np.asarray(values, dtype=float)
+    finite = finite[np.isfinite(finite)]
+    if finite.size == 0:
+        return (-span_db, 0.0)
+    ymax = float(np.max(finite)) + headroom_db
+    return ymax - span_db, ymax
+
+
+def _auto_waveform_range(values: np.ndarray, *, headroom_fraction: float = 0.12) -> tuple[float, float]:
+    finite = np.asarray(values, dtype=float)
+    finite = finite[np.isfinite(finite)]
+    if finite.size == 0:
+        return (-1.0, 1.0)
+    peak = max(float(np.max(np.abs(finite))), 1e-6)
+    limit = peak * (1.0 + headroom_fraction)
+    return -limit, limit
+
+
 class LiveSection(QFrame):
-    def __init__(self, title: str, move_callback, home_callback=None, parent=None) -> None:
+    def __init__(
+        self,
+        title: str,
+        move_callback,
+        home_callback=None,
+        parent=None,
+        config_label: str | None = None,
+        visibility_callback=None,
+        header_widget: QWidget | None = None,
+    ) -> None:
         super().__init__(parent)
+        self.config_label = config_label or title
         self.move_callback = move_callback
         self.home_callback = home_callback
+        self.visibility_callback = visibility_callback
         self._drag_start_y: int | None = None
         self._enlarge_dialog: QDialog | None = None
         self._maximized = False
@@ -267,6 +319,8 @@ class LiveSection(QFrame):
         self.detail_label.setStyleSheet("background: transparent; color: #64748b; font-size: 11px; border: none;")
         header_layout.addWidget(self.detail_label, 1)
         header_layout.addStretch(1)
+        if header_widget is not None:
+            header_layout.addWidget(header_widget)
 
         home = QPushButton()
         enlarge = QPushButton()
@@ -389,6 +443,12 @@ class LiveSection(QFrame):
         visible = self.content.isVisible()
         self.content.setVisible(not visible)
         self.toggle_button.setText("v" if visible else "^")
+        if self.visibility_callback is not None:
+            self.visibility_callback()
+
+    def set_collapsed(self, collapsed: bool) -> None:
+        self.content.setVisible(not collapsed)
+        self.toggle_button.setText("v" if collapsed else "^")
 
     def mousePressEvent(self, event) -> None:  # noqa: N802
         if event.button() == Qt.MouseButton.LeftButton:
@@ -444,6 +504,8 @@ class LiveCapturePane(QWidget):
         self.progress_widget: QWidget | None = None
         self.progress_viewer_layout: QVBoxLayout | None = None
         self.progress_rotate_button: QPushButton | None = None
+        self.sections_by_label: dict[str, LiveSection] = {}
+        self._loading_layout_settings = False
         self._build_ui()
         if self._pyvista_error is not None:
             QTimer.singleShot(0, self._show_pyvista_fallback_message)
@@ -487,31 +549,17 @@ class LiveCapturePane(QWidget):
         header = QHBoxLayout()
         title = QLabel("Live Capture")
         title.setStyleSheet("font-size: 20px; font-weight: 800; color: #000000; border: none;")
-        smoothing_label = QLabel("FR Smooth")
-        smoothing_label.setStyleSheet("color: #475569; font-weight: 700; border: none;")
         self.smoothing = QComboBox()
         light_combo(self.smoothing)
-        for label, fraction in (
-            ("None", 0),
-            ("1/3", 3),
-            ("1/6", 6),
-            ("1/12", 12),
-            ("1/24", 24),
-        ):
+        for fraction, label in FREQUENCY_SMOOTHING_OPTIONS.items():
             self.smoothing.addItem(label, fraction)
-        self.smoothing.setCurrentText("1/24")
-        self.smoothing.setFixedWidth(92)
+        self.smoothing.setFixedWidth(82)
+        panel_order, visible_panels, smoothing_fraction = self._load_layout_settings()
+        self._set_smoothing_fraction(smoothing_fraction)
         self.smoothing.currentIndexChanged.connect(self._on_smoothing_changed)
-        
-        save_btn = QLabel("SAVE AS DEFAULT")
-        save_btn.setStyleSheet("color: #3978bd; font-weight: 800; font-size: 11px; border: none;")
         
         header.addWidget(title)
         header.addStretch(1)
-        header.addWidget(smoothing_label)
-        header.addWidget(self.smoothing)
-        header.addSpacing(16)
-        header.addWidget(save_btn)
         root.addLayout(header)
 
         scroll = QScrollArea()
@@ -555,7 +603,16 @@ class LiveCapturePane(QWidget):
         self.positions.color_points_by_y = True
         p_layout.addWidget(self.positions)
 
-        self.freq_section, f_content = self._add_section("Frequency Response")
+        smoothing_field = QWidget()
+        smoothing_field.setStyleSheet("background: transparent; border: none;")
+        smoothing_layout = QHBoxLayout(smoothing_field)
+        smoothing_layout.setContentsMargins(0, 0, 0, 0)
+        smoothing_layout.setSpacing(5)
+        smoothing_label = QLabel("Smooth")
+        smoothing_label.setStyleSheet("color: #475569; font-weight: 700; font-size: 11px; border: none;")
+        smoothing_layout.addWidget(smoothing_label)
+        smoothing_layout.addWidget(self.smoothing)
+        self.freq_section, f_content = self._add_section("Frequency Response", header_widget=smoothing_field)
         f_layout = QVBoxLayout(f_content)
         self.frequency = LinePlot("Frequency Response", "Frequency (Hz)", "Magnitude (dBFS)")
         self.frequency.setMinimumHeight(325)
@@ -563,15 +620,16 @@ class LiveCapturePane(QWidget):
         
         self.imp_section, i_content = self._add_section("Impulse Response")
         i_layout = QVBoxLayout(i_content)
-        self.impulse = LinePlot("Impulse Response", "Time (ms)", "Level (dBFS)")
+        self.impulse = LinePlot("Impulse Response", "Time (ms)", "Amplitude")
         self.impulse.setMinimumHeight(286)
         i_layout.addWidget(self.impulse)
 
-        prog_section, pr_content = self._add_section("Measurement Progress", self._reset_progress_view)
+        prog_section, pr_content = self._add_section("Measurement Progress", self._reset_progress_view, config_label="3D Progress")
         pr_layout = QVBoxLayout(pr_content)
         pr_layout.addLayout(self._build_progress_view_controls())
         self._install_progress_viewer(pr_layout)
         prog_section.set_square_mode(True)
+        self._apply_layout_settings(panel_order, visible_panels)
         self.sections_layout.addStretch(1)
 
     def _install_progress_viewer(self, layout: QVBoxLayout) -> None:
@@ -677,9 +735,23 @@ class LiveCapturePane(QWidget):
         except Exception as exc:
             self._fallback_to_matplotlib_progress_viewer(exc, context)
 
-    def _add_section(self, title: str, home_callback=None) -> tuple["LiveSection", QWidget]:
-        section = LiveSection(title, self._move_section, home_callback)
+    def _add_section(
+        self,
+        title: str,
+        home_callback=None,
+        config_label: str | None = None,
+        header_widget: QWidget | None = None,
+    ) -> tuple["LiveSection", QWidget]:
+        section = LiveSection(
+            title,
+            self._move_section,
+            home_callback,
+            config_label=config_label,
+            visibility_callback=self._save_layout_settings,
+            header_widget=header_widget,
+        )
         self.sections.append(section)
+        self.sections_by_label[section.config_label] = section
         self.sections_layout.addWidget(section)
         return section, section.content
 
@@ -704,10 +776,94 @@ class LiveCapturePane(QWidget):
         self.sections.insert(new_index, section)
         self.sections_layout.removeWidget(section)
         self.sections_layout.insertWidget(new_index, section)
+        self._save_layout_settings()
 
     def _on_smoothing_changed(self) -> None:
         self.fr_smoothing_fraction = int(self.smoothing.currentData() or 0)
         self.refresh_ir_plots()
+        self._save_layout_settings()
+
+    def _set_smoothing_fraction(self, fraction: int) -> None:
+        target = fraction if fraction in FREQUENCY_SMOOTHING_OPTIONS else DEFAULT_FREQUENCY_SMOOTHING_FRACTION
+        for index in range(self.smoothing.count()):
+            if self.smoothing.itemData(index) == target:
+                self.smoothing.setCurrentIndex(index)
+                self.fr_smoothing_fraction = target
+                return
+        self.fr_smoothing_fraction = DEFAULT_FREQUENCY_SMOOTHING_FRACTION
+
+    def _load_layout_settings(self) -> tuple[list[str], set[str], int]:
+        parser = configparser.ConfigParser(inline_comment_prefixes=("#", ";"))
+        parser.read(self.config_file)
+        configured_order: list[str] = []
+        if parser.has_option(LIVE_CAPTURE_CONFIG_SECTION, PANEL_ORDER_CONFIG_KEY):
+            configured_order = [
+                item.strip()
+                for item in parser.get(LIVE_CAPTURE_CONFIG_SECTION, PANEL_ORDER_CONFIG_KEY).split(",")
+                if item.strip()
+            ]
+        panel_order = [label for label in configured_order if label in PANEL_LABELS]
+        panel_order.extend(label for label in DEFAULT_PANEL_ORDER if label not in panel_order)
+
+        configured_visible: list[str] = []
+        if parser.has_option(LIVE_CAPTURE_CONFIG_SECTION, VISIBLE_PANELS_CONFIG_KEY):
+            configured_visible = [
+                item.strip()
+                for item in parser.get(LIVE_CAPTURE_CONFIG_SECTION, VISIBLE_PANELS_CONFIG_KEY).split(",")
+                if item.strip()
+            ]
+        else:
+            configured_visible = DEFAULT_VISIBLE_PANELS
+        visible_panels = {label for label in configured_visible if label in PANEL_LABELS}
+
+        try:
+            smoothing_fraction = parser.getint(
+                LIVE_CAPTURE_CONFIG_SECTION,
+                FREQUENCY_SMOOTHING_CONFIG_KEY,
+                fallback=DEFAULT_FREQUENCY_SMOOTHING_FRACTION,
+            )
+        except ValueError:
+            smoothing_fraction = DEFAULT_FREQUENCY_SMOOTHING_FRACTION
+        return panel_order, visible_panels, max(0, smoothing_fraction)
+
+    def _apply_layout_settings(self, panel_order: list[str], visible_panels: set[str]) -> None:
+        self._loading_layout_settings = True
+        try:
+            ordered_sections = [
+                self.sections_by_label[label]
+                for label in panel_order
+                if label in self.sections_by_label
+            ]
+            ordered_sections.extend(section for section in self.sections if section not in ordered_sections)
+            for section in ordered_sections:
+                self.sections_layout.removeWidget(section)
+            self.sections = ordered_sections
+            for index, section in enumerate(self.sections):
+                section.set_collapsed(section.config_label not in visible_panels)
+                self.sections_layout.insertWidget(index, section)
+        finally:
+            self._loading_layout_settings = False
+
+    def _save_layout_settings(self) -> None:
+        if self._loading_layout_settings:
+            return
+        parser = configparser.ConfigParser(inline_comment_prefixes=("#", ";"))
+        parser.optionxform = str  # type: ignore[assignment]
+        parser.read(self.config_file)
+        if not parser.has_section(LIVE_CAPTURE_CONFIG_SECTION):
+            parser.add_section(LIVE_CAPTURE_CONFIG_SECTION)
+
+        panel_order = [section.config_label for section in self.sections if section.config_label in PANEL_LABELS]
+        visible_panels = [
+            section.config_label
+            for section in self.sections
+            if section.config_label in PANEL_LABELS and section.content.isVisible()
+        ]
+        parser.set(LIVE_CAPTURE_CONFIG_SECTION, PANEL_ORDER_CONFIG_KEY, ", ".join(panel_order))
+        parser.set(LIVE_CAPTURE_CONFIG_SECTION, VISIBLE_PANELS_CONFIG_KEY, ", ".join(visible_panels))
+        parser.set(LIVE_CAPTURE_CONFIG_SECTION, FREQUENCY_SMOOTHING_CONFIG_KEY, str(max(0, int(self.fr_smoothing_fraction))))
+        with open(self.config_file, "w", encoding="utf-8") as handle:
+            parser.write(handle)
 
     def set_active(self, active: bool) -> None:
         self.visible_active = active
@@ -913,12 +1069,12 @@ class LiveCapturePane(QWidget):
         end = min(len(ir), start + zoom_samples)
         ir_zoom = ir[start:end]
         time_axis = np.arange(len(ir_zoom)) / fs * 1000.0
-        ir_dbfs = 20 * np.log10(np.maximum(np.abs(ir_zoom), 1e-12))
         self.impulse.set_data(
             time_axis,
-            ir_dbfs,
+            ir_zoom,
             title="Impulse Response",
-            y_range=(-120, 0),
+            y_range=_auto_waveform_range(ir_zoom),
+            y_axis_mode="symmetric_dbfs",
         )
 
         n_fft = 2 ** int(np.ceil(np.log2(max(1, len(ir)))))
@@ -927,15 +1083,17 @@ class LiveCapturePane(QWidget):
         mag_db = 20 * np.log10(np.abs(fr) + 1e-12)
         valid = freqs > 0
         fraction = int(self.fr_smoothing_fraction or 0)
-        smoothed = _smooth_fractional_octave(freqs[valid], mag_db[valid], fraction)
+        plot_freqs = freqs[valid]
+        smoothed = _smooth_fractional_octave(plot_freqs, mag_db[valid], fraction)
+        audible = (plot_freqs >= 20.0) & (plot_freqs <= 20000.0)
         smooth_label = "unsmoothed" if fraction <= 0 else f"1/{fraction} Oct Smoothed"
         self.imp_section.set_detail(f"Zoomed: {title_name}")
         self.freq_section.set_detail(f"{smooth_label}: {title_name}")
         self.frequency.set_data(
-            freqs[valid],
-            smoothed,
+            plot_freqs[audible],
+            smoothed[audible],
             title="Frequency Response",
             log_x=True,
             x_range=(20, 20000),
-            y_range=(-60, 10),
+            y_range=_auto_db_range(smoothed[audible]),
         )

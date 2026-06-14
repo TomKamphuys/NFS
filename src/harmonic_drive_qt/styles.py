@@ -159,6 +159,56 @@ def app_stylesheet() -> str:
         margin: -5px 0;
         border-radius: 7px;
     }}
+    QScrollBar:vertical {{
+        background: #eef6ff;
+        border: 1px solid #d6e8fb;
+        border-radius: 5px;
+        margin: 0;
+        width: 12px;
+    }}
+    QScrollBar::handle:vertical {{
+        background: {BLUE};
+        border-radius: 5px;
+        min-height: 34px;
+    }}
+    QScrollBar::handle:vertical:hover {{
+        background: {BLUE_DARK};
+    }}
+    QScrollBar::add-line:vertical,
+    QScrollBar::sub-line:vertical {{
+        height: 0;
+        border: 0;
+        background: transparent;
+    }}
+    QScrollBar::add-page:vertical,
+    QScrollBar::sub-page:vertical {{
+        background: transparent;
+    }}
+    QScrollBar:horizontal {{
+        background: #eef6ff;
+        border: 1px solid #d6e8fb;
+        border-radius: 5px;
+        height: 12px;
+        margin: 0;
+    }}
+    QScrollBar::handle:horizontal {{
+        background: {BLUE};
+        border-radius: 5px;
+        min-width: 34px;
+    }}
+    QScrollBar::handle:horizontal:hover {{
+        background: {BLUE_DARK};
+    }}
+    QScrollBar::add-line:horizontal,
+    QScrollBar::sub-line:horizontal {{
+        width: 0;
+        border: 0;
+        background: transparent;
+    }}
+    QScrollBar::add-page:horizontal,
+    QScrollBar::sub-page:horizontal {{
+        background: transparent;
+    }}
     QCheckBox {{
         spacing: 8px;
         background: transparent;
@@ -184,11 +234,25 @@ def app_stylesheet() -> str:
     QGroupBox::indicator:checked {{
         image: url("{toggle_on}");
     }}
-    QSplitter::handle {{
-        background: #e2e8f0;
+    QSplitter::handle:horizontal {{
+        background: #eef6ff;
+        border-left: 1px solid #cfe4fa;
+        border-right: 1px solid #cfe4fa;
     }}
-    QSplitter::handle:hover {{
-        background: #93c5fd;
+    QSplitter::handle:horizontal:hover {{
+        background: #dbeafe;
+        border-left-color: {BLUE};
+        border-right-color: {BLUE};
+    }}
+    QSplitter::handle:vertical {{
+        background: #eef6ff;
+        border-top: 1px solid #cfe4fa;
+        border-bottom: 1px solid #cfe4fa;
+    }}
+    QSplitter::handle:vertical:hover {{
+        background: #dbeafe;
+        border-top-color: {BLUE};
+        border-bottom-color: {BLUE};
     }}
     """
 

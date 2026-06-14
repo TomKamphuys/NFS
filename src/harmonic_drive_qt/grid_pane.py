@@ -165,7 +165,7 @@ class GridGeneratorPane(QWidget):
         title.setStyleSheet("font-size: 20px; font-weight: 800; color: #000000; border: none;")
         gen_layout.addWidget(title)
         
-        subtitle = QLabel("Cylinder Physical Waypoints - Jog and Set Position")
+        subtitle = QLabel("Measurement Grid Waypoints - Jog to position and click 'SET'")
         subtitle.setStyleSheet("font-size: 14px; font-weight: bold; color: #1e293b; border: none; margin-top: 8px;")
         gen_layout.addWidget(subtitle)
         

@@ -1,3 +1,18 @@
+--------
+14/06/26
+--------
+
+Styled scrollbars with visible blue handles and widened the main
+splitter divider so the center pane boundary is easier to grab.
+
+Added SPL Calibration help tooltip to Audio Setup pane.
+
+Moved the FR smoothing selector into the Frequency Response plot header.
+
+Fixed plot lines drawing over the axis boundaries.
+
+Changed the Impulse Response plot to show the linear waveform and use mirrored
+dBFS labels.
 
 --------
 14/06/26
@@ -9,11 +24,15 @@ viewer and show a popup explaining that PyVista visualisation failed.
 Moved the native Qt Audio Setup output level and FS controls onto the same top
 line as the Audio API selector.
 
+
 Files touched:
 src/harmonic_drive_qt/grid_pane.py
 src/harmonic_drive_qt/live_capture.py
 src/grid/coord_viewer_core.py
 src/harmonic_drive_qt/audio_setup_pane.py
+src/harmonic_drive_qt/styles.py
+src/harmonic_drive_qt/main_window.py
+src/harmonic_drive_qt/widgets.py
 
 --------
 13/06/26
