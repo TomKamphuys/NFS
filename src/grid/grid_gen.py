@@ -165,7 +165,7 @@ def generate_measurement_grid(
     generate_reverse_spiral=True,
     z_rotation_deg=90.0,
     flip_poles=False,
-    z_midpoint_zero=True,
+    z_midpoint_zero=False,
     phi_min_deg=-180.0,
     phi_max_deg=180.0,
     azimuth_density_ratio=1.0,

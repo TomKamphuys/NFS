@@ -1,4 +1,36 @@
 --------
+15/06/26
+--------
+
+Bug fix: selecting a project/session folder no longer creates a default
+<ProjectName>_project.json immediately. The project save file is only written
+when the user saves, generates grid data, takes measurements, or explicitly
+saves SPL calibration.
+
+Tightened project persistence rules. Audio interface settings, channels, sample
+rate and output level are global app settings that persist on reload. Sweep
+setup is project-tied and saved to project JSON. Sine tone settings always
+return to their startup defaults of 1 kHz indefinite duration.
+
+Bug fix: Grid Generator waypoints now start blank for new projects and only
+reload values that were actually saved in project JSON. The grid preview no
+longer auto-loads a default-named grid CSV unless the saved project references
+that grid file.
+
+Bug fix: Audio Setup FS selector now shows the full text, including the
+"(recommended)" suffix.
+
+Files touched:
+src/harmonic_drive_qt/audio_setup_pane.py
+src/harmonic_drive_qt/grid_pane.py
+src/harmonic_drive_qt/main.py
+src/harmonic_drive_qt/main_window.py
+tests/test_project.py
+tests/test_qt_audio_setup_pane.py
+tests/test_qt_grid_pane.py
+tests/test_qt_main_window_project.py
+
+--------
 14/06/26
 --------
 

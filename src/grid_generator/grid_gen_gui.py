@@ -274,7 +274,7 @@ def build_grid_gen_ui(
                     g_snake = ui.select(['up', 'down'], value=gv('side_snake_start', 'up'), label='Side Snake Start').classes('flex-1')
                     g_rev_sp = ui.checkbox('Generate Reverse Spiral', value=gv_bool('generate_reverse_spiral', True))
                     g_flip_p = ui.checkbox('Flip Poles', value=gv_bool('flip_poles', False))
-                    g_z_mid = ui.checkbox('Z Midpoint = 0', value=gv_bool('z_midpoint_zero', True))
+                    g_z_mid = ui.checkbox('Z Midpoint = 0', value=gv_bool('z_midpoint_zero', False))
 
             async def do_generate_and_plan():
                 try:

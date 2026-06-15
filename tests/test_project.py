@@ -16,12 +16,72 @@ def _write_config(path):
         "\n"
         "[sweep]\n"
         "sweep_dur_s = 1.5\n"
+        "sweep_level_dbfs = -9.0\n"
         "num_sweeps = 2\n"
         "\n"
         "[motion_manager]\n"
         "type = CylindricalMeasurementMotionManager\n",
         encoding="utf-8",
     )
+
+
+def _write_default_config(path):
+    path.write_text(
+        "[audio]\n"
+        "mode = hardware\n"
+        "in_dev = 99\n"
+        "out_dev = 98\n"
+        "\n"
+        "[sweep]\n"
+        "sweep_dur_s = 4.5\n"
+        "sweep_level_dbfs = -30.0\n"
+        "num_sweeps = 7\n"
+        "protect_hpf_hz = None\n"
+        "protect_hpf_order = 2\n"
+        "protect_hpf_correction = False\n"
+        "protect_hpf_corr_db_cap = 9.0\n"
+        "align_to_first_marker = True\n"
+        "pre_sil_ms = 100.0\n"
+        "post_sil_ms = 200.0\n"
+        "mic_tail_taper_ms = 30.0\n"
+        "debug_saves = False\n"
+        "h2_test_db = None\n"
+        "h3_test_db = None\n",
+        encoding="utf-8",
+    )
+
+
+def test_new_project_uses_default_sweep_settings_not_last_config_values(tmp_path):
+    config_file = tmp_path / "config.ini"
+    default_file = tmp_path / "config_default.ini"
+    _write_config(config_file)
+    _write_default_config(default_file)
+
+    project.set_project_dir(tmp_path / "new_session", str(config_file))
+
+    data = project.get_project_data()
+    assert data["sweep_settings"]["sweep_dur_s"] == "4.5"
+    assert data["sweep_settings"]["num_sweeps"] == "7"
+    assert "sweep_level_dbfs" not in data["sweep_settings"]
+
+
+def test_applying_new_project_defaults_preserves_audio_and_output_level(tmp_path):
+    config_file = tmp_path / "config.ini"
+    default_file = tmp_path / "config_default.ini"
+    _write_config(config_file)
+    _write_default_config(default_file)
+
+    project.set_project_dir(tmp_path / "new_session", str(config_file))
+    project.apply_to_config(str(config_file))
+
+    parser = configparser.ConfigParser()
+    parser.read(config_file)
+
+    assert parser.get("audio", "in_dev") == "1"
+    assert parser.get("audio", "out_dev") == "2"
+    assert parser.get("sweep", "sweep_dur_s") == "4.5"
+    assert parser.get("sweep", "num_sweeps") == "7"
+    assert parser.get("sweep", "sweep_level_dbfs") == "-9.0"
 
 
 def test_project_json_only_saved_explicitly(tmp_path):
@@ -33,7 +93,7 @@ def test_project_json_only_saved_explicitly(tmp_path):
     project.update_grid_vars({"output_filename": "draft_grid.csv"})
     project.update_audio_setup(
         {"in_dev": "9"},
-        {"sweep_dur_s": "2.0", "num_sweeps": "3"},
+        {"sweep_dur_s": "2.0", "sweep_level_dbfs": "-12.0", "num_sweeps": "3"},
     )
 
     assert not list(work_dir.glob("*_project.json"))
@@ -46,6 +106,7 @@ def test_project_json_only_saved_explicitly(tmp_path):
     content = saved_files[0].read_text(encoding="utf-8")
     assert "sweep_settings" in content
     assert "audio_settings" not in content
+    assert "sweep_level_dbfs" not in content
 
 
 def test_spl_calibration_saves_stage5_frd_offset(tmp_path):
@@ -66,10 +127,10 @@ def test_spl_calibration_saves_stage5_frd_offset(tmp_path):
 
     assert '"stage5_vars"' in content
     assert '"frd_db_offset": 110.0' in content
+    assert '"spl_db": 80.0' in content
+    assert '"reference_input_rms_dbfs": -30.0' in content
     assert '"spl_calibration"' not in content
     assert '"spl_offset_db"' not in content
-    assert '"spl_db"' not in content
-    assert '"reference_input_rms_dbfs"' not in content
 
 
 def test_spl_calibration_update_preserves_project_state_and_stage5_vars(tmp_path):
@@ -86,7 +147,12 @@ def test_spl_calibration_update_preserves_project_state_and_stage5_vars(tmp_path
     data = project.get_project_data()
     assert data["grid_vars"]["output_filename"] == "grid.csv"
     assert data["sweep_settings"]["sweep_dur_s"] == "2.0"
-    assert data["stage5_vars"] == {"other_value": 12, "frd_db_offset": 110.5}
+    assert data["stage5_vars"] == {
+        "other_value": 12,
+        "frd_db_offset": 110.5,
+        "spl_db": 83.0,
+        "reference_input_rms_dbfs": -27.5,
+    }
     assert "spl_calibration" not in data
 
 
@@ -98,7 +164,11 @@ def test_spl_calibration_can_be_saved_from_known_scale(tmp_path):
     )
 
     data = project.get_project_data()
-    assert data["stage5_vars"] == {"frd_db_offset": 109.75}
+    assert data["stage5_vars"] == {
+        "frd_db_offset": 109.75,
+        "spl_db": None,
+        "reference_input_rms_dbfs": None,
+    }
     assert "spl_calibration" not in data
 
 
@@ -110,7 +180,11 @@ def test_spl_calibration_truncates_frd_offset_to_two_decimals(tmp_path):
     )
 
     data = project.get_project_data()
-    assert data["stage5_vars"] == {"frd_db_offset": 99.24}
+    assert data["stage5_vars"] == {
+        "frd_db_offset": 99.24,
+        "spl_db": None,
+        "reference_input_rms_dbfs": None,
+    }
 
 
 def test_project_apply_does_not_overwrite_global_audio(tmp_path):
@@ -198,6 +272,20 @@ def test_temporary_project_dir_detection(tmp_path):
     project.set_project_dir(tmp_path / "session")
 
     assert project.is_temporary_project_dir() is False
+
+
+def test_temporary_project_dir_is_cleared_on_reset(tmp_path, monkeypatch):
+    monkeypatch.setattr(project.tempfile, "gettempdir", lambda: str(tmp_path))
+    monkeypatch.setattr(project, "TEMP_PROJECT_DIR", tmp_path / "HALS_working_project")
+    temp_project = project.TEMP_PROJECT_DIR
+    temp_project.mkdir()
+    (temp_project / "stale_project.json").write_text("{}", encoding="utf-8")
+    (temp_project / "stale_grid.csv").write_text("r_xy_mm,phi_deg,z_mm\n", encoding="utf-8")
+
+    project.reset_temporary_project_dir()
+
+    assert temp_project.is_dir()
+    assert list(temp_project.iterdir()) == []
 
 
 def test_no_session_placeholder_with_temp_project_is_not_selected(tmp_path):

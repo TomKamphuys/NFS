@@ -105,6 +105,7 @@ class MainWindow(QMainWindow):
         self.project_name = QLineEdit(project.get_project_name())
         self.project_name.setFixedWidth(320)
         self.project_name.setFixedHeight(34)
+        self.project_name.textChanged.connect(self._sync_project_name_from_field)
 
         save = QPushButton("SAVE")
         save.setFixedHeight(34)
@@ -323,15 +324,56 @@ class MainWindow(QMainWindow):
         if was_current:
             self.left_stack.setCurrentWidget(self.control_pane)
 
+    def _rebuild_audio_pane(self) -> None:
+        if not hasattr(self, "left_stack") or not hasattr(self, "audio_pane"):
+            return
+        was_current = self.left_stack.currentWidget() is self.audio_pane
+        old_pane = self.audio_pane
+        self.left_stack.removeWidget(old_pane)
+        try:
+            old_pane.auto_apply_timer.stop()
+            old_pane.cal_timer.stop()
+        except Exception:
+            pass
+        old_pane.deleteLater()
+        self.audio_pane = AudioSetupPane(self.backend, self.config_file, show_live_capture=self.show_live_capture)
+        self.audio_pane.saved.connect(lambda: self.live_capture.refresh_all())
+        self.left_stack.insertWidget(1, self.audio_pane)
+        if was_current:
+            self.left_stack.setCurrentWidget(self.audio_pane)
+
+    def _rebuild_grid_pane(self) -> None:
+        if not hasattr(self, "right_stack") or not hasattr(self, "grid_pane"):
+            return
+        was_current = self.right_stack.currentWidget() is self.grid_pane
+        old_pane = self.grid_pane
+        self.right_stack.removeWidget(old_pane)
+        try:
+            old_pane.shutdown()
+            old_pane.sync_timer.stop()
+        except Exception:
+            pass
+        old_pane.deleteLater()
+        self.grid_pane = GridGeneratorPane(
+            self.backend,
+            self.config_file,
+            require_session_folder=self.require_session_folder,
+        )
+        self.grid_pane.grid_saved.connect(self.on_grid_saved)
+        self.right_stack.addWidget(self.grid_pane)
+        if was_current:
+            self.right_stack.setCurrentWidget(self.grid_pane)
+
     def browse_project(self) -> None:
         initial = "" if self.project_path.text() == NO_SESSION_FOLDER_TEXT else self.project_path.text()
         directory = QFileDialog.getExistingDirectory(self, "Measurement Folder", initial)
         if directory:
-            self.project_path.setText(directory)
-            self.save_project_context()
+            self.activate_project_context(directory, preserve_entered_name=False)
 
     def require_session_folder(self) -> bool:
+        self._flush_audio_pane_changes()
         if not project.is_temporary_project_dir():
+            self._sync_project_name_from_field()
             return True
 
         result = QMessageBox.question(
@@ -353,11 +395,44 @@ class MainWindow(QMainWindow):
         if not directory:
             return False
 
-        self.project_path.setText(directory)
-        self.save_project_context()
+        self.activate_project_context(directory, preserve_entered_name=True)
         return not project.is_temporary_project_dir()
 
+    def _sync_project_name_from_field(self) -> None:
+        if not hasattr(self, "project_name"):
+            return
+        project.set_project_name(self.project_name.text())
+
+    def _flush_audio_pane_changes(self) -> None:
+        audio_pane = getattr(self, "audio_pane", None)
+        flush = getattr(audio_pane, "flush_pending_changes", None)
+        if callable(flush):
+            flush()
+
+    def activate_project_context(self, path: str | Path, preserve_entered_name: bool) -> None:
+        """Load/use a selected session folder without writing a project JSON."""
+        path = Path(path).expanduser()
+        entered_name = self.project_name.text()
+        try:
+            project.set_project_dir(path, self.config_file)
+            if preserve_entered_name:
+                project.set_project_name(entered_name)
+            project.apply_to_config(self.config_file)
+            project.ensure_output_dirs()
+        except Exception:
+            pass
+        self.backend.set_project_dir(path)
+        self.project_path.setText(str(project.get_project_dir()))
+        self.project_name.blockSignals(True)
+        self.project_name.setText(project.get_project_name())
+        self.project_name.blockSignals(False)
+        self.control_pane.refresh_grid_readout()
+        self._rebuild_audio_pane()
+        self._rebuild_grid_pane()
+        self.live_capture.refresh_all()
+
     def save_project_context(self) -> None:
+        self._flush_audio_pane_changes()
         path_text = self.project_path.text().strip()
         if not path_text or path_text == NO_SESSION_FOLDER_TEXT:
             return
@@ -366,6 +441,7 @@ class MainWindow(QMainWindow):
             project.set_project_dir(path, self.config_file)
             project.set_project_name(self.project_name.text())
             project.apply_to_config(self.config_file)
+            project.ensure_output_dirs()
             project.save_project()
         except Exception:
             pass
@@ -373,9 +449,11 @@ class MainWindow(QMainWindow):
         self.project_path.setText(str(project.get_project_dir()))
         self.project_name.setText(project.get_project_name())
         self.control_pane.refresh_grid_readout()
+        self._rebuild_audio_pane()
         self.live_capture.refresh_all()
 
     def on_grid_saved(self, _filename: str, _grid_vars: dict) -> None:
+        self._sync_project_name_from_field()
         self.control_pane.refresh_grid_readout()
         self.live_capture.refresh_all()
         try:

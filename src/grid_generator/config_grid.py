@@ -42,7 +42,7 @@ bot_crit_pos              = None
 generate_reverse_spiral = True    # Make second (reverse) spiral
 z_rotation_deg          = 90   # Rotate second spiral around Z (deg)
 flip_poles              = False   # Flip Z sign of second spiral
-z_midpoint_zero         = True    # True = Z axis centred at 0 mm (equal negative and positive values). False = Z axis all positive like physical robot axis.
+z_midpoint_zero         = False   # True = Z axis centred at 0 mm (equal negative and positive values). False = Z axis all positive like physical robot axis.
 cap_fraction            = None    # Fraction of points on both end‐caps combined. None = Auto (end cap to side wall area based). 0-1 = Manually enter a fraction.
 
 """ Path Planner """

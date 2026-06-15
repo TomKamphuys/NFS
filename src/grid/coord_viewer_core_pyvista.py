@@ -337,6 +337,8 @@ class CoordViewerPyVista(QtWidgets.QWidget):
 
         self._init_dynamic_actors()
         self._load_robot_model_actors()
+        self._frame_empty_scene()
+        self._update_robot_model()
 
         # Timers
         self.play_timer = QtCore.QTimer(self)
@@ -541,7 +543,7 @@ class CoordViewerPyVista(QtWidgets.QWidget):
         z_offset_str = settings.get("z_offset_mm", "None")
         if str(z_offset_str).strip().lower() != "none":
             z_center = _safe_float(z_offset_str, 0.0) / 1000.0
-        elif settings.get("z_midpoint_zero", "True") == "True":
+        elif settings.get("z_midpoint_zero", "False") == "True":
             z_center = 0.0
         else:
             z_center = _safe_float(settings.get("cyl_height_external"), h_int) / 2.0
@@ -1029,7 +1031,12 @@ class CoordViewerPyVista(QtWidgets.QWidget):
         if self._is_shutting_down:
             return
         if self.N == 0:
+            for actor in (self.head_actor, self.active_actor, self.hist_actor):
+                if actor is not None:
+                    actor.SetVisibility(False)
             self.readout_label.setText("")
+            self._update_robot_model()
+            self.plotter.render()
             return
 
         i = max(0, min(int(self.curr_idx), self.N - 1))
@@ -1222,7 +1229,7 @@ class CoordViewerPyVista(QtWidgets.QWidget):
         return 0.0
 
     def _update_robot_model(self) -> None:
-        if not self.robot_model_loaded or self.N == 0:
+        if not self.robot_model_loaded:
             return
 
         phi_deg, radius_m, z_m = self._interpolated_motion_values()
@@ -1700,6 +1707,8 @@ class CoordViewerPyVista(QtWidgets.QWidget):
 
     def _set_axes_equal(self) -> None:
         if self.N == 0:
+            self._frame_empty_scene()
+            self._update_robot_model()
             return
 
         bounds = self._compute_camera_bounds()
@@ -1726,4 +1735,21 @@ class CoordViewerPyVista(QtWidgets.QWidget):
             self.plotter.camera.focal_point,
         )
         self._refresh_camera_dependent_bounds()
+        self.plotter.camera.zoom(1.05)
+
+    def _frame_empty_scene(self) -> None:
+        bounds = (-0.35, 0.35, -0.35, 0.35, -0.05, 0.55)
+        self._camera_bounds = bounds
+        try:
+            self.plotter.remove_bounds_axes()
+        except Exception:
+            pass
+        if self.show_grid:
+            self._show_back_grid(bounds)
+        self.plotter.enable_parallel_projection() if self.use_ortho else self.plotter.disable_parallel_projection()
+        self.plotter.reset_camera(bounds=bounds)
+        self.plotter.camera.up = self._camera_up_for_view(
+            self.plotter.camera.position,
+            self.plotter.camera.focal_point,
+        )
         self.plotter.camera.zoom(1.05)

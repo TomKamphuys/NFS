@@ -310,7 +310,7 @@ class GridGeneratorPane(QWidget):
         self.viewer_widget = widget
 
     def _init_waypoint_inputs(self) -> None:
-        self.waypoint_inputs: dict[str, tuple[QDoubleSpinBox, QDoubleSpinBox, QDoubleSpinBox]] = {}
+        self.waypoint_inputs: dict[str, tuple[QLineEdit, QLineEdit, QLineEdit]] = {}
         self.extra_position_rows: list[dict[str, object]] = []
         self.pending_extra_positions: list[dict] = []
         rows = [
@@ -324,10 +324,10 @@ class GridGeneratorPane(QWidget):
         ]
         grid_vars = project.get_project_data().get("grid_vars", {})
         grid_vars = grid_vars if isinstance(grid_vars, dict) else {}
-        for (label, key, saved_key, r_default, phi_default, z_default) in rows:
-            r = self._spin(self._gv_float(grid_vars, f"{saved_key}_r", r_default), -2000, 2000, "")
-            phi = self._spin(self._gv_float(grid_vars, f"{saved_key}_phi", phi_default), -360, 360, "")
-            z = self._spin(self._gv_float(grid_vars, f"{saved_key}_z", z_default), -2000, 2000, "")
+        for (_label, key, saved_key, _r_default, _phi_default, _z_default) in rows:
+            r = self._optional_coord(grid_vars.get(f"{saved_key}_r"))
+            phi = self._optional_coord(grid_vars.get(f"{saved_key}_phi"))
+            z = self._optional_coord(grid_vars.get(f"{saved_key}_z"))
             self.waypoint_inputs[key] = (r, phi, z)
             
         saved_positions = grid_vars.get("user_positions")
@@ -441,7 +441,7 @@ class GridGeneratorPane(QWidget):
         self.flip_poles = QCheckBox("Flip poles")
         self.z_midpoint_zero = QCheckBox("Z midpoint = 0")
         self.flip_poles.setChecked(self._gv_bool(grid_vars, "flip_poles", False))
-        self.z_midpoint_zero.setChecked(self._gv_bool(grid_vars, "z_midpoint_zero", True))
+        self.z_midpoint_zero.setChecked(self._gv_bool(grid_vars, "z_midpoint_zero", False))
         self.snake_start = QComboBox()
         light_combo(self.snake_start)
         self.snake_start.addItems(["up", "down"])
@@ -629,6 +629,17 @@ class GridGeneratorPane(QWidget):
         spin.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
         return spin
 
+    def _optional_coord(self, value) -> QLineEdit:
+        text = ""
+        if value not in (None, ""):
+            try:
+                text = f"{float(value):.1f}"
+            except (TypeError, ValueError):
+                text = str(value)
+        edit = QLineEdit(text)
+        edit.setValidator(None)
+        return edit
+
     def _gv_float(self, grid_vars: dict, key: str, fallback: float) -> float:
         try:
             value = grid_vars.get(key, fallback)
@@ -644,9 +655,18 @@ class GridGeneratorPane(QWidget):
             return value
         return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
-    def _waypoint(self, key: str) -> tuple[float, float, float]:
+    def _coord_value(self, widget: QLineEdit) -> float | None:
+        text = widget.text().strip()
+        if not text:
+            return None
+        return float(text)
+
+    def _waypoint(self, key: str) -> tuple[float, float, float] | None:
         r, phi, z = self.waypoint_inputs[key]
-        return r.value(), phi.value(), z.value()
+        values = (self._coord_value(r), self._coord_value(phi), self._coord_value(z))
+        if any(value is None for value in values):
+            return None
+        return values  # type: ignore[return-value]
 
     def _add_extra_position(self, saved: dict | None = None) -> None:
         saved = saved or {}
@@ -723,9 +743,9 @@ class GridGeneratorPane(QWidget):
             QMessageBox.warning(self, "Scanner", "No scanner position is available.")
             return
         r, phi, z = self.waypoint_inputs[key]
-        r.setValue(float(pos.r()))
-        phi.setValue(float(pos.t()))
-        z.setValue(float(pos.z()))
+        r.setText(f"{float(pos.r()):.1f}")
+        phi.setText(f"{float(pos.t()):.1f}")
+        z.setText(f"{float(pos.z()):.1f}")
 
     def _set_extra_position_from_scanner(self, row: dict[str, object]) -> None:
         pos = self.backend.get_position()
@@ -753,6 +773,8 @@ class GridGeneratorPane(QWidget):
         top = self._waypoint("top")
         bottom = self._waypoint("bottom")
         tweeter = self._waypoint("tweeter")
+        if top is None or bottom is None or tweeter is None:
+            raise RuntimeError("Top, Bottom, and Tweeter waypoints are required before generating a grid.")
         cap_tol = self._optional_float(self.cap_tol.text())
         if cap_tol is None:
             cap_tol = self.wall_thickness.value()
@@ -801,38 +823,42 @@ class GridGeneratorPane(QWidget):
         self.generated.emit(planned, str(output_path))
 
     def _grid_vars(self, filename: str) -> dict:
+        def wp_value(key: str, index: int):
+            waypoint = self._waypoint(key)
+            return "" if waypoint is None else waypoint[index]
+
         return {
             "output_filename": filename,
-            "top_r": self._waypoint("top")[0],
-            "top_phi": self._waypoint("top")[1],
-            "top_z": self._waypoint("top")[2],
-            "wp_top_r": self._waypoint("top")[0],
-            "wp_top_phi": self._waypoint("top")[1],
-            "wp_top_z": self._waypoint("top")[2],
-            "bottom_r": self._waypoint("bottom")[0],
-            "bottom_phi": self._waypoint("bottom")[1],
-            "bottom_z": self._waypoint("bottom")[2],
-            "wp_bot_r": self._waypoint("bottom")[0],
-            "wp_bot_phi": self._waypoint("bottom")[1],
-            "wp_bot_z": self._waypoint("bottom")[2],
-            "tweeter_r": self._waypoint("tweeter")[0],
-            "tweeter_phi": self._waypoint("tweeter")[1],
-            "tweeter_z": self._waypoint("tweeter")[2],
-            "wp_tw_r": self._waypoint("tweeter")[0],
-            "wp_tw_phi": self._waypoint("tweeter")[1],
-            "wp_tw_z": self._waypoint("tweeter")[2],
-            "wp_ref_origin_r": self._waypoint("ref_origin")[0],
-            "wp_ref_origin_phi": self._waypoint("ref_origin")[1],
-            "wp_ref_origin_z": self._waypoint("ref_origin")[2],
-            "wp_baffle_bl_r": self._waypoint("baffle_bot_l")[0],
-            "wp_baffle_bl_phi": self._waypoint("baffle_bot_l")[1],
-            "wp_baffle_bl_z": self._waypoint("baffle_bot_l")[2],
-            "wp_baffle_tl_r": self._waypoint("baffle_top_l")[0],
-            "wp_baffle_tl_phi": self._waypoint("baffle_top_l")[1],
-            "wp_baffle_tl_z": self._waypoint("baffle_top_l")[2],
-            "wp_baffle_tr_r": self._waypoint("baffle_top_r")[0],
-            "wp_baffle_tr_phi": self._waypoint("baffle_top_r")[1],
-            "wp_baffle_tr_z": self._waypoint("baffle_top_r")[2],
+            "top_r": wp_value("top", 0),
+            "top_phi": wp_value("top", 1),
+            "top_z": wp_value("top", 2),
+            "wp_top_r": wp_value("top", 0),
+            "wp_top_phi": wp_value("top", 1),
+            "wp_top_z": wp_value("top", 2),
+            "bottom_r": wp_value("bottom", 0),
+            "bottom_phi": wp_value("bottom", 1),
+            "bottom_z": wp_value("bottom", 2),
+            "wp_bot_r": wp_value("bottom", 0),
+            "wp_bot_phi": wp_value("bottom", 1),
+            "wp_bot_z": wp_value("bottom", 2),
+            "tweeter_r": wp_value("tweeter", 0),
+            "tweeter_phi": wp_value("tweeter", 1),
+            "tweeter_z": wp_value("tweeter", 2),
+            "wp_tw_r": wp_value("tweeter", 0),
+            "wp_tw_phi": wp_value("tweeter", 1),
+            "wp_tw_z": wp_value("tweeter", 2),
+            "wp_ref_origin_r": wp_value("ref_origin", 0),
+            "wp_ref_origin_phi": wp_value("ref_origin", 1),
+            "wp_ref_origin_z": wp_value("ref_origin", 2),
+            "wp_baffle_bl_r": wp_value("baffle_bot_l", 0),
+            "wp_baffle_bl_phi": wp_value("baffle_bot_l", 1),
+            "wp_baffle_bl_z": wp_value("baffle_bot_l", 2),
+            "wp_baffle_tl_r": wp_value("baffle_top_l", 0),
+            "wp_baffle_tl_phi": wp_value("baffle_top_l", 1),
+            "wp_baffle_tl_z": wp_value("baffle_top_l", 2),
+            "wp_baffle_tr_r": wp_value("baffle_top_r", 0),
+            "wp_baffle_tr_phi": wp_value("baffle_top_r", 1),
+            "wp_baffle_tr_z": wp_value("baffle_top_r", 2),
             "num_points": int(self.num_points.value()),
             "azimuth_density_ratio": self.az_density.value(),
             "cyl_radius_mm": self.cyl_radius.value(),
@@ -904,8 +930,12 @@ class GridGeneratorPane(QWidget):
 
     def _load_existing_project_grid(self) -> None:
         grid_vars = project.get_project_data().get("grid_vars", {})
-        filename = grid_vars.get("output_filename") if isinstance(grid_vars, dict) else None
-        path = project.get_project_dir() / str(filename or project.get_grid_filename())
+        if not isinstance(grid_vars, dict):
+            return
+        filename = grid_vars.get("output_filename")
+        if not filename:
+            return
+        path = project.get_project_dir() / str(filename)
         if path.exists():
             self.output_filename.setText(path.name)
             self._load_csv_path(path)

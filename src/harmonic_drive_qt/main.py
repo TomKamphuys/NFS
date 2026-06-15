@@ -47,7 +47,9 @@ def main() -> int:
     try:
         from harmonic_drive import project
 
+        project.reset_temporary_project_dir()
         project.set_project_dir(Path(tempfile.gettempdir()) / "HALS_working_project", args.config)
+        project.apply_to_config(args.config)
     except Exception:
         logger.exception("Could not initialize project context")
 

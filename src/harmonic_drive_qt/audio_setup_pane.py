@@ -314,10 +314,18 @@ class AudioSetupPane(QWidget):
         row = QHBoxLayout(group)
         row.setSpacing(8)
         current_calibration = project.get_project_data().get("stage5_vars")
-        current_scale = current_calibration.get("frd_db_offset") if isinstance(current_calibration, dict) else None
+        current_scale = current_spl = None
+        if isinstance(current_calibration, dict):
+            current_scale = current_calibration.get("frd_db_offset")
+            current_spl = current_calibration.get("spl_db")
+        self.held_cal_level_dbfs = None
         self.cal_level = QLabel(_format_dbfs(None))
         self.cal_level.setStyleSheet("font-family: Consolas; font-weight: 700; font-size: 15px;")
-        self.spl_reading = self._spin(0.0, 0, 200, "", 1)
+        try:
+            spl_value = 0.0 if current_spl is None else float(current_spl)
+        except (TypeError, ValueError):
+            spl_value = 0.0
+        self.spl_reading = self._spin(spl_value, 0, 200, "", 1)
         self.spl_reading.setSpecialValueText("")
         self.spl_reading.setFixedWidth(112)
         self.spl_offset = self._spin(float(current_scale or 0.0), -200, 200, "", 2)
@@ -359,7 +367,6 @@ class AudioSetupPane(QWidget):
         self.hpf_enable.setChecked(hpf_raw.strip().lower() not in ("", "none", "0"))
         self.hpf_enable.setStyleSheet(toggle_style())
         self.hpf = QLineEdit(_optional_float_text(parser, "sweep", "protect_hpf_hz"))
-        self.hpf.setPlaceholderText("500")
         self.hpf.setFixedWidth(120)
         self.hpf_order = self._spin(_int_value(parser, "sweep", "protect_hpf_order", 1), 1, 8, "", 0)
         self.hpf_order.setFixedWidth(86)
@@ -503,14 +510,15 @@ class AudioSetupPane(QWidget):
                 "border-radius: 4px;"
                 "color: #111827;"
                 "min-height: 24px;"
-                "padding: 4px 24px 4px 8px;"
+                "padding: 4px 8px;"
                 "}"
                 "QComboBox:disabled {"
                 "background: #f1f5f9;"
                 "border-color: #d8dee8;"
                 "color: #94a3b8;"
                 "}"
-                "QComboBox::drop-down { border: 0; width: 22px; }"
+                "QComboBox::drop-down { border: 0; width: 0px; }"
+                "QComboBox::down-arrow { image: none; width: 0px; height: 0px; }"
             )
             return
         widget.setStyleSheet(
@@ -519,21 +527,21 @@ class AudioSetupPane(QWidget):
         )
 
     def _connect_auto_apply_controls(self) -> None:
-        controls = [
+        immediate_controls = [
             self.in_mic_channel, self.in_loop_channel, self.out_speaker_channel, self.out_ref_channel,
             self.fs, self.blocksize, self.wasapi, self.level, self.sweep_dur, self.num_sweeps,
-            self.hpf, self.hpf_enable, self.hpf_order, self.hpf_corr, self.hpf_cap, self.naming,
-            self.align, self.debug, self.pre_sil, self.post_sil, self.taper, self.h2, self.h3,
+            self.hpf_enable, self.hpf_order, self.hpf_corr, self.hpf_cap, self.naming,
+            self.align, self.debug, self.pre_sil, self.post_sil, self.taper,
         ]
-        for control in controls:
+        for control in immediate_controls:
             if isinstance(control, QComboBox):
-                control.currentIndexChanged.connect(self.schedule_auto_apply)
+                control.currentIndexChanged.connect(self.apply_audio_setup_now)
             elif isinstance(control, QCheckBox):
-                control.stateChanged.connect(self.schedule_auto_apply)
+                control.stateChanged.connect(self.apply_audio_setup_now)
             elif isinstance(control, QDoubleSpinBox):
-                control.valueChanged.connect(self.schedule_auto_apply)
-            elif isinstance(control, QLineEdit):
-                control.textChanged.connect(self.schedule_auto_apply)
+                control.valueChanged.connect(self.apply_audio_setup_now)
+        for control in (self.hpf, self.h2, self.h3):
+            control.textChanged.connect(self.schedule_auto_apply)
 
     def _combo_data(self, combo: QComboBox) -> Any:
         return combo.currentData()
@@ -580,7 +588,8 @@ class AudioSetupPane(QWidget):
         combo.setMinimumContentsLength(max(12, len(longest)))
         combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
         combo.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-        combo.setFixedWidth(combo.sizeHint().width())
+        text_width = combo.fontMetrics().horizontalAdvance(longest)
+        combo.setFixedWidth(max(combo.sizeHint().width(), text_width + 24))
 
     def selected_device_id(self, role: str) -> int | None:
         value = self._combo_data(self.in_device if role == "in" else self.out_device)
@@ -632,12 +641,12 @@ class AudioSetupPane(QWidget):
         self._populate_channels("in")
         self._populate_channels("out")
         self._populate_sample_rates(self._combo_data(self.fs))
-        self.schedule_auto_apply()
+        self.apply_audio_setup_now()
 
     def on_device_change(self, role: str) -> None:
         self._populate_channels(role)
         self._populate_sample_rates(self._combo_data(self.fs))
-        self.schedule_auto_apply()
+        self.apply_audio_setup_now()
 
     def update_hpf_field_state(self) -> None:
         enabled = self.hpf_enable.isChecked()
@@ -661,6 +670,17 @@ class AudioSetupPane(QWidget):
     def schedule_auto_apply(self) -> None:
         if self.auto_apply_enabled:
             self.auto_apply_timer.start()
+
+    def apply_audio_setup_now(self, *args) -> None:
+        if not self.auto_apply_enabled:
+            return
+        self.auto_apply_timer.stop()
+        self.save_audio_setup(notify=False)
+
+    def flush_pending_changes(self) -> None:
+        if self.auto_apply_timer.isActive():
+            self.auto_apply_timer.stop()
+            self.save_audio_setup(notify=False)
 
     def _device_metadata(self, role: str) -> tuple[str, str]:
         dev_id = self.selected_device_id(role)
@@ -704,7 +724,6 @@ class AudioSetupPane(QWidget):
             save_config_values(self.config_file, values, self.backend.load)
             fresh = _read_config(self.config_file)
             project.update_audio_setup(_section_dict(fresh, "audio"), _section_dict(fresh, "sweep"))
-            self.update_calibration_from_offset()
             self.saved.emit()
             if self.show_live_capture is not None:
                 self.show_live_capture()
@@ -759,10 +778,13 @@ class AudioSetupPane(QWidget):
             QMessageBox.warning(self, "SPL Calibration", "Play the sine tone until the mic level readout appears.")
             return
         self.spl_offset.setValue(self.spl_reading.value() - self.held_cal_level_dbfs)
-        self.update_calibration_from_offset()
 
     def update_calibration_from_offset(self) -> bool:
-        calibration = project.build_spl_calibration(None, None, self.spl_offset.value())
+        calibration = project.build_spl_calibration(
+            self.spl_reading.value() if self.held_cal_level_dbfs is not None else None,
+            self.held_cal_level_dbfs,
+            self.spl_offset.value(),
+        )
         if calibration is None:
             return False
         project.update_spl_calibration(calibration)
@@ -772,6 +794,20 @@ class AudioSetupPane(QWidget):
         if not self.update_calibration_from_offset():
             QMessageBox.warning(self, "SPL Calibration", "Enter or calculate an SPL offset first.")
             return
+        self.flush_pending_changes()
+        project_path = project.get_project_json_path()
+        if not project_path.exists():
+            result = QMessageBox.question(
+                self,
+                "Create Project Save File",
+                f"No project save file exists for '{project.get_project_name()}'.\n\n"
+                f"Saving calibration will create:\n{project_path}\n\n"
+                "This saves the current sweep and grid generator settings as well. Continue?",
+                QMessageBox.StandardButton.Cancel | QMessageBox.StandardButton.Save,
+                QMessageBox.StandardButton.Cancel,
+            )
+            if result != QMessageBox.StandardButton.Save:
+                return
         project.save_project()
         QMessageBox.information(self, "SPL Calibration", "SPL calibration saved.")
 
