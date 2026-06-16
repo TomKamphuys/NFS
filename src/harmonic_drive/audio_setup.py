@@ -270,7 +270,11 @@ def build_audio_setup_pane(config_file: str, show_live_capture=None):
             if isinstance(current_calibration, dict)
             else None
         )
-        current_spl = None
+        current_spl = (
+            current_calibration.get("spl_db")
+            if isinstance(current_calibration, dict)
+            else None
+        )
         with ui.row().classes("w-full items-center gap-2"):
             freq_input = ui.number("Frequency (Hz)", value=1000, format="%d").classes("w-36").props("outlined dense")
             dur_input = ui.number("Duration (s)", value=None, format="%.1f").classes("w-36").props('outlined dense placeholder="Optional"')
@@ -364,7 +368,7 @@ def build_audio_setup_pane(config_file: str, show_live_capture=None):
                 hpf = ui.input(
                     "Protection HPF Hz",
                     value=_optional_float_text(parser, "sweep", "protect_hpf_hz"),
-                ).classes("w-full").props('outlined dense placeholder="500Hz"')
+                ).classes("w-full").props("outlined dense")
                 hpf_order = ui.number(
                     "HPF Order",
                     value=_int_value(parser, "sweep", "protect_hpf_order", 1),
@@ -445,7 +449,6 @@ def build_audio_setup_pane(config_file: str, show_live_capture=None):
                 _section_dict(fresh, "audio"),
                 _section_dict(fresh, "sweep"),
             )
-            update_calibration_from_offset()
             if notify:
                 ui.notify("Audio setup saved", type="positive")
             if show_live_capture is not None:
@@ -457,6 +460,36 @@ def build_audio_setup_pane(config_file: str, show_live_capture=None):
                 return
             if not await control.ensure_session_folder_selected():
                 return
+            project_path = project.get_project_json_path()
+            if not project_path.exists():
+                decision = asyncio.Future()
+                with ui.dialog() as dialog, ui.card().classes("w-[460px] max-w-full"):
+                    ui.label("Create project save file?").classes("text-lg font-bold")
+                    ui.label(
+                        f"No project save file exists for '{project.get_project_name()}'. "
+                        "Saving calibration will create one, saving the current sweep "
+                        "and grid generator settings as well."
+                    ).classes("text-sm text-gray-700")
+
+                    with ui.row().classes("w-full justify-end gap-2"):
+                        ui.button(
+                            "Cancel",
+                            on_click=lambda: (
+                                decision.set_result(False),
+                                dialog.close(),
+                            ),
+                        ).props("flat")
+                        ui.button(
+                            "Save",
+                            icon="save",
+                            on_click=lambda: (
+                                decision.set_result(True),
+                                dialog.close(),
+                            ),
+                        ).props("color=primary")
+                dialog.open()
+                if not await decision:
+                    return
             project.save_project()
             ui.notify("SPL calibration saved", type="positive")
 

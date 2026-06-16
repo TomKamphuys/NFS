@@ -438,7 +438,9 @@ class MainWindow(QMainWindow):
             return
         path = Path(path_text).expanduser()
         try:
-            project.set_project_dir(path, self.config_file)
+            resolved_path = path.resolve()
+            if resolved_path != project.get_project_dir().resolve():
+                project.set_project_dir(resolved_path, self.config_file)
             project.set_project_name(self.project_name.text())
             project.apply_to_config(self.config_file)
             project.ensure_output_dirs()

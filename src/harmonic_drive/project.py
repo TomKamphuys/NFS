@@ -15,6 +15,8 @@ LEGACY_PROJECT_FILENAME = "project.json"
 APP_SECTION = "app"
 DEFAULT_PROJECT_NAME = "HALS_Project"
 TEMP_PROJECT_DIR = Path(tempfile.gettempdir()) / "HALS_working_project"
+GLOBAL_SWEEP_CONFIG_KEYS = {"sweep_level_dbfs"}
+DEFAULT_CONFIG_FILENAME = "config_default.ini"
 
 _project_dir = TEMP_PROJECT_DIR
 _project_data: Dict[str, Any] = {}
@@ -41,6 +43,17 @@ def is_temporary_project_dir() -> bool:
         return _project_dir.resolve() == TEMP_PROJECT_DIR.resolve()
     except OSError:
         return _project_dir == TEMP_PROJECT_DIR
+
+
+def reset_temporary_project_dir() -> None:
+    """Clear volatile startup project state from the app's working temp folder."""
+    target = TEMP_PROJECT_DIR.expanduser().resolve()
+    expected = (Path(tempfile.gettempdir()) / "HALS_working_project").resolve()
+    if target != expected:
+        raise RuntimeError(f"Refusing to reset unexpected temp project path: {target}")
+    if target.exists():
+        shutil.rmtree(target)
+    target.mkdir(parents=True, exist_ok=True)
 
 
 def get_project_json_path() -> Path:
@@ -129,7 +142,7 @@ def set_project_dir(path: str | Path, config_file: str = "config.ini") -> Dict[s
         _project_data = {"project_name": default_name}
 
     if not loaded_existing:
-        sync_from_config(config_file, save=False)
+        sync_defaults_from_config(config_file, save=False)
     _notify_project_changed()
     return _project_data
 
@@ -184,12 +197,34 @@ def ensure_output_dirs() -> None:
 
 
 def sync_from_config(config_file: str, save: bool = True) -> None:
+    _sync_sweep_from_config(config_file, save=save)
+
+
+def sync_defaults_from_config(config_file: str, save: bool = True) -> None:
+    _sync_sweep_from_config(get_default_config_path(config_file), save=save)
+
+
+def get_default_config_path(config_file: str | Path = "config.ini") -> Path:
+    config_path = Path(config_file)
+    candidates = [
+        config_path.with_name(DEFAULT_CONFIG_FILENAME),
+        Path(DEFAULT_CONFIG_FILENAME),
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return config_path
+
+
+def _sync_sweep_from_config(config_file: str | Path, save: bool = True) -> None:
     parser = configparser.ConfigParser(inline_comment_prefixes=("#", ";"))
     parser.read(config_file)
 
     for section in ("sweep",):
         if parser.has_section(section):
             settings = dict(parser.items(section))
+            if section == "sweep":
+                settings = _project_sweep_settings(settings)
             _project_data[f"{section}_settings"] = settings
 
     if save:
@@ -242,7 +277,7 @@ def build_spl_calibration(
     reference_input_rms_dbfs: Any,
     spl_offset_db: Any = None,
 ) -> Optional[Dict[str, Optional[float]]]:
-    if spl_db is None and spl_offset_db is None:
+    if spl_db is None and reference_input_rms_dbfs is None and spl_offset_db is None:
         return None
     spl_db_float = None if spl_db is None else float(spl_db)
     reference_float = (
@@ -261,7 +296,11 @@ def build_spl_calibration(
     )
     if offset_float is not None:
         offset_float = _truncate_float(offset_float, 2)
-    return {"frd_db_offset": offset_float}
+    return {
+        "frd_db_offset": offset_float,
+        "spl_db": spl_db_float,
+        "reference_input_rms_dbfs": reference_float,
+    }
 
 
 def update_audio_setup(
@@ -271,9 +310,17 @@ def update_audio_setup(
 ) -> None:
     # Audio hardware is intentionally global via config.ini. Only sweep/project
     # measurement settings are captured in a saved project snapshot.
-    _project_data["sweep_settings"] = sweep_settings
+    _project_data["sweep_settings"] = _project_sweep_settings(sweep_settings)
     if spl_calibration is not None:
         update_spl_calibration(spl_calibration)
+
+
+def _project_sweep_settings(sweep_settings: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        key: value
+        for key, value in sweep_settings.items()
+        if key not in GLOBAL_SWEEP_CONFIG_KEYS
+    }
 
 
 def update_spl_calibration(spl_calibration: Dict[str, Any]) -> None:

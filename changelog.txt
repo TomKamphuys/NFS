@@ -1,4 +1,18 @@
 --------
+16/06/26
+--------
+Bug Fix: Sweep settings not saved correctly to _project.json. A shared file was
+incorrectly reverted during previous git commit. File re-patched and commited.
+
+Files touched:
+src/harmonic_drive/project.py
+src/harmonic_drive/audio_setup.py
+src/harmonic_drive_qt/main.py
+src/harmonic_drive_qt/main_window.py
+tests/test_project.py
+tests/test_qt_main_window_project.py
+
+--------
 15/06/26
 --------
 
