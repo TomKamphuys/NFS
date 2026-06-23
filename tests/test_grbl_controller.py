@@ -3,6 +3,7 @@ from unittest.mock import Mock, patch
 from nfs.grbl_controller import (
     EventHandler,
     GrblControllerMock,
+    GrblControllerMockSimulatedDRO,
     ESP32Duino,
     GrblMachineState,
     CylindricalPosition,
@@ -280,13 +281,58 @@ def test_grbl_controller_factory_mock(mock_config_class):
     assert controller is controller2
 
 
+def test_grbl_controller_factory_rebuilds_when_type_changes(tmp_path):
+    config_file = tmp_path / "config.ini"
+    config_file.write_text(
+        "[grbl]\n"
+        "type = Mock\n",
+        encoding="utf-8",
+    )
+    GrblControllerFactory.reset(shutdown=False)
+
+    controller = GrblControllerFactory.create("grbl", str(config_file))
+    assert isinstance(controller, GrblControllerMock)
+
+    config_file.write_text(
+        "[grbl]\n"
+        "type = MockSimulatedDRO\n"
+        "mock_linear_speed_mm_s = 123.0\n"
+        "mock_angular_speed_deg_s = 45.0\n"
+        "mock_status_hz = 7.0\n",
+        encoding="utf-8",
+    )
+
+    controller2 = GrblControllerFactory.create("grbl", str(config_file))
+
+    assert isinstance(controller2, GrblControllerMockSimulatedDRO)
+    assert controller2 is not controller
+
+
+def test_grbl_controller_factory_reuses_when_signature_matches(tmp_path):
+    config_file = tmp_path / "config.ini"
+    config_file.write_text(
+        "[grbl]\n"
+        "type = MockSimulatedDRO\n"
+        "mock_linear_speed_mm_s = 123.0\n"
+        "mock_angular_speed_deg_s = 45.0\n"
+        "mock_status_hz = 7.0\n",
+        encoding="utf-8",
+    )
+    GrblControllerFactory.reset(shutdown=False)
+
+    controller = GrblControllerFactory.create("grbl", str(config_file))
+    controller2 = GrblControllerFactory.create("grbl", str(config_file))
+
+    assert controller2 is controller
+
+
 @patch('nfs.grbl_controller.GrblStreamer')
 @patch('nfs.grbl_controller.configparser.ConfigParser')
 @patch('nfs.grbl_controller.time.sleep')  # speed up test
 def test_grbl_controller_factory_arduino(mock_sleep, mock_config_class, mock_streamer_class):
     mock_config = mock_config_class.return_value
 
-    def mock_get(section, option):
+    def mock_get(section, option, **_kwargs):
         if option == 'type':
             return 'Arduino'
         if option == 'port':

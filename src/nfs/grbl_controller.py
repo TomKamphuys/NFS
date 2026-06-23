@@ -560,6 +560,45 @@ class GrblControllerFactory:
     assist in configuring specific GRBL controller settings like axes configurations.
     """
     _instance: Optional[IGrblController] = None
+    _instance_signature: Optional[tuple] = None
+
+    @staticmethod
+    def reset(shutdown: bool = True) -> None:
+        if shutdown and GrblControllerFactory._instance is not None:
+            try:
+                GrblControllerFactory._instance.shutdown()
+            except Exception as exc:
+                logger.warning(f"Failed to shut down cached GRBL controller: {exc}")
+        GrblControllerFactory._instance = None
+        GrblControllerFactory._instance_signature = None
+
+    @staticmethod
+    def _signature(
+        config_parser: configparser.ConfigParser,
+        section: str,
+        type_to_build: str,
+    ) -> tuple:
+        if type_to_build == "Arduino":
+            port = None
+            if sys.platform.startswith("win32"):
+                port = config_parser.get("windows", "port", fallback="")
+            elif sys.platform.startswith("linux"):
+                port = config_parser.get("linux", "port", fallback="")
+            return (
+                section,
+                type_to_build,
+                port,
+                config_parser.getint(section, "baudrate", fallback=115200),
+            )
+        if type_to_build in {"MockSimulatedDRO", "MockWithDRO"}:
+            return (
+                section,
+                type_to_build,
+                config_parser.getfloat(section, "mock_linear_speed_mm_s", fallback=500.0),
+                config_parser.getfloat(section, "mock_angular_speed_deg_s", fallback=180.0),
+                config_parser.getfloat(section, "mock_status_hz", fallback=5.0),
+            )
+        return (section, type_to_build)
 
     @staticmethod
     def create(section: str, config_file: str) -> IGrblController:
@@ -570,14 +609,24 @@ class GrblControllerFactory:
         :param config_file: Path to the configuration file.
         :return: An instance of IGrblController.
         """
-        if GrblControllerFactory._instance is not None:
-            logger.info("Using existing GRBL controller instance.")
-            return GrblControllerFactory._instance
-
         config_parser = configparser.ConfigParser(inline_comment_prefixes="#")
         config_parser.read(config_file)
 
         type_to_build = config_parser.get(section, 'type')
+        signature = GrblControllerFactory._signature(
+            config_parser,
+            section,
+            type_to_build,
+        )
+
+        if GrblControllerFactory._instance is not None:
+            if GrblControllerFactory._instance_signature == signature:
+                logger.info("Using existing GRBL controller instance.")
+                return GrblControllerFactory._instance
+            logger.info(
+                "GRBL controller configuration changed; rebuilding controller."
+            )
+            GrblControllerFactory.reset(shutdown=True)
 
         if type_to_build == 'Arduino':
             config_parser = configparser.ConfigParser(inline_comment_prefixes="#")
@@ -620,10 +669,12 @@ class GrblControllerFactory:
                     logger.warning(f"Failed to close GRBL connection after probe failure: {close_exc}")
                 raise
             GrblControllerFactory._instance = instance
+            GrblControllerFactory._instance_signature = signature
             return instance
         elif type_to_build == 'Mock':
             instance = GrblControllerMock()
             GrblControllerFactory._instance = instance
+            GrblControllerFactory._instance_signature = signature
             return instance
         elif type_to_build in {'MockSimulatedDRO', 'MockWithDRO'}:
             instance = GrblControllerMockSimulatedDRO(
@@ -644,6 +695,7 @@ class GrblControllerFactory:
                 ),
             )
             GrblControllerFactory._instance = instance
+            GrblControllerFactory._instance_signature = signature
             return instance
         else:
             raise Exception(f'Unknown controller type: {type_to_build}')

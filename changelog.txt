@@ -1,4 +1,14 @@
 --------
+17/06/26
+--------
+Bug Fix: Changing the GRBL streamer backend in Settings now takes effect on
+config reload. Switching Mock/Arduino no longer requires restarting the app.
+
+Files touched:
+src/nfs/grbl_controller.py
+tests/test_grbl_controller.py
+
+--------
 16/06/26
 --------
 Bug Fix: Sweep settings not saved correctly to _project.json. A shared file was
