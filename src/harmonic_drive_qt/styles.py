@@ -18,6 +18,8 @@ def app_stylesheet() -> str:
     image_path = (Path.cwd() / "images" / "bar_bg2_qt_dulled.png").as_posix()
     toggle_off = (Path(__file__).resolve().parent / "icons" / "toggle-off.svg").as_posix()
     toggle_on = (Path(__file__).resolve().parent / "icons" / "toggle-on.svg").as_posix()
+    disclosure_closed = (Path(__file__).resolve().parent / "icons" / "disclosure-closed.svg").as_posix()
+    disclosure_open = (Path(__file__).resolve().parent / "icons" / "disclosure-open.svg").as_posix()
     return f"""
     QWidget {{
         background: #ffffff;
@@ -226,13 +228,13 @@ def app_stylesheet() -> str:
         image: url("{toggle_on}");
     }}
     QGroupBox::indicator {{
-        width: 44px;
-        height: 24px;
-        image: url("{toggle_off}");
+        width: 12px;
+        height: 12px;
+        image: url("{disclosure_closed}");
         border: none;
     }}
     QGroupBox::indicator:checked {{
-        image: url("{toggle_on}");
+        image: url("{disclosure_open}");
     }}
     QSplitter::handle:horizontal {{
         background: #eef6ff;
@@ -260,11 +262,13 @@ def app_stylesheet() -> str:
 def toggle_style() -> str:
     toggle_off = (Path(__file__).resolve().parent / "icons" / "toggle-off.svg").as_posix()
     toggle_on = (Path(__file__).resolve().parent / "icons" / "toggle-on.svg").as_posix()
+    toggle_disabled_on = (Path(__file__).resolve().parent / "icons" / "toggle-disabled-on.svg").as_posix()
     return (
         "QCheckBox { border: none; background: transparent; spacing: 8px; }"
         "QCheckBox:disabled { color: #94a3b8; }"
         f"QCheckBox::indicator {{ width: 44px; height: 24px; image: url(\"{toggle_off}\"); border: none; }}"
         f"QCheckBox::indicator:checked {{ image: url(\"{toggle_on}\"); }}"
+        f"QCheckBox::indicator:checked:disabled {{ image: url(\"{toggle_disabled_on}\"); }}"
     )
 
 

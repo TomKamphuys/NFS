@@ -1,4 +1,33 @@
 --------
+23/06/26
+--------
+Small UI fixes and usability updates:
+
+Fixed the Home button sometimes remaining orange after successful homing due
+to a transient/stale GRBL alarm state.
+Disabled HPF inverse-correction controls now use a muted switch.
+Added and normalised units for motion and MockDRO settings.
+MockSimulatedDRO speed and update-rate fields now appear only when that GRBL
+backend is selected.
+Replaced advanced-settings switches with standard disclosure
+arrows and gave Grid Generator the same expandable heading style as Audio
+Setup.
+
+Files touched:
+src/harmonic_drive/config_editor.py
+src/harmonic_drive/control.py
+src/harmonic_drive_qt/control_pane.py
+src/harmonic_drive_qt/grid_pane.py
+src/harmonic_drive_qt/settings_dialog.py
+src/harmonic_drive_qt/styles.py
+src/harmonic_drive_qt/icons/disclosure-closed.svg
+src/harmonic_drive_qt/icons/disclosure-open.svg
+src/harmonic_drive_qt/icons/toggle-disabled-on.svg
+tests/test_qt_audio_setup_pane.py
+tests/test_qt_grid_pane.py
+tests/test_qt_settings_dialog.py
+
+--------
 17/06/26
 --------
 Bug Fix: Changing the GRBL streamer backend in Settings now takes effect on

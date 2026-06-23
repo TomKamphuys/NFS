@@ -1408,10 +1408,11 @@ def build_control_pane(log_dialog):
         async def _wait_for_home_settle(timeout_s: float = 5.0) -> bool:
             deadline = time.time() + timeout_s
             while time.time() < deadline:
-                if _scanner_has_alarm():
-                    return False
                 try:
-                    if get_scanner().get_position() is not None:
+                    # GRBL can briefly continue reporting the pre-home ALARM
+                    # state after $H has completed. Let that stale status
+                    # settle instead of immediately repainting HOME orange.
+                    if not _scanner_has_alarm() and get_scanner().get_position() is not None:
                         return True
                 except Exception:
                     pass

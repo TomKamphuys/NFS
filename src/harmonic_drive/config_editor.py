@@ -49,6 +49,9 @@ DISPLAY_LABELS = {
     "show_height_offset_controls": "Show height offset controls",
     "default_project_dir": "Default session folder",
     "cal_tool_height": "Calibration tool height (mm)",
+    "safe_radius": "Safe radius (mm)",
+    "homing_gap": "Homing gap (degrees)",
+    "pole_gap": "Pole gap (mm)",
     "use_alternative_motion_controls": "Use alternative motion controls",
 }
 
@@ -627,6 +630,8 @@ def _build_scanner_panel(parser, static_inputs: Dict[Tuple[str, str], object]) -
 
     ui.separator()
     ui.label("GRBL connection").classes("text-base font-semibold")
+    grbl_type_input = None
+    mock_dro_inputs = []
     for section, key, label in (
         ("grbl_streamer", "type", "GRBL streamer type"),
         ("grbl_streamer", "baudrate", "Baudrate"),
@@ -652,6 +657,24 @@ def _build_scanner_panel(parser, static_inputs: Dict[Tuple[str, str], object]) -
         el = _build_input(label, kind, raw, options)
         el.tooltip(tooltip)
         static_inputs[(section, key)] = el
+        if section == "grbl_streamer" and key == "type":
+            grbl_type_input = el
+        elif key in {
+            "mock_linear_speed_mm_s",
+            "mock_angular_speed_deg_s",
+            "mock_status_hz",
+        }:
+            mock_dro_inputs.append(el)
+
+    def update_mock_dro_visibility() -> None:
+        streamer_type = getattr(grbl_type_input, "value", "")
+        visible = streamer_type in {"MockSimulatedDRO", "MockWithDRO"}
+        for el in mock_dro_inputs:
+            el.set_visibility(visible)
+
+    if grbl_type_input is not None:
+        grbl_type_input.on("update:model-value", lambda _e: update_mock_dro_visibility())
+        update_mock_dro_visibility()
 
 
 def _prompt_for_audio_device_relink(

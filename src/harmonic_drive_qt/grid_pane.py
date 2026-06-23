@@ -241,9 +241,7 @@ class GridGeneratorPane(QWidget):
         form_block.addLayout(form_row)
         form_block.addWidget(advanced_settings)
         gen_layout.addLayout(form_block)
-        
-        gen_layout.addSpacing(16)
-        
+
         generate = QPushButton("GENERATE & PLAN PATH")
         primary_button(generate)
         generate.setMinimumHeight(38)
@@ -399,20 +397,18 @@ class GridGeneratorPane(QWidget):
         return w
 
     def _build_settings_group(self) -> QWidget:
-        w = QWidget()
-        w.setStyleSheet("border: none;")
+        w = QGroupBox("Advanced grid settings")
+        self.advanced_settings_group = w
+        w.setCheckable(True)
+        w.setChecked(False)
         layout = QVBoxLayout(w)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
-        
-        btn = QPushButton("Advanced Settings")
-        btn.setStyleSheet("text-align: left; font-weight: bold; background: #f3f4f6; color: #111827; padding: 8px; border-radius: 4px; border: 1px solid #e5e7eb;")
-        layout.addWidget(btn)
-        
+
         self.settings_content = QWidget()
         self.settings_content.setVisible(False)
         self.settings_content.setStyleSheet("background: #fbfdff; border: 1px solid #e2e8f0; border-top: none; border-radius: 0 0 4px 4px;")
-        btn.clicked.connect(lambda: self.settings_content.setVisible(not self.settings_content.isVisible()))
+        w.toggled.connect(self.settings_content.setVisible)
         
         grid = QGridLayout(self.settings_content)
         grid.setContentsMargins(12, 12, 12, 12)

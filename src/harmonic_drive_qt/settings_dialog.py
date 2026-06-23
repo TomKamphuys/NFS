@@ -147,12 +147,14 @@ class SettingsDialog(QDialog):
             lbl2.setStyleSheet("font-weight: bold; font-size: 14px; margin-top: 16px;")
             layout.addWidget(lbl2)
             
+            grbl_type_input = None
+            mock_dro_rows = []
             for grbl_sec, key, label in (
                 ("grbl_streamer", "type", "Grbl Streamer Type"),
                 ("grbl_streamer", "baudrate", "Baudrate"),
-                ("grbl_streamer", "mock_linear_speed_mm_s", "Mock Linear Speed Mm/S"),
-                ("grbl_streamer", "mock_angular_speed_deg_s", "Mock Angular Speed Deg/S"),
-                ("grbl_streamer", "mock_status_hz", "Mock Dro Update Hz"),
+                ("grbl_streamer", "mock_linear_speed_mm_s", "Mock linear speed (mm/s)"),
+                ("grbl_streamer", "mock_angular_speed_deg_s", "Mock angular speed (degrees/s)"),
+                ("grbl_streamer", "mock_status_hz", "Mock DRO update rate (Hz)"),
                 ("windows", "port", "Com Port"),
                 ("debug", "serial_comms", "Log serial comms on startup"),
             ):
@@ -162,7 +164,26 @@ class SettingsDialog(QDialog):
                 options = entry[3]
                 if grbl_sec == "windows" and key == "port":
                     options = list(_serial_port_options(raw).keys())
-                self._add_field(layout, grbl_sec, key, label, entry[1], raw, options)
+                field, row = self._add_field(
+                    layout, grbl_sec, key, label, entry[1], raw, options
+                )
+                if grbl_sec == "grbl_streamer" and key == "type":
+                    grbl_type_input = field
+                elif key in {
+                    "mock_linear_speed_mm_s",
+                    "mock_angular_speed_deg_s",
+                    "mock_status_hz",
+                }:
+                    mock_dro_rows.append(row)
+
+            def update_mock_dro_visibility(streamer_type: str) -> None:
+                visible = streamer_type in {"MockSimulatedDRO", "MockWithDRO"}
+                for row in mock_dro_rows:
+                    row.setVisible(visible)
+
+            if isinstance(grbl_type_input, QComboBox):
+                grbl_type_input.currentTextChanged.connect(update_mock_dro_visibility)
+                update_mock_dro_visibility(grbl_type_input.currentText())
         elif section == "motion_manager":
             lbl = QLabel("Motion Manager")
             lbl.setStyleSheet("font-weight: bold; font-size: 14px;")

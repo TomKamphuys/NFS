@@ -47,6 +47,14 @@ def test_grid_pane_starts_with_blank_waypoints_and_no_default_grid_load(tmp_path
         assert [field.text() for field in pane.waypoint_inputs["tweeter"]] == ["", "", ""]
         assert pane._waypoint("top") is None
         assert loaded_paths == []
+        assert pane.advanced_settings_group.title() == "Advanced grid settings"
+        assert pane.advanced_settings_group.isCheckable()
+        assert not pane.advanced_settings_group.isChecked()
+        assert pane.settings_content.isHidden()
+        pane.advanced_settings_group.setChecked(True)
+        assert not pane.settings_content.isHidden()
+        pane.advanced_settings_group.setChecked(False)
+        assert pane.settings_content.isHidden()
     finally:
         pane.shutdown()
         pane.sync_timer.stop()

@@ -7,10 +7,53 @@ pytest.importorskip("PySide6")
 
 from harmonic_drive_qt.qt_compat import QApplication, QComboBox, QLineEdit
 from harmonic_drive_qt.settings_dialog import SettingsDialog
+from harmonic_drive.config_editor import DISPLAY_LABELS
 
 
 def _app():
     return QApplication.instance() or QApplication([])
+
+
+def test_motion_setting_labels_include_normalized_units():
+    assert DISPLAY_LABELS["safe_radius"] == "Safe radius (mm)"
+    assert DISPLAY_LABELS["homing_gap"] == "Homing gap (degrees)"
+    assert DISPLAY_LABELS["pole_gap"] == "Pole gap (mm)"
+
+
+def test_mock_dro_fields_follow_selected_grbl_streamer_type(tmp_path):
+    _app()
+    config_file = tmp_path / "config.ini"
+    config_file.write_text(
+        "[scanner]\n"
+        "feed_rate = 1000\n"
+        "cal_tool_height = 0\n"
+        "[grbl_streamer]\n"
+        "type = Arduino\n"
+        "baudrate = 115200\n"
+        "mock_linear_speed_mm_s = 300\n"
+        "mock_angular_speed_deg_s = 15\n"
+        "mock_status_hz = 5\n",
+        encoding="utf-8",
+    )
+
+    dialog = SettingsDialog(str(config_file), lambda: None)
+    streamer_type, _kind = dialog.inputs[("grbl_streamer", "type")]
+    mock_fields = [
+        dialog.inputs[("grbl_streamer", key)][0]
+        for key in (
+            "mock_linear_speed_mm_s",
+            "mock_angular_speed_deg_s",
+            "mock_status_hz",
+        )
+    ]
+
+    assert all(field.parentWidget().isHidden() for field in mock_fields)
+
+    streamer_type.setCurrentText("MockSimulatedDRO")
+    assert all(not field.parentWidget().isHidden() for field in mock_fields)
+
+    streamer_type.setCurrentText("Mock")
+    assert all(field.parentWidget().isHidden() for field in mock_fields)
 
 
 def test_settings_dialog_saves_cylindrical_motion_manager_fields(tmp_path):

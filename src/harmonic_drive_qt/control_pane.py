@@ -61,6 +61,7 @@ class ControlPane(QWidget):
         self.pool = QThreadPool.globalInstance()
         self.sine_running = False
         self.home_ok = False
+        self._homing_in_progress = False
         self.grid_readout_points: list[dict[str, float]] = []
         self.progress_event.connect(self._apply_progress_event)
         self._build_ui()
@@ -446,15 +447,18 @@ class ControlPane(QWidget):
         if method == "set_as_zero":
             self._run_backend(self.backend.set_as_zero)
         elif method == "home":
+            self._homing_in_progress = True
+            self._set_home_ok(False)
             worker = Worker(self._home_blocking)
-            worker.signals.finished.connect(lambda: self._set_home_ok(True))
-            worker.signals.failed.connect(lambda message: QMessageBox.warning(self, "Backend Error", message))
+            worker.signals.finished.connect(self._home_finished)
+            worker.signals.failed.connect(self._home_failed)
             self.pool.start(worker)
         elif method == "rehome":
+            self._homing_in_progress = True
             self._set_home_ok(False)
             worker = Worker(self._rehome_blocking)
-            worker.signals.finished.connect(lambda: self._set_home_ok(True))
-            worker.signals.failed.connect(lambda message: QMessageBox.warning(self, "Backend Error", message))
+            worker.signals.finished.connect(self._home_finished)
+            worker.signals.failed.connect(self._home_failed)
             self.pool.start(worker)
         else:
             if method == "softreset":
@@ -464,6 +468,15 @@ class ControlPane(QWidget):
     def _set_home_ok(self, ok: bool) -> None:
         self.home_ok = bool(ok)
         self._set_home_button_state(self.home_ok)
+
+    def _home_finished(self) -> None:
+        self._homing_in_progress = False
+        self._set_home_ok(True)
+
+    def _home_failed(self, message: str) -> None:
+        self._homing_in_progress = False
+        self._set_home_ok(False)
+        QMessageBox.warning(self, "Backend Error", message)
 
     def _rehome_blocking(self) -> None:
         self.backend.scanner_command("softreset")
@@ -607,7 +620,7 @@ class ControlPane(QWidget):
         state = self.backend.get_state()
         machine_pos = self.backend.get_machine_position() if self.mcs_labels else None
         state_name = str(state).split(".")[-1] if state is not None else ""
-        if state_name.upper() == "ALARM":
+        if state_name.upper() == "ALARM" and not self._homing_in_progress:
             self._set_home_ok(False)
         self._set_position_labels(self.wcs_labels, pos, state)
         if self.mcs_labels:

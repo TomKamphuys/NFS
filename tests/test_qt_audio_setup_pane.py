@@ -10,6 +10,7 @@ from harmonic_drive_qt.audio_setup_pane import AudioSetupPane
 from harmonic_drive import project
 from harmonic_drive_qt.qt_compat import QApplication, QMessageBox, QSizePolicy
 from harmonic_drive_qt.styles import app_stylesheet
+from harmonic_drive_qt.styles import toggle_style
 
 
 def _app():
@@ -117,6 +118,16 @@ def test_app_base_font_uses_points_for_combo_popup_compatibility():
     assert "QWidget {" in stylesheet
     assert "font-size: 10pt;" in stylesheet
     assert "font-size: 13px;" not in stylesheet
+    assert "disclosure-closed.svg" in stylesheet
+    assert "disclosure-open.svg" in stylesheet
+    assert 'QGroupBox::indicator:checked' in stylesheet
+
+
+def test_checked_disabled_toggle_uses_muted_indicator():
+    stylesheet = toggle_style()
+
+    assert "QCheckBox::indicator:checked:disabled" in stylesheet
+    assert "toggle-disabled-on.svg" in stylesheet
 
 
 def test_audio_pane_updates_config_and_project_memory_without_project_json(tmp_path, monkeypatch):
