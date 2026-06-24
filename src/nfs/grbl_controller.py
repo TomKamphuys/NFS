@@ -589,6 +589,11 @@ class GrblControllerFactory:
                 type_to_build,
                 port,
                 config_parser.getint(section, "baudrate", fallback=115200),
+                config_parser.getboolean(
+                    "scanner",
+                    "verify_controller_on_connect",
+                    fallback=True,
+                ),
             )
         if type_to_build in {"MockSimulatedDRO", "MockWithDRO"}:
             return (
@@ -644,6 +649,11 @@ class GrblControllerFactory:
                 port = config_parser.get('linux', 'port')
 
             baudrate = config_parser.getint(section, 'baudrate')
+            verify_controller = config_parser.getboolean(
+                'scanner',
+                'verify_controller_on_connect',
+                fallback=True,
+            )
 
             grbl_streamer.setup_logging()
             if debug_serial:
@@ -661,7 +671,11 @@ class GrblControllerFactory:
 
             connection = GrblStreamerClientConnection(grbl_streamer, event_handler, debug_serial=debug_serial)
             try:
-                instance = ESP32Duino(connection, debug_serial=debug_serial)
+                instance = ESP32Duino(
+                    connection,
+                    debug_serial=debug_serial,
+                    verify_on_connect=verify_controller,
+                )
             except Exception:
                 try:
                     connection.close()
@@ -833,7 +847,12 @@ class ESP32Duino(IGrblController):
     UNLOCK_COMMAND = "$X"  # Command to unlock and clear any alarm
     PROBE_ACK_TIMEOUT_S = 3.0
 
-    def __init__(self, connection: GrblStreamerClientConnection, debug_serial: bool = False) -> None:
+    def __init__(
+        self,
+        connection: GrblStreamerClientConnection,
+        debug_serial: bool = False,
+        verify_on_connect: bool = True,
+    ) -> None:
         """
         Initialize the ESP32Duino controller.
 
@@ -841,7 +860,13 @@ class ESP32Duino(IGrblController):
         """
         self._connection = connection
         self._debug_serial = debug_serial
-        self._unlock()
+        if verify_on_connect:
+            self._unlock()
+        else:
+            logger.warning(
+                "GRBL controller verification on connect is disabled; "
+                "the serial port is open but controller communication is unverified"
+            )
 
     def _unlock(self) -> None:
         """Initialize the connection by unlocking and clearing the buffer."""

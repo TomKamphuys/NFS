@@ -1,4 +1,18 @@
 --------
+24/06/26
+--------
+Added a default-on scanner setting to verify the GRBL controller when opening
+the serial port. It can be disabled temporarily to distinguish a reconnect
+probe/ACK failure from a scanner construction or configuration failure.
+
+Files touched:
+src/nfs/grbl_controller.py
+src/harmonic_drive/config_editor.py
+config.ini
+config_default.ini
+tests/test_grbl_controller.py
+
+--------
 23/06/26
 --------
 Small UI fixes and usability updates:

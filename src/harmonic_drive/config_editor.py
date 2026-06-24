@@ -180,6 +180,8 @@ EDITABLE_SCHEMA: Dict[str, List[SchemaEntry]] = {
          "Inject 3rd harmonic at this dB level for distortion tests. 'None' to disable.", None),
     ],
     "scanner": [
+        ("verify_controller_on_connect", "bool",
+         "Require a GRBL acknowledgement when opening the scanner. Disable temporarily to diagnose reconnect/probe failures; an open port does not guarantee motion commands will work.", None),
         ("feed_rate", "int",
          "GRBL feed rate (mm/min) used for moves between measurement points.", None),
         ("cal_tool_height", "float",

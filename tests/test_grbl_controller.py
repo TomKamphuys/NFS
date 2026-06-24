@@ -185,6 +185,15 @@ def test_esp32_duino_initialization_times_out_without_grbl_response(monkeypatch)
         ESP32Duino(mock_conn)
 
 
+def test_esp32_duino_can_skip_controller_verification():
+    mock_conn = Mock()
+
+    ESP32Duino(mock_conn, verify_on_connect=False)
+
+    mock_conn.send.assert_not_called()
+    mock_conn.receive.assert_not_called()
+
+
 def test_esp32_duino_send():
     mock_conn = Mock()
     # 1. Init: _unlock calls send with a probe timeout. Need "ok".
