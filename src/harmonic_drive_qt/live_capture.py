@@ -78,6 +78,21 @@ def _project_dir() -> Path:
         return Path.cwd()
 
 
+def _project_frd_db_offset() -> float | None:
+    try:
+        from harmonic_drive import project
+
+        stage5_vars = project.get_project_data().get("stage5_vars")
+        if not isinstance(stage5_vars, dict):
+            return None
+        value = stage5_vars.get("frd_db_offset")
+        return None if value is None else float(value)
+    except (TypeError, ValueError):
+        return None
+    except Exception:
+        return None
+
+
 def _find_latest_measurement_positions_file() -> Path | None:
     root = _project_dir()
     candidates = [root / "measurement_positions.csv"]
@@ -1081,6 +1096,9 @@ class LiveCapturePane(QWidget):
         fr = np.fft.rfft(ir, n=n_fft)
         freqs = np.fft.rfftfreq(n_fft, d=1 / fs)
         mag_db = 20 * np.log10(np.abs(fr) + 1e-12)
+        frd_db_offset = _project_frd_db_offset()
+        if frd_db_offset is not None:
+            mag_db = mag_db + frd_db_offset
         valid = freqs > 0
         fraction = int(self.fr_smoothing_fraction or 0)
         plot_freqs = freqs[valid]
@@ -1088,7 +1106,12 @@ class LiveCapturePane(QWidget):
         audible = (plot_freqs >= 20.0) & (plot_freqs <= 20000.0)
         smooth_label = "unsmoothed" if fraction <= 0 else f"1/{fraction} Oct Smoothed"
         self.imp_section.set_detail(f"Zoomed: {title_name}")
-        self.freq_section.set_detail(f"{smooth_label}: {title_name}")
+        if frd_db_offset is not None:
+            self.frequency.y_label = "Magnitude (dB SPL)"
+            self.freq_section.set_detail(f"{smooth_label}, calibrated {frd_db_offset:+.2f} dB: {title_name}")
+        else:
+            self.frequency.y_label = "Magnitude (dBFS)"
+            self.freq_section.set_detail(f"{smooth_label}: {title_name}")
         self.frequency.set_data(
             plot_freqs[audible],
             smoothed[audible],

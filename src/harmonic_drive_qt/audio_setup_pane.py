@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import configparser
+import math
 from pathlib import Path
 from typing import Any
 
@@ -127,7 +128,7 @@ class AudioSetupPane(QWidget):
         self.auto_apply_enabled = False
         self.sine_running = False
         self.held_cal_level_dbfs: float | None = None
-        self.cal_meter_peaks: list[float] = []
+        self.cal_meter_readings: list[float] = []
         self._build_ui()
         self.auto_apply_enabled = True
 
@@ -305,17 +306,17 @@ class AudioSetupPane(QWidget):
         curve_path = _weighting_curve_image_path()
         tooltip_text = (
             "<div style='color: #111827; font-weight: 400; font-size: 12px;'>"
-            f"<img src='{curve_path}'><br>"
+            f"<img src='{curve_path}' width='520'><br>"
             "<div style='white-space: pre;'>"
             "1. Set the weighting.<br>"
             "2. Play the 1 kHz sine from the speaker with the mic connected.<br>"
             "3. Put the SPL meter at the same distance as the mic, then enter its reading in Meter Reading.<br>"
-            "4. Click Calibrate to calculate the difference between the mic input level and the meter reading.<br>"
+            "4. Click Calibrate to calculate the difference between the mic input RMS level and the meter reading.<br>"
             "   This becomes the calibration dB offset.<br><br>"
             "* Choose the weighting that matches your physical SPL meter.<br>"
             "* Use None for an electrical voltage reference.<br>"
-            "* You can stop the sine tone after you get the reading; the mic input reading will hold.<br>"
-            "* The mic input reading is averaged over 1 second and optionally weighted, so it may not match the direct channel level readout."
+            "* You can stop the sine tone after you get the reading; the mic input RMS reading will hold.<br>"
+            "* The mic input RMS reading is averaged over 1 second and optionally weighted, so it may not match the direct channel level readout."
             "</div>"
             "</div>"
         )
@@ -796,23 +797,24 @@ class AudioSetupPane(QWidget):
         inputs = state.get(str(self._combo_data(self.cal_weighting)), [])
         if len(inputs) < 2:
             return
-        peak = inputs[1].get("peak_dbfs")
-        if peak is None:
+        rms = inputs[1].get("rms_dbfs")
+        if rms is None:
             return
-        self.cal_meter_peaks.append(float(peak))
-        if len(self.cal_meter_peaks) < 5:
+        self.cal_meter_readings.append(float(rms))
+        if len(self.cal_meter_readings) < 5:
             return
-        self.held_cal_level_dbfs = max(self.cal_meter_peaks)
-        self.cal_meter_peaks.clear()
+        mean_power = sum(10.0 ** (value / 10.0) for value in self.cal_meter_readings) / len(self.cal_meter_readings)
+        self.held_cal_level_dbfs = 10.0 * math.log10(max(mean_power, 1e-12))
+        self.cal_meter_readings.clear()
         self.cal_level.setText(_format_dbfs(self.held_cal_level_dbfs))
 
     def update_cal_level_label(self) -> None:
         weighting = SPL_WEIGHTING_OPTIONS.get(str(self._combo_data(self.cal_weighting)), "A")
         suffix = f"({weighting})" if weighting != "None" else " None"
-        self.cal_label.setText(f"Mic Level\ndBFS{suffix}")
+        self.cal_label.setText(f"Mic RMS\ndBFS{suffix}")
 
     def on_cal_weighting_changed(self) -> None:
-        self.cal_meter_peaks.clear()
+        self.cal_meter_readings.clear()
         self.held_cal_level_dbfs = None
         self.cal_level.setText(_format_dbfs(None))
         self.update_cal_level_label()

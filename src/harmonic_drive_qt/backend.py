@@ -19,6 +19,7 @@ from loguru import logger
 
 from nfs import NearFieldScannerFactory, ScannerFactory
 from nfs.audio import AudioFactory, get_audio_meter_state
+from nfs.datatypes import CylindricalPosition
 from nfs.logging_config import setup_logging
 
 from .qt_compat import QObject, QRunnable, Signal, Slot
@@ -44,6 +45,7 @@ class BackendManager:
         self.config_file = config_file
         self.scanner = None
         self.nfs = None
+        self.audio = None
         self.sine_audio = None
         self.load_warning: str | None = None
         self.preview_ir: dict[str, Any] | None = None
@@ -135,6 +137,7 @@ class BackendManager:
 
         if self.project_dir is not None:
             self.set_project_dir(self.project_dir)
+        self.audio = None
         self.sine_audio = None
 
     def set_project_dir(self, path: str | Path) -> None:
@@ -186,14 +189,22 @@ class BackendManager:
         self._run_audio(self.nfs.take_single_measurement)
 
     def test_sweep(self):
-        if self.nfs is None:
-            raise RuntimeError("NFS backend is not loaded")
         if hasattr(self.nfs, "test_sweep"):
             result = self._run_audio(self.nfs.test_sweep)
             if isinstance(result, dict):
                 self.preview_ir = {**result, "preview_created_at": time.time()}
             return result
-        result = self._run_audio(self.nfs.take_single_measurement)
+        if self.nfs is not None:
+            result = self._run_audio(self.nfs.take_single_measurement)
+        else:
+            if self.audio is None:
+                self.audio = AudioFactory.create(self.config_file)
+            position = (
+                self.scanner.get_position()
+                if self.scanner is not None
+                else CylindricalPosition(0.0, 0.0, 0.0)
+            )
+            result = self._run_audio(self.audio.measure_ir, position, "TEST", False)
         if isinstance(result, dict):
             self.preview_ir = {**result, "preview_created_at": time.time()}
         return result
@@ -279,6 +290,8 @@ class BackendManager:
     def stop_sine(self) -> None:
         if self.nfs is not None and hasattr(self.nfs, "stop_sine"):
             self.nfs.stop_sine()
+        if self.audio is not None and hasattr(self.audio, "stop_sine"):
+            self.audio.stop_sine()
         if self.sine_audio is not None and hasattr(self.sine_audio, "stop_sine"):
             self.sine_audio.stop_sine()
 

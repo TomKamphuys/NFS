@@ -1,6 +1,23 @@
 --------
 27/06/26
 --------
+Audio IR output is now scaled to the sine sweep RMS reference, so captured
+impulse responses represent the RMS value of the playback sweep rather than
+the peak-normalized sweep amplitude.
+
+Qt Test Sweep now shares the audio-only backend path used by sine playback
+when the scanner/NFS backend is unavailable, allowing test sweeps to run even
+when the scanner is not connected.
+
+Files touched:
+src/harmonic_drive_qt/backend.py
+src/nfs/audio.py
+tests/test_audio_engine.py
+tests/test_qt_backend.py
+
+--------
+27/06/26
+--------
 Added SPL calibration meter weighting options for A-weighted, C-weighted and
 unweighted readings. The unweighted option supports calibration from an
 electrical input reference source, while A/C can be matched to the physical SPL

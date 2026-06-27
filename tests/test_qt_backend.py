@@ -2,6 +2,19 @@ import harmonic_drive_qt.backend as qt_backend
 from harmonic_drive_qt.backend import BackendManager, format_scanner_error
 
 
+class FakeAudio:
+    def __init__(self):
+        self.calls = []
+        self.stopped = False
+
+    def measure_ir(self, position, order_id="NA", save=True):
+        self.calls.append((position, order_id, save))
+        return {"name": "test.wav", "position": position, "saved": save}
+
+    def stop_sine(self):
+        self.stopped = True
+
+
 def test_format_scanner_error_for_missing_com_port():
     message = format_scanner_error(
         Exception(
@@ -39,3 +52,23 @@ def test_backend_load_keeps_ui_available_when_scanner_port_missing(monkeypatch):
     assert manager.load_warning == (
         "Scanner connection failed on COM5. Check the port and controller connection."
     )
+
+
+def test_test_sweep_uses_audio_backend_when_scanner_backend_is_missing(monkeypatch):
+    audio = FakeAudio()
+    monkeypatch.setattr(qt_backend.AudioFactory, "create", lambda _config_file: audio)
+
+    manager = BackendManager("config.ini")
+    try:
+        result = manager.test_sweep()
+    finally:
+        manager.shutdown()
+
+    assert len(audio.calls) == 1
+    position, order_id, save = audio.calls[0]
+    assert (position.r(), position.t(), position.z()) == (0.0, 0.0, 0.0)
+    assert order_id == "TEST"
+    assert save is False
+    assert result["saved"] is False
+    assert manager.preview_ir["name"] == "test.wav"
+    assert "preview_created_at" in manager.preview_ir

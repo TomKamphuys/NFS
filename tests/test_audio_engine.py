@@ -9,7 +9,8 @@ from unittest.mock import patch
 from nfs.audio import (
     MarkerGenerator, SweepGenerator, HarmonicInjector,
     ProtectionFilter, DeconvolutionEngine, AlignmentEngine,
-    DSPVerificationTool, AudioFactory, find_device_id_by_name
+    DSPVerificationTool, AudioFactory, find_device_id_by_name,
+    SINE_RMS_FROM_PEAK,
 )
 from nfs.utils.dsp import DSPUtils
 from nfs.datatypes import CylindricalPosition
@@ -195,6 +196,17 @@ def test_deconvolution_separation_functional(fs):
 
     # Verify linear peak
     assert np.max(np.abs(h_linear)) > 0.5
+
+
+def test_deconvolution_returns_rms_referenced_ir(fs):
+    gen = SweepGenerator(fs, 0.5, 20.0, -10.0)
+    s_fund, _phase, inv = gen.generate()
+
+    _h_full, h_linear = DeconvolutionEngine(fs).process_ir(s_fund, inv)
+    linear_peak = float(np.max(np.abs(h_linear)))
+
+    assert SINE_RMS_FROM_PEAK == pytest.approx(1.0 / np.sqrt(2.0))
+    assert linear_peak == pytest.approx(0.56, abs=0.08)
 
 
 # -----------------------------------------------------------------------------

@@ -57,6 +57,7 @@ import sounddevice as sd  # noqa: E402
 
 _METER_EPS = 1e-12
 _METER_STALE_TIMEOUT_S = 1.5
+SINE_RMS_FROM_PEAK = 1.0 / np.sqrt(2.0)
 _METER_LOCK = threading.Lock()
 _METER_STATE = {
     "active": False,
@@ -916,6 +917,10 @@ class DeconvolutionEngine:
         I_filtered = I * H_min_phase
         H_complex = Y * I_filtered
         h_full = np.fft.irfft(H_complex, n=Nfft).astype(np.float32)
+        # Playback sweep level remains a peak dBFS safety limit. Calibration and
+        # downstream SPL interpretation are RMS-based, so returned IRs use a
+        # sine-RMS amplitude convention.
+        h_full *= SINE_RMS_FROM_PEAK
 
         # --- WINDOWING & SEPARATION of Linear and Distortion IRs ---
 

@@ -385,9 +385,9 @@ def test_spl_calibration_weighting_selector_changes_meter_source_and_label(tmp_p
     }
     meter_state = {
         "active": True,
-        "inputs": [{"peak_dbfs": -90.0}, {"peak_dbfs": -12.0}],
-        "a_weighted_inputs": [{"peak_dbfs": -90.0}, {"peak_dbfs": -22.0}],
-        "c_weighted_inputs": [{"peak_dbfs": -90.0}, {"peak_dbfs": -17.0}],
+        "inputs": [{"peak_dbfs": -90.0, "rms_dbfs": -95.0}, {"peak_dbfs": -12.0, "rms_dbfs": -15.0}],
+        "a_weighted_inputs": [{"peak_dbfs": -90.0, "rms_dbfs": -95.0}, {"peak_dbfs": -22.0, "rms_dbfs": -25.0}],
+        "c_weighted_inputs": [{"peak_dbfs": -90.0, "rms_dbfs": -95.0}, {"peak_dbfs": -17.0, "rms_dbfs": -20.0}],
     }
 
     monkeypatch.setattr("harmonic_drive_qt.audio_setup_pane.get_devices_and_channels", lambda: catalog)
@@ -401,23 +401,23 @@ def test_spl_calibration_weighting_selector_changes_meter_source_and_label(tmp_p
     try:
         for _ in range(5):
             pane.refresh_cal_meter()
-        assert pane.cal_label.text() == "Mic Level\ndBFS(A)"
-        assert pane.held_cal_level_dbfs == -22.0
-        assert pane.cal_level.text() == "-22.0 dBFS"
+        assert pane.cal_label.text() == "Mic RMS\ndBFS(A)"
+        assert pane.held_cal_level_dbfs == -25.0
+        assert pane.cal_level.text() == "-25.0 dBFS"
 
         pane._set_combo_data(pane.cal_weighting, "c_weighted_inputs")
         for _ in range(5):
             pane.refresh_cal_meter()
-        assert pane.cal_label.text() == "Mic Level\ndBFS(C)"
-        assert pane.held_cal_level_dbfs == -17.0
-        assert pane.cal_level.text() == "-17.0 dBFS"
+        assert pane.cal_label.text() == "Mic RMS\ndBFS(C)"
+        assert pane.held_cal_level_dbfs == -20.0
+        assert pane.cal_level.text() == "-20.0 dBFS"
 
         pane._set_combo_data(pane.cal_weighting, "inputs")
         for _ in range(5):
             pane.refresh_cal_meter()
-        assert pane.cal_label.text() == "Mic Level\ndBFS None"
-        assert pane.held_cal_level_dbfs == -12.0
-        assert pane.cal_level.text() == "-12.0 dBFS"
+        assert pane.cal_label.text() == "Mic RMS\ndBFS None"
+        assert pane.held_cal_level_dbfs == -15.0
+        assert pane.cal_level.text() == "-15.0 dBFS"
         assert pane.spl_reading.width() < 100
         assert pane.spl_offset.width() < 100
 
