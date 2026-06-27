@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import configparser
+from pathlib import Path
 from typing import Any
 
 from harmonic_drive import project
@@ -100,6 +101,17 @@ def _format_dbfs(value: float | None) -> str:
     if value is None or value <= -119.0:
         return "-inf dBFS"
     return f"{value:.1f} dBFS"
+
+
+SPL_WEIGHTING_OPTIONS = {
+    "a_weighted_inputs": "A",
+    "c_weighted_inputs": "C",
+    "inputs": "None",
+}
+
+
+def _weighting_curve_image_path() -> str:
+    return str(Path(__file__).resolve().parents[2] / "images" / "frequency_weighting.png")
 
 
 class AudioSetupPane(QWidget):
@@ -290,13 +302,21 @@ class AudioSetupPane(QWidget):
         return group
 
     def _build_spl_group(self) -> QGroupBox:
+        curve_path = _weighting_curve_image_path()
         tooltip_text = (
-            "<div style='color: #111827; font-weight: 400; font-size: 12px; white-space: pre;'>"
-            "1. Run the sine tone.<br>"
-            "2. Wait for Mic Level dBFS(A) to settle; it holds when stopped.<br>"
-            "3. Enter the physical SPL meter reading at the mic position.<br>"
-            "4. Press Calibrate to fill SPL dB Offset.<br>"
-            "5. Press Save Cal, or enter a known offset manually and save."
+            "<div style='color: #111827; font-weight: 400; font-size: 12px;'>"
+            f"<img src='{curve_path}'><br>"
+            "<div style='white-space: pre;'>"
+            "1. Set the weighting.<br>"
+            "2. Play the 1 kHz sine from the speaker with the mic connected.<br>"
+            "3. Put the SPL meter at the same distance as the mic, then enter its reading in Meter Reading.<br>"
+            "4. Click Calibrate to calculate the difference between the mic input level and the meter reading.<br>"
+            "   This becomes the calibration dB offset.<br><br>"
+            "* Choose the weighting that matches your physical SPL meter.<br>"
+            "* Use None for an electrical voltage reference.<br>"
+            "* You can stop the sine tone after you get the reading; the mic input reading will hold.<br>"
+            "* The mic input reading is averaged over 1 second and optionally weighted, so it may not match the direct channel level readout."
+            "</div>"
             "</div>"
         )
         group = QGroupBox("SPL Calibration")
@@ -321,15 +341,26 @@ class AudioSetupPane(QWidget):
         self.held_cal_level_dbfs = None
         self.cal_level = QLabel(_format_dbfs(None))
         self.cal_level.setStyleSheet("font-family: Consolas; font-weight: 700; font-size: 15px;")
+        self.cal_weighting = QComboBox()
+        self._set_combo_items(
+            self.cal_weighting,
+            {key: label for key, label in SPL_WEIGHTING_OPTIONS.items()},
+            "a_weighted_inputs",
+            styled_field=True,
+            fit_to_contents=True,
+        )
+        self.cal_weighting.setMinimumContentsLength(len("None"))
+        self.cal_weighting.setFixedWidth(self.cal_weighting.fontMetrics().horizontalAdvance("None") + 30)
+        self.cal_weighting.currentIndexChanged.connect(self.on_cal_weighting_changed)
         try:
             spl_value = 0.0 if current_spl is None else float(current_spl)
         except (TypeError, ValueError):
             spl_value = 0.0
         self.spl_reading = self._spin(spl_value, 0, 200, "", 1)
         self.spl_reading.setSpecialValueText("")
-        self.spl_reading.setFixedWidth(112)
+        self.spl_reading.setFixedWidth(self.spl_reading.fontMetrics().horizontalAdvance("100.2") + 34)
         self.spl_offset = self._spin(float(current_scale or 0.0), -200, 200, "", 2)
-        self.spl_offset.setFixedWidth(112)
+        self.spl_offset.setFixedWidth(self.spl_offset.fontMetrics().horizontalAdvance("100.2") + 34)
         calc = QPushButton("Calibrate")
         primary_button(calc)
         calc.setFixedSize(100, 36)
@@ -342,11 +373,13 @@ class AudioSetupPane(QWidget):
         cal_box.setStyleSheet("border: 1px solid #fbcfe8; border-radius: 4px; background: #fff6fb;")
         cal_layout = QHBoxLayout(cal_box)
         cal_layout.setContentsMargins(8, 2, 8, 2)
-        cal_label = QLabel("Mic Level\ndBFS(A)")
-        cal_label.setStyleSheet("color: #831843; font-size: 10px; font-weight: 700;")
-        cal_layout.addWidget(cal_label)
+        self.cal_label = QLabel()
+        self.cal_label.setStyleSheet("color: #831843; font-size: 10px; font-weight: 700;")
+        self.update_cal_level_label()
+        cal_layout.addWidget(self.cal_label)
         cal_layout.addWidget(self.cal_level)
         row.addWidget(cal_box)
+        row.addWidget(self._labeled("Weighting", self.cal_weighting))
         row.addWidget(self._labeled_with_unit("Meter Reading", self.spl_reading, "dB SPL"))
         row.addWidget(calc)
         row.setAlignment(calc, Qt.AlignmentFlag.AlignBottom)
@@ -760,7 +793,7 @@ class AudioSetupPane(QWidget):
         state = get_audio_meter_state()
         if not state.get("active"):
             return
-        inputs = state.get("a_weighted_inputs", [])
+        inputs = state.get(str(self._combo_data(self.cal_weighting)), [])
         if len(inputs) < 2:
             return
         peak = inputs[1].get("peak_dbfs")
@@ -772,6 +805,17 @@ class AudioSetupPane(QWidget):
         self.held_cal_level_dbfs = max(self.cal_meter_peaks)
         self.cal_meter_peaks.clear()
         self.cal_level.setText(_format_dbfs(self.held_cal_level_dbfs))
+
+    def update_cal_level_label(self) -> None:
+        weighting = SPL_WEIGHTING_OPTIONS.get(str(self._combo_data(self.cal_weighting)), "A")
+        suffix = f"({weighting})" if weighting != "None" else " None"
+        self.cal_label.setText(f"Mic Level\ndBFS{suffix}")
+
+    def on_cal_weighting_changed(self) -> None:
+        self.cal_meter_peaks.clear()
+        self.held_cal_level_dbfs = None
+        self.cal_level.setText(_format_dbfs(None))
+        self.update_cal_level_label()
 
     def calculate_spl_offset(self) -> None:
         if self.held_cal_level_dbfs is None:

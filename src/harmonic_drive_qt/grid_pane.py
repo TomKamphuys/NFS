@@ -102,6 +102,7 @@ class GridGeneratorPane(QWidget):
         self.pool = QThreadPool.globalInstance()
         self.viewer_backend = self._read_viewer_backend()
         self.current_viewer_input = None
+        self._use_manual_geometry_for_next_generation = False
         self.canvas = None
         self.viewer_widget: QWidget | None = None
         self.viewer_layout: QVBoxLayout | None = None
@@ -169,7 +170,7 @@ class GridGeneratorPane(QWidget):
         subtitle.setStyleSheet("font-size: 14px; font-weight: bold; color: #1e293b; border: none; margin-top: 8px;")
         gen_layout.addWidget(subtitle)
         
-        desc = QLabel("Top, Bottom, and Tweeter waypoints are required. Ref Origin, baffle corners, and additional points help visualise exported response data.")
+        desc = QLabel("Top and Bottom waypoints can define the cylinder, or the advanced grid settings can be used directly.\nTweeter, Ref Origin, baffle corners, and additional points help visualise exported response data.")
         desc.setStyleSheet("color: #64748b; font-size: 12px; border: none;")
         desc.setWordWrap(True)
         gen_layout.addWidget(desc)
@@ -429,7 +430,7 @@ class GridGeneratorPane(QWidget):
         self.cap_fraction = QLineEdit(str(grid_vars.get("cap_fraction") or "Auto"))
         self.p_side = self._spin(self._gv_float(grid_vars, "P_side", 0.5), 0.01, 5.0, "", decimals=2)
         self.p_caps = self._spin(self._gv_float(grid_vars, "P_caps", 0.8), 0.01, 5.0, "", decimals=2)
-        self.cap_tol = QLineEdit(str(grid_vars.get("cap_tol_mm") or "Auto"))
+        self.cap_tol = QLineEdit(self._auto_text(grid_vars.get("cap_tol_mm")))
         self.az_weight = self._spin(self._gv_float(grid_vars, "azimuth_weight_center_deg", 0.0), -180, 180, " deg")
         self.z_rotation = self._spin(self._gv_float(grid_vars, "z_rotation_deg", 90.0), -360, 360, " deg")
         self.reverse_spiral = QCheckBox("Generate reverse spiral")
@@ -729,9 +730,15 @@ class GridGeneratorPane(QWidget):
 
     def _optional_float(self, text: str) -> float | None:
         value = text.strip()
-        if not value or value.lower() == "auto":
+        if not value or value.lower().startswith("auto"):
             return None
         return float(value)
+
+    def _auto_text(self, value) -> str:
+        if value in (None, ""):
+            return "Auto"
+        text = str(value).strip()
+        return "Auto" if text.lower().startswith("auto") else text
 
     def _set_waypoint_from_scanner(self, key: str) -> None:
         pos = self.backend.get_position()
@@ -759,21 +766,77 @@ class GridGeneratorPane(QWidget):
     def generate_and_plan(self) -> None:
         if not self.require_session_folder():
             return
+        geometry_mode = self._generation_geometry_mode()
+        if geometry_mode is None:
+            return
+        self._use_manual_geometry_for_next_generation = geometry_mode == "manual"
         self.status_label.setText("Generating grid...")
         worker = Worker(self._generate_and_plan_blocking)
         worker.signals.failed.connect(lambda message: QMessageBox.warning(self, "Grid Generation Error", message))
         worker.signals.finished.connect(lambda: self.status_label.setText("Generation finished"))
         self.pool.start(worker)
 
-    def _generate_and_plan_blocking(self) -> None:
+    def _generation_geometry_mode(self) -> str | None:
         top = self._waypoint("top")
         bottom = self._waypoint("bottom")
+        any_waypoint_defined = any(
+            self._waypoint(key) is not None
+            for key in (
+                "top",
+                "bottom",
+                "tweeter",
+                "ref_origin",
+                "baffle_bot_l",
+                "baffle_top_l",
+                "baffle_top_r",
+            )
+        )
+
+        if top is not None and bottom is not None:
+            return "waypoints"
+
+        if self._manual_geometry_values_available():
+            if any_waypoint_defined:
+                QMessageBox.warning(
+                    self,
+                    "Grid Generation",
+                    "Top and Bottom waypoints are not both defined, so the grid will use the cylinder height, cylinder radius, bottom cutoff, and Z midpoint settings from Advanced grid settings.",
+                )
+            else:
+                QMessageBox.warning(
+                    self,
+                    "Grid Generation",
+                    "No waypoints are defined, so the grid will use the cylinder height, cylinder radius, bottom cutoff, and Z midpoint settings from Advanced grid settings.",
+                )
+            return "manual"
+
+        QMessageBox.warning(
+            self,
+            "Grid Generation",
+            "Grid generation needs either Top and Bottom waypoints or cylinder height, cylinder radius, bottom cutoff, and Z midpoint settings from Advanced grid settings.",
+        )
+        return None
+
+    def _manual_geometry_values_available(self) -> bool:
+        return all(
+            self._spin_has_text(spin)
+            for spin in (self.cyl_radius, self.cyl_height, self.bottom_cutoff)
+        )
+
+    def _spin_has_text(self, spin: QDoubleSpinBox) -> bool:
+        line_edit = spin.lineEdit()
+        if line_edit is not None and not line_edit.text().strip():
+            return False
+        return bool(spin.cleanText().strip())
+
+    def _generate_and_plan_blocking(self) -> None:
+        use_manual_geometry = self._use_manual_geometry_for_next_generation
+        top = None if use_manual_geometry else self._waypoint("top")
+        bottom = None if use_manual_geometry else self._waypoint("bottom")
         tweeter = self._waypoint("tweeter")
-        if top is None or bottom is None or tweeter is None:
-            raise RuntimeError("Top, Bottom, and Tweeter waypoints are required before generating a grid.")
         cap_tol = self._optional_float(self.cap_tol.text())
         if cap_tol is None:
-            cap_tol = self.wall_thickness.value()
+            cap_tol = self.wall_thickness.value() + 1.0
 
         generated = generate_measurement_grid(
             cyl_radius_mm=self.cyl_radius.value(),

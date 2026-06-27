@@ -8,7 +8,7 @@ pytest.importorskip("PySide6")
 
 from harmonic_drive_qt.audio_setup_pane import AudioSetupPane
 from harmonic_drive import project
-from harmonic_drive_qt.qt_compat import QApplication, QMessageBox, QSizePolicy
+from harmonic_drive_qt.qt_compat import QApplication, QLabel, QMessageBox, QSizePolicy
 from harmonic_drive_qt.styles import app_stylesheet
 from harmonic_drive_qt.styles import toggle_style
 
@@ -339,6 +339,89 @@ def test_audio_pane_loads_saved_calibration_fields_without_live_mic_level(tmp_pa
         assert pane.spl_reading.value() == 82.0
         assert pane.held_cal_level_dbfs is None
         assert pane.cal_level.text() == "-inf dBFS"
+    finally:
+        pane.auto_apply_timer.stop()
+        pane.cal_timer.stop()
+        pane.deleteLater()
+
+
+def test_spl_calibration_weighting_selector_changes_meter_source_and_label(tmp_path, monkeypatch):
+    _app()
+    config_file = tmp_path / "config.ini"
+    config_file.write_text(
+        "[audio]\n"
+        "in_dev = 1\n"
+        "out_dev = 2\n"
+        "in_ch_mic = 0\n"
+        "in_ch_loop = 1\n"
+        "out_ch_spkr = 0\n"
+        "out_ch_ref = 1\n"
+        "fs = 48000\n"
+        "blocksize = 2048\n"
+        "wasapi_exclusive = False\n"
+        "in_dev_hostapi = ASIO\n"
+        "out_dev_hostapi = ASIO\n"
+        "[sweep]\n"
+        "sweep_level_dbfs = -20.0\n"
+        "sweep_dur_s = 1.0\n"
+        "num_sweeps = 1\n"
+        "protect_hpf_hz = None\n"
+        "protect_hpf_order = 1\n"
+        "protect_hpf_correction = False\n"
+        "protect_hpf_corr_db_cap = 12.0\n"
+        "naming_convention = dimitri\n"
+        "align_to_first_marker = False\n"
+        "pre_sil_ms = 0.0\n"
+        "post_sil_ms = 0.0\n"
+        "mic_tail_taper_ms = 0.0\n"
+        "debug_saves = False\n"
+        "h2_test_db = None\n"
+        "h3_test_db = None\n",
+        encoding="utf-8",
+    )
+    catalog = {
+        1: {"name": "Input", "hostapi": "ASIO", "input_channels": [0, 1], "output_channels": []},
+        2: {"name": "Output", "hostapi": "ASIO", "input_channels": [], "output_channels": [0, 1]},
+    }
+    meter_state = {
+        "active": True,
+        "inputs": [{"peak_dbfs": -90.0}, {"peak_dbfs": -12.0}],
+        "a_weighted_inputs": [{"peak_dbfs": -90.0}, {"peak_dbfs": -22.0}],
+        "c_weighted_inputs": [{"peak_dbfs": -90.0}, {"peak_dbfs": -17.0}],
+    }
+
+    monkeypatch.setattr("harmonic_drive_qt.audio_setup_pane.get_devices_and_channels", lambda: catalog)
+    monkeypatch.setattr(
+        "harmonic_drive_qt.audio_setup_pane.get_supported_sample_rates",
+        lambda _in_dev, _out_dev: [48000],
+    )
+    monkeypatch.setattr("harmonic_drive_qt.audio_setup_pane.get_audio_meter_state", lambda: meter_state)
+
+    pane = AudioSetupPane(Mock(), str(config_file))
+    try:
+        for _ in range(5):
+            pane.refresh_cal_meter()
+        assert pane.cal_label.text() == "Mic Level\ndBFS(A)"
+        assert pane.held_cal_level_dbfs == -22.0
+        assert pane.cal_level.text() == "-22.0 dBFS"
+
+        pane._set_combo_data(pane.cal_weighting, "c_weighted_inputs")
+        for _ in range(5):
+            pane.refresh_cal_meter()
+        assert pane.cal_label.text() == "Mic Level\ndBFS(C)"
+        assert pane.held_cal_level_dbfs == -17.0
+        assert pane.cal_level.text() == "-17.0 dBFS"
+
+        pane._set_combo_data(pane.cal_weighting, "inputs")
+        for _ in range(5):
+            pane.refresh_cal_meter()
+        assert pane.cal_label.text() == "Mic Level\ndBFS None"
+        assert pane.held_cal_level_dbfs == -12.0
+        assert pane.cal_level.text() == "-12.0 dBFS"
+        assert pane.spl_reading.width() < 100
+        assert pane.spl_offset.width() < 100
+
+        assert any("frequency_weighting.png" in label.toolTip() for label in pane.findChildren(QLabel))
     finally:
         pane.auto_apply_timer.stop()
         pane.cal_timer.stop()

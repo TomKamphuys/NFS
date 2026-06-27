@@ -1,4 +1,19 @@
 --------
+27/06/26
+--------
+Added SPL calibration meter weighting options for A-weighted, C-weighted and
+unweighted readings. The unweighted option supports calibration from an
+electrical input reference source, while A/C can be matched to the physical SPL
+meter weighting. The SPL help tooltip now includes the supplied weighting curve
+image and clearer calibration guidance.
+
+Files touched:
+src/harmonic_drive_qt/audio_setup_pane.py
+src/nfs/audio.py
+images/frequency_weighting.png
+tests/test_qt_audio_setup_pane.py
+
+--------
 24/06/26
 --------
 Added a default-on scanner setting to verify the GRBL controller when opening
