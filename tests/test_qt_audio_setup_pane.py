@@ -105,9 +105,283 @@ def test_plain_audio_combos_use_content_sizing_without_custom_popup(tmp_path, mo
             combo.showPopup()
             combo.hidePopup()
 
-        assert pane.hpf.text() == ""
+        assert pane.hpf.text() == "500.0"
         assert pane.hpf.placeholderText() == ""
     finally:
+        pane.cal_timer.stop()
+        pane.deleteLater()
+
+
+def test_audio_pane_prefers_saved_name_and_hostapi_over_stale_id(tmp_path, monkeypatch):
+    _app()
+    config_file = tmp_path / "config.ini"
+    config_file.write_text(
+        "[audio]\n"
+        "in_dev = 4\n"
+        "out_dev = 4\n"
+        "in_ch_mic = 0\n"
+        "in_ch_loop = 1\n"
+        "out_ch_spkr = 0\n"
+        "out_ch_ref = 1\n"
+        "fs = 48000\n"
+        "blocksize = 2048\n"
+        "wasapi_exclusive = False\n"
+        "in_dev_name = RME Interface\n"
+        "in_dev_hostapi = ASIO\n"
+        "out_dev_name = RME Interface\n"
+        "out_dev_hostapi = ASIO\n"
+        "[sweep]\n"
+        "sweep_level_dbfs = -20.0\n"
+        "sweep_dur_s = 1.0\n"
+        "num_sweeps = 1\n"
+        "protect_hpf_hz = None\n"
+        "protect_hpf_order = 1\n"
+        "protect_hpf_correction = False\n"
+        "protect_hpf_corr_db_cap = 12.0\n"
+        "naming_convention = dimitri\n"
+        "align_to_first_marker = False\n"
+        "pre_sil_ms = 0.0\n"
+        "post_sil_ms = 0.0\n"
+        "mic_tail_taper_ms = 0.0\n"
+        "debug_saves = False\n"
+        "h2_test_db = None\n"
+        "h3_test_db = None\n",
+        encoding="utf-8",
+    )
+    catalog = {
+        4: {
+            "name": "RME Interface",
+            "hostapi": "MME",
+            "input_channels": [0, 1],
+            "output_channels": [0, 1],
+        },
+        20: {
+            "name": "RME Interface",
+            "hostapi": "ASIO",
+            "input_channels": [0, 1],
+            "output_channels": [0, 1],
+        },
+    }
+
+    monkeypatch.setattr("harmonic_drive_qt.audio_setup_pane.get_devices_and_channels", lambda: catalog)
+    monkeypatch.setattr(
+        "harmonic_drive_qt.audio_setup_pane.get_supported_sample_rates",
+        lambda _in_dev, _out_dev: [48000],
+    )
+
+    pane = AudioSetupPane(Mock(), str(config_file))
+    try:
+        assert pane.api_select.currentText() == "ASIO"
+        assert pane.selected_device_id("in") == 20
+        assert pane.selected_device_id("out") == 20
+    finally:
+        pane.cal_timer.stop()
+        pane.deleteLater()
+
+
+def test_audio_pane_resets_channels_to_first_then_second_on_api_change(tmp_path, monkeypatch):
+    _app()
+    config_file = tmp_path / "config.ini"
+    config_file.write_text(
+        "[audio]\n"
+        "in_ch_mic = 1\n"
+        "in_ch_loop = 0\n"
+        "out_ch_spkr = 1\n"
+        "out_ch_ref = 0\n"
+        "fs = 48000\n"
+        "blocksize = 2048\n"
+        "wasapi_exclusive = False\n"
+        "in_dev_name = Direct Device\n"
+        "in_dev_hostapi = Windows DirectSound\n"
+        "out_dev_name = Direct Device\n"
+        "out_dev_hostapi = Windows DirectSound\n"
+        "[sweep]\n"
+        "sweep_level_dbfs = -20.0\n"
+        "sweep_dur_s = 1.0\n"
+        "num_sweeps = 1\n"
+        "protect_hpf_hz = None\n"
+        "protect_hpf_order = 1\n"
+        "protect_hpf_correction = False\n"
+        "protect_hpf_corr_db_cap = 12.0\n"
+        "naming_convention = dimitri\n"
+        "align_to_first_marker = False\n"
+        "pre_sil_ms = 0.0\n"
+        "post_sil_ms = 0.0\n"
+        "mic_tail_taper_ms = 0.0\n"
+        "debug_saves = False\n"
+        "h2_test_db = None\n"
+        "h3_test_db = None\n",
+        encoding="utf-8",
+    )
+    catalog = {
+        4: {
+            "name": "Direct Device",
+            "hostapi": "Windows DirectSound",
+            "input_channels": [0, 1],
+            "output_channels": [0, 1],
+        },
+        5: {
+            "name": "ASIO Device",
+            "hostapi": "ASIO",
+            "input_channels": [0, 1],
+            "output_channels": [0, 1],
+        },
+    }
+
+    monkeypatch.setattr("harmonic_drive_qt.audio_setup_pane.get_devices_and_channels", lambda: catalog)
+    monkeypatch.setattr(
+        "harmonic_drive_qt.audio_setup_pane.get_supported_sample_rates",
+        lambda _in_dev, _out_dev: [48000],
+    )
+
+    pane = AudioSetupPane(Mock(), str(config_file))
+    try:
+        assert pane.in_mic_channel.currentData() == 1
+        assert pane.in_loop_channel.currentData() == 0
+
+        pane._set_combo_data(pane.api_select, "ASIO")
+        pane.refresh_devices_for_api()
+
+        assert pane.in_mic_channel.currentData() == 0
+        assert pane.in_loop_channel.currentData() == 1
+        assert pane.out_speaker_channel.currentData() == 0
+        assert pane.out_ref_channel.currentData() == 1
+    finally:
+        pane.auto_apply_timer.stop()
+        pane.cal_timer.stop()
+        pane.deleteLater()
+
+
+def test_audio_pane_prefers_48khz_when_api_changes(tmp_path, monkeypatch):
+    _app()
+    config_file = tmp_path / "config.ini"
+    config_file.write_text(
+        "[audio]\n"
+        "in_ch_mic = 0\n"
+        "in_ch_loop = 1\n"
+        "out_ch_spkr = 0\n"
+        "out_ch_ref = 1\n"
+        "fs = 96000\n"
+        "blocksize = 2048\n"
+        "wasapi_exclusive = False\n"
+        "in_dev_name = Direct Device\n"
+        "in_dev_hostapi = Windows DirectSound\n"
+        "out_dev_name = Direct Device\n"
+        "out_dev_hostapi = Windows DirectSound\n"
+        "[sweep]\n"
+        "sweep_level_dbfs = -20.0\n"
+        "sweep_dur_s = 1.0\n"
+        "num_sweeps = 1\n"
+        "protect_hpf_hz = None\n"
+        "protect_hpf_order = 1\n"
+        "protect_hpf_correction = False\n"
+        "protect_hpf_corr_db_cap = 12.0\n"
+        "naming_convention = dimitri\n"
+        "align_to_first_marker = False\n"
+        "pre_sil_ms = 0.0\n"
+        "post_sil_ms = 0.0\n"
+        "mic_tail_taper_ms = 0.0\n"
+        "debug_saves = False\n"
+        "h2_test_db = None\n"
+        "h3_test_db = None\n",
+        encoding="utf-8",
+    )
+    catalog = {
+        4: {
+            "name": "Direct Device",
+            "hostapi": "Windows DirectSound",
+            "input_channels": [0, 1],
+            "output_channels": [0, 1],
+        },
+        5: {
+            "name": "ASIO Device",
+            "hostapi": "ASIO",
+            "input_channels": [0, 1],
+            "output_channels": [0, 1],
+        },
+    }
+
+    monkeypatch.setattr("harmonic_drive_qt.audio_setup_pane.get_devices_and_channels", lambda: catalog)
+    monkeypatch.setattr(
+        "harmonic_drive_qt.audio_setup_pane.get_supported_sample_rates",
+        lambda _in_dev, _out_dev: [48000, 96000],
+    )
+
+    pane = AudioSetupPane(Mock(), str(config_file))
+    try:
+        assert pane.fs.currentData() == 96000
+
+        pane._set_combo_data(pane.api_select, "ASIO")
+        pane.refresh_devices_for_api()
+
+        assert pane.fs.currentData() == 48000
+    finally:
+        pane.auto_apply_timer.stop()
+        pane.cal_timer.stop()
+        pane.deleteLater()
+
+
+def test_disabled_protection_hpf_shows_500hz_default_and_saves_when_enabled(tmp_path, monkeypatch):
+    _app()
+    config_file = tmp_path / "config.ini"
+    config_file.write_text(
+        "[audio]\n"
+        "in_ch_mic = 0\n"
+        "in_ch_loop = 1\n"
+        "out_ch_spkr = 0\n"
+        "out_ch_ref = 1\n"
+        "fs = 48000\n"
+        "blocksize = 2048\n"
+        "wasapi_exclusive = False\n"
+        "in_dev_name = ASIO Device\n"
+        "in_dev_hostapi = ASIO\n"
+        "out_dev_name = ASIO Device\n"
+        "out_dev_hostapi = ASIO\n"
+        "[sweep]\n"
+        "sweep_level_dbfs = -20.0\n"
+        "sweep_dur_s = 1.0\n"
+        "num_sweeps = 1\n"
+        "protect_hpf_hz = None\n"
+        "protect_hpf_order = 1\n"
+        "protect_hpf_correction = False\n"
+        "protect_hpf_corr_db_cap = 12.0\n"
+        "naming_convention = dimitri\n"
+        "align_to_first_marker = False\n"
+        "pre_sil_ms = 0.0\n"
+        "post_sil_ms = 0.0\n"
+        "mic_tail_taper_ms = 0.0\n"
+        "debug_saves = False\n"
+        "h2_test_db = None\n"
+        "h3_test_db = None\n",
+        encoding="utf-8",
+    )
+    catalog = {
+        5: {
+            "name": "ASIO Device",
+            "hostapi": "ASIO",
+            "input_channels": [0, 1],
+            "output_channels": [0, 1],
+        },
+    }
+
+    monkeypatch.setattr("harmonic_drive_qt.audio_setup_pane.get_devices_and_channels", lambda: catalog)
+    monkeypatch.setattr(
+        "harmonic_drive_qt.audio_setup_pane.get_supported_sample_rates",
+        lambda _in_dev, _out_dev: [48000],
+    )
+
+    pane = AudioSetupPane(Mock(), str(config_file))
+    try:
+        assert pane.hpf.text() == "500.0"
+        assert not pane.hpf.isEnabled()
+
+        pane.hpf_enable.setChecked(True)
+
+        assert pane.hpf.text() == "500.0"
+        assert pane.hpf.isEnabled()
+        assert "protect_hpf_hz = 500.0" in config_file.read_text(encoding="utf-8")
+    finally:
+        pane.auto_apply_timer.stop()
         pane.cal_timer.stop()
         pane.deleteLater()
 
@@ -199,9 +473,13 @@ def test_audio_pane_updates_config_and_project_memory_without_project_json(tmp_p
             "frd_db_offset": 109.75,
             "spl_db": 82.0,
             "reference_input_rms_dbfs": -27.5,
+            "spl_meter_weighting": "C",
         }
         assert not list(session_dir.glob("*_project.json"))
-        assert "sweep_level_dbfs = -12.0" in config_file.read_text(encoding="utf-8")
+        content = config_file.read_text(encoding="utf-8")
+        assert "sweep_level_dbfs = -12.0" in content
+        assert "in_dev = 1" in content
+        assert "out_dev = 2" in content
     finally:
         pane.auto_apply_timer.stop()
         pane.cal_timer.stop()
@@ -272,6 +550,7 @@ def test_audio_auto_apply_does_not_overwrite_saved_calibration(tmp_path, monkeyp
             "frd_db_offset": 100.0,
             "spl_db": 80.0,
             "reference_input_rms_dbfs": -20.0,
+            "spl_meter_weighting": "C",
         }
     finally:
         pane.auto_apply_timer.stop()
@@ -330,6 +609,7 @@ def test_audio_pane_loads_saved_calibration_fields_without_live_mic_level(tmp_pa
             "frd_db_offset": 109.75,
             "spl_db": 82.0,
             "reference_input_rms_dbfs": -27.5,
+            "spl_meter_weighting": "A",
         }
     )
 
@@ -337,6 +617,7 @@ def test_audio_pane_loads_saved_calibration_fields_without_live_mic_level(tmp_pa
     try:
         assert pane.spl_offset.value() == 109.75
         assert pane.spl_reading.value() == 82.0
+        assert pane.cal_weighting.currentData() == "a_weighted_inputs"
         assert pane.held_cal_level_dbfs is None
         assert pane.cal_level.text() == "-inf dBFS"
     finally:
@@ -397,20 +678,24 @@ def test_spl_calibration_weighting_selector_changes_meter_source_and_label(tmp_p
     )
     monkeypatch.setattr("harmonic_drive_qt.audio_setup_pane.get_audio_meter_state", lambda: meter_state)
 
+    project.set_project_dir(tmp_path / "session", str(config_file))
     pane = AudioSetupPane(Mock(), str(config_file))
     try:
-        for _ in range(5):
-            pane.refresh_cal_meter()
-        assert pane.cal_label.text() == "Mic RMS\ndBFS(A)"
-        assert pane.held_cal_level_dbfs == -25.0
-        assert pane.cal_level.text() == "-25.0 dBFS"
-
-        pane._set_combo_data(pane.cal_weighting, "c_weighted_inputs")
+        assert pane.cal_weighting.currentData() == "c_weighted_inputs"
         for _ in range(5):
             pane.refresh_cal_meter()
         assert pane.cal_label.text() == "Mic RMS\ndBFS(C)"
         assert pane.held_cal_level_dbfs == -20.0
         assert pane.cal_level.text() == "-20.0 dBFS"
+        assert project.get_project_data()["stage5_vars"]["spl_meter_weighting"] == "C"
+
+        pane._set_combo_data(pane.cal_weighting, "a_weighted_inputs")
+        for _ in range(5):
+            pane.refresh_cal_meter()
+        assert pane.cal_label.text() == "Mic RMS\ndBFS(A)"
+        assert pane.held_cal_level_dbfs == -25.0
+        assert pane.cal_level.text() == "-25.0 dBFS"
+        assert project.get_project_data()["stage5_vars"]["spl_meter_weighting"] == "A"
 
         pane._set_combo_data(pane.cal_weighting, "inputs")
         for _ in range(5):
@@ -418,6 +703,7 @@ def test_spl_calibration_weighting_selector_changes_meter_source_and_label(tmp_p
         assert pane.cal_label.text() == "Mic RMS\ndBFS None"
         assert pane.held_cal_level_dbfs == -15.0
         assert pane.cal_level.text() == "-15.0 dBFS"
+        assert project.get_project_data()["stage5_vars"]["spl_meter_weighting"] == "None"
         assert pane.spl_reading.width() < 100
         assert pane.spl_offset.width() < 100
 
@@ -496,6 +782,7 @@ def test_save_spl_calibration_can_create_missing_project_json_after_prompt(tmp_p
         assert '"frd_db_offset": 109.75' in content
         assert '"spl_db": 82.0' in content
         assert '"reference_input_rms_dbfs": -27.5' in content
+        assert '"spl_meter_weighting": "C"' in content
         assert '"sweep_dur_s": "2.5"' in content
         assert '"output_filename": "Speaker_A_grid.csv"' in content
         assert "sweep_level_dbfs" not in content

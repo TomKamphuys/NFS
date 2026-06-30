@@ -6,6 +6,7 @@ from typing import Callable
 from harmonic_drive.config_editor import (
     DISPLAY_LABELS,
     EDITABLE_SCHEMA,
+    CONFIG_EDITOR_SECTION_KEYS,
     CONFIG_EDITOR_HIDDEN_SECTIONS,
     MEASUREMENT_POINTS_TYPES,
     MOTION_MANAGER_TYPES,
@@ -203,8 +204,11 @@ class SettingsDialog(QDialog):
             self.tabs.setCurrentIndex(index)
 
     def _build_fields(self, layout, section, schema) -> None:
+        visible_keys = CONFIG_EDITOR_SECTION_KEYS.get(section)
         for key, kind, tooltip, options in schema:
             if section == "app" and key == "use_alternative_motion_controls":
+                continue
+            if visible_keys is not None and key not in visible_keys:
                 continue
             if not self.parser.has_option(section, key): continue
             raw = _strip_inline_comment(self.parser.get(section, key))

@@ -1,4 +1,40 @@
 --------
+30/06/26
+--------
+PySide audio setup now resolves audio devices from saved device name plus host
+API, making device ID numbers an implementation detail only. The Settings
+dialog no longer exposes audio device fields owned by Audio Setup, avoiding
+accidental audio setup edits.
+
+Fixed: Audio channel selectors now use zero-based channel indices for all
+PortAudio host APIs, matching the indices used by the capture/playback engine.
+Changed: Audio Setup now prefers 48 kHz when changing API/device.
+
+The Protection HPF frequency field now behaves like the other disabled sweep
+fields: when HPF is off it displays a grey default of 500 Hz, while config still
+saves HPF as None until the user enables it.
+
+SPL calibration now defaults the meter weighting selector to C-weighting and
+saves the selected weighting in the project data alongside the SPL calibration
+values, so project reloads restore the user's weighting choice.
+
+The PyVista coordinate viewer now keeps the robot/STL datum fixed at viewer
+Z=0. Generated grid points with negative Z coordinates render below the stool.
+
+Files touched:
+src/grid/coord_viewer_core_pyvista.py
+src/harmonic_drive/project.py
+src/harmonic_drive_qt/audio_setup_pane.py
+src/harmonic_drive_qt/settings_dialog.py
+src/nfs/audio.py
+src/list_sound_devices.py
+tests/test_audio_engine.py
+tests/test_coord_viewer_pyvista.py
+tests/test_project.py
+tests/test_qt_audio_setup_pane.py
+tests/test_qt_settings_dialog.py
+
+--------
 27/06/26
 --------
 Audio IR output is now scaled to the sine sweep RMS reference, so captured

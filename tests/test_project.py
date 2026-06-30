@@ -172,6 +172,16 @@ def test_spl_calibration_can_be_saved_from_known_scale(tmp_path):
     assert "spl_calibration" not in data
 
 
+def test_spl_calibration_can_include_meter_weighting(tmp_path):
+    project.set_project_dir(tmp_path / "work")
+
+    project.update_spl_calibration(
+        project.build_spl_calibration(80.0, -30.0, spl_meter_weighting="C")
+    )
+
+    assert project.get_project_data()["stage5_vars"]["spl_meter_weighting"] == "C"
+
+
 def test_spl_calibration_truncates_frd_offset_to_two_decimals(tmp_path):
     project.set_project_dir(tmp_path / "work")
 

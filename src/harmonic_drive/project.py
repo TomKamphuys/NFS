@@ -276,8 +276,14 @@ def build_spl_calibration(
     spl_db: Any,
     reference_input_rms_dbfs: Any,
     spl_offset_db: Any = None,
-) -> Optional[Dict[str, Optional[float]]]:
-    if spl_db is None and reference_input_rms_dbfs is None and spl_offset_db is None:
+    spl_meter_weighting: Any = None,
+) -> Optional[Dict[str, Any]]:
+    if (
+        spl_db is None
+        and reference_input_rms_dbfs is None
+        and spl_offset_db is None
+        and spl_meter_weighting is None
+    ):
         return None
     spl_db_float = None if spl_db is None else float(spl_db)
     reference_float = (
@@ -296,11 +302,14 @@ def build_spl_calibration(
     )
     if offset_float is not None:
         offset_float = _truncate_float(offset_float, 2)
-    return {
+    calibration = {
         "frd_db_offset": offset_float,
         "spl_db": spl_db_float,
         "reference_input_rms_dbfs": reference_float,
     }
+    if spl_meter_weighting is not None:
+        calibration["spl_meter_weighting"] = str(spl_meter_weighting)
+    return calibration
 
 
 def update_audio_setup(

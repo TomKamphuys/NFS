@@ -36,7 +36,7 @@ from pyvistaqt import QtInteractor
 from PySide6 import QtCore, QtGui, QtWidgets
 
 
-PYVISTA_VIEWER_BUILD = "real-sphere-glyph-cloud-split-grid-bounds-2026-06-11"
+PYVISTA_VIEWER_BUILD = "real-sphere-glyph-cloud-split-grid-bounds-z0-datum-2026-06-29"
 ROBOT_MODEL_UNITS_TO_METERS = 0.01  # Fusion OBJ exports are unitless; these files appear to be centimetre-scaled.
 DARK_BG_ELEVATION_CMAP = LinearSegmentedColormap.from_list(
     "dark_bg_elevation",
@@ -1220,12 +1220,10 @@ class CoordViewerPyVista(QtWidgets.QWidget):
         return phi, r, z
 
     def _robot_origin_z(self) -> float:
-        if self.bounds.has_outer:
-            return self.bounds.z_center - self.bounds.h_ext / 2.0
-        if self.bounds.has_inner:
-            return self.bounds.z_center - self.bounds.h_int / 2.0
-        if self.N:
-            return float(np.min(self.z))
+        # Robot/STL meshes are authored with their datum at the top of the DUT
+        # stool. Keep that datum fixed at viewer Z=0; generated grid coordinates
+        # are already loaded in absolute metres, so negative z_mm values should
+        # render below the stool top instead of lifting the robot to grid z_min.
         return 0.0
 
     def _update_robot_model(self) -> None:
@@ -1348,7 +1346,7 @@ class CoordViewerPyVista(QtWidgets.QWidget):
     def _compute_camera_bounds(self) -> tuple[float, float, float, float, float, float]:
         xs = [float(self.x.min()), float(self.x.max())]
         ys = [float(self.y.min()), float(self.y.max())]
-        zs = [float(self.z.min()), float(self.z.max())]
+        zs = [float(self.z.min()), float(self.z.max()), 0.0]
 
         b = self.bounds
         if b.has_outer:

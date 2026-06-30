@@ -279,7 +279,8 @@ def clean_device_name(name: str) -> str:
 def get_devices_and_channels() -> dict:
     """
     Queries audio devices and returns a dict indexed by Device ID.
-    ASIO uses 0-based channel indices; others use 1-based channel indices.
+    Channel indices are 0-based because they are used directly as sounddevice
+    stream buffer indices.
     """
     # Hard refresh PortAudio state to catch any recent device changes
     sd._terminate()
@@ -292,16 +293,14 @@ def get_devices_and_channels() -> dict:
 
     for api_idx, a in enumerate(apis):
         api_name = a['name']
-        is_asio = "ASIO" in api_name.upper()
-        base_idx = 0 if is_asio else 1
 
         for dev_idx, d in enumerate(devs):
             if d['hostapi'] == api_idx:
                 max_in = d['max_input_channels']
                 max_out = d['max_output_channels']
 
-                in_ch_indices = list(range(base_idx, max_in + base_idx)) if max_in > 0 else []
-                out_ch_indices = list(range(base_idx, max_out + base_idx)) if max_out > 0 else []
+                in_ch_indices = list(range(max_in)) if max_in > 0 else []
+                out_ch_indices = list(range(max_out)) if max_out > 0 else []
 
                 display_name = clean_device_name(d['name'])
 
@@ -370,7 +369,66 @@ def find_device_id_by_name(
         if fallback_match is None:
             fallback_match = dev_id
 
+    if target_api:
+        return None
+
     return fallback_match
+
+
+def resolve_device_id_by_saved_identity(
+    device_name: str,
+    hostapi: str,
+    *,
+    role_label: str,
+    require_input: bool = False,
+    require_output: bool = False,
+) -> int:
+    """Resolve the current PortAudio ID for the saved user-facing selection."""
+    target_name = (device_name or "").strip()
+    target_api = (hostapi or "").strip()
+    if not target_name or not target_api:
+        raise ValueError(
+            f"Audio {role_label} device selection is incomplete. "
+            "Open Audio Setup and select the audio API and device again."
+        )
+
+    name_key = target_name.casefold()
+    api_key = target_api.casefold()
+    catalog = get_devices_and_channels()
+    name_matches = []
+    api_matches = []
+    for dev_id, info in catalog.items():
+        if require_input and not info.get("input_channels"):
+            continue
+        if require_output and not info.get("output_channels"):
+            continue
+        info_name = str(info.get("name", "")).strip()
+        info_api = str(info.get("hostapi", "")).strip()
+        if info_name.casefold() == name_key:
+            name_matches.append(info_api)
+        if info_api.casefold() == api_key:
+            api_matches.append(info_name)
+        if info_name.casefold() == name_key and info_api.casefold() == api_key:
+            return int(dev_id)
+
+    if name_matches:
+        available = ", ".join(sorted(set(name_matches)))
+        raise ValueError(
+            f"No {role_label} audio device matches saved selection "
+            f"'{target_name}' on '{target_api}'. The device name exists under: {available}. "
+            "Open Audio Setup and select the intended API/device pair."
+        )
+    if api_matches:
+        available = ", ".join(sorted(set(api_matches))[:5])
+        raise ValueError(
+            f"No {role_label} audio device matches saved selection "
+            f"'{target_name}' on '{target_api}'. The host API exists, but with different devices "
+            f"such as: {available}. Open Audio Setup and select the intended API/device pair."
+        )
+    raise ValueError(
+        f"No {role_label} audio device matches saved selection "
+        f"'{target_name}' on '{target_api}'. Open Audio Setup and select the audio API and device again."
+    )
 
 
 class DSPVerificationTool:
@@ -1714,30 +1772,49 @@ class AudioFactory:
         def parse_optional_float(s):
             return None if s.lower() == "none" else float(s)
 
+        def optional_config_int(key: str, fallback: int = -1) -> int:
+            raw = config.get(audio_section, key, fallback=str(fallback)).split('#')[0].split(';')[0].strip()
+            try:
+                return int(float(raw))
+            except ValueError:
+                return fallback
+
         fs = AudioFactory._get_required_config(config, audio_section, 'fs', int)
         sweep_dur_s = AudioFactory._get_required_config(config, sweep_section, 'sweep_dur_s', float)
         sweep_level_dbfs = AudioFactory._get_required_config(config, sweep_section, 'sweep_level_dbfs', float)
 
-        dev_in = AudioFactory._get_required_config(config, audio_section, 'in_dev', int)
-        dev_out = AudioFactory._get_required_config(config, audio_section, 'out_dev', int)
+        configured_in = optional_config_int('in_dev')
+        configured_out = optional_config_int('out_dev')
 
         saved_in_name = config.get(audio_section, 'in_dev_name', fallback='').strip()
         saved_in_api = config.get(audio_section, 'in_dev_hostapi', fallback='').strip()
         saved_out_name = config.get(audio_section, 'out_dev_name', fallback='').strip()
         saved_out_api = config.get(audio_section, 'out_dev_hostapi', fallback='').strip()
 
-        resolved_in = find_device_id_by_name(saved_in_name, saved_in_api, require_input=True)
-        resolved_out = find_device_id_by_name(saved_out_name, saved_out_api, require_output=True)
-        if resolved_in is not None and resolved_in != dev_in:
-            logger.info(
-                f"Input device '{saved_in_name}' moved from ID {dev_in} to ID {resolved_in}; using current ID."
+        if mode == 'mock_interface':
+            dev_in = configured_in
+            dev_out = configured_out
+        else:
+            dev_in = resolve_device_id_by_saved_identity(
+                saved_in_name,
+                saved_in_api,
+                role_label="input",
+                require_input=True,
             )
-            dev_in = resolved_in
-        if resolved_out is not None and resolved_out != dev_out:
-            logger.info(
-                f"Output device '{saved_out_name}' moved from ID {dev_out} to ID {resolved_out}; using current ID."
+            dev_out = resolve_device_id_by_saved_identity(
+                saved_out_name,
+                saved_out_api,
+                role_label="output",
+                require_output=True,
             )
-            dev_out = resolved_out
+        if configured_in >= 0 and dev_in != configured_in:
+            logger.info(
+                f"Input device '{saved_in_name}' is saved as ID {configured_in}; resolved current ID {dev_in}."
+            )
+        if configured_out >= 0 and dev_out != configured_out:
+            logger.info(
+                f"Output device '{saved_out_name}' is saved as ID {configured_out}; resolved current ID {dev_out}."
+            )
 
         hw_config = {
             'dev_in': dev_in,

@@ -136,7 +136,7 @@ EDITABLE_SCHEMA: Dict[str, List[SchemaEntry]] = {
         ("in_dev", "int", "Input device index (see `python -m sounddevice`). ASIO recommended.", None),
         ("out_dev", "int", "Output device index (see `python -m sounddevice`).", None),
         ("in_ch_mic", "int",
-         "Input channel for the measurement microphone (0-based for ASIO, 1-based for WASAPI).", None),
+         "Input channel for the measurement microphone (0-based for all audio APIs).", None),
         ("in_ch_loop", "int", "Input channel used as electrical loopback / reference.", None),
         ("out_ch_spkr", "int", "Output channel driving the speaker under test.", None),
         ("out_ch_ref", "int",

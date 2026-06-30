@@ -56,6 +56,35 @@ def test_mock_dro_fields_follow_selected_grbl_streamer_type(tmp_path):
     assert all(field.parentWidget().isHidden() for field in mock_fields)
 
 
+def test_settings_dialog_hides_audio_device_selection_fields(tmp_path):
+    _app()
+    config_file = tmp_path / "config.ini"
+    config_file.write_text(
+        "[audio]\n"
+        "mode = hardware\n"
+        "in_dev = 4\n"
+        "out_dev = 4\n"
+        "in_dev_name = MOTU M Series\n"
+        "in_dev_hostapi = ASIO\n"
+        "out_dev_name = MOTU M Series\n"
+        "out_dev_hostapi = ASIO\n",
+        encoding="utf-8",
+    )
+
+    dialog = SettingsDialog(str(config_file), lambda: None)
+
+    assert ("audio", "mode") in dialog.inputs
+    for key in (
+        "in_dev",
+        "out_dev",
+        "in_dev_name",
+        "in_dev_hostapi",
+        "out_dev_name",
+        "out_dev_hostapi",
+    ):
+        assert ("audio", key) not in dialog.inputs
+
+
 def test_settings_dialog_saves_cylindrical_motion_manager_fields(tmp_path):
     _app()
     config_file = tmp_path / "config.ini"

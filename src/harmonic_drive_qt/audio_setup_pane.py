@@ -44,6 +44,10 @@ from .qt_compat import (
 )
 
 
+PREFERRED_SAMPLE_RATE = 48000
+DEFAULT_PROTECTION_HPF_HZ = "500.0"
+
+
 def _read_config(config_file: str) -> configparser.ConfigParser:
     parser = configparser.ConfigParser(inline_comment_prefixes=("#", ";"))
     parser.optionxform = str  # type: ignore[assignment]
@@ -98,6 +102,33 @@ def _device_options_for_api(catalog: dict, capability: str, audio_api: str) -> d
     }
 
 
+def _resolve_config_device_id(
+    parser: configparser.ConfigParser,
+    catalog: dict,
+    role: str,
+    capability: str,
+) -> int:
+    configured_id = _int_value(parser, "audio", f"{role}_dev")
+    saved_name = _value(parser, "audio", f"{role}_dev_name", "")
+    saved_api = _value(parser, "audio", f"{role}_dev_hostapi", "")
+    if not saved_name:
+        return configured_id
+
+    target_name = saved_name.strip().casefold()
+    target_api = saved_api.strip().casefold()
+    channel_key = "input_channels" if capability == "input" else "output_channels"
+    for dev_id, info in catalog.items():
+        if not info.get(channel_key):
+            continue
+        if str(info.get("name", "")).strip().casefold() != target_name:
+            continue
+        if target_api and str(info.get("hostapi", "")).strip().casefold() != target_api:
+            continue
+        return int(dev_id)
+
+    return configured_id
+
+
 def _format_dbfs(value: float | None) -> str:
     if value is None or value <= -119.0:
         return "-inf dBFS"
@@ -109,6 +140,22 @@ SPL_WEIGHTING_OPTIONS = {
     "c_weighted_inputs": "C",
     "inputs": "None",
 }
+DEFAULT_SPL_WEIGHTING = "c_weighted_inputs"
+
+
+def _spl_weighting_key(value: Any, fallback: str = DEFAULT_SPL_WEIGHTING) -> str:
+    text = str(value or "").strip()
+    if text in SPL_WEIGHTING_OPTIONS:
+        return text
+    target = text.casefold()
+    for key, label in SPL_WEIGHTING_OPTIONS.items():
+        if label.casefold() == target:
+            return key
+    return fallback
+
+
+def _spl_weighting_label(value: Any) -> str:
+    return SPL_WEIGHTING_OPTIONS.get(_spl_weighting_key(value), SPL_WEIGHTING_OPTIONS[DEFAULT_SPL_WEIGHTING])
 
 
 def _weighting_curve_image_path() -> str:
@@ -163,8 +210,8 @@ class AudioSetupPane(QWidget):
 
         self.api_select = QComboBox()
         api_options = _audio_api_options(self.catalog)
-        in_dev_id = _int_value(parser, "audio", "in_dev")
-        out_dev_id = _int_value(parser, "audio", "out_dev")
+        in_dev_id = _resolve_config_device_id(parser, self.catalog, "in", "input")
+        out_dev_id = _resolve_config_device_id(parser, self.catalog, "out", "output")
         current_api = (
             _value(parser, "audio", "in_dev_hostapi", "")
             or _value(parser, "audio", "out_dev_hostapi", "")
@@ -202,10 +249,10 @@ class AudioSetupPane(QWidget):
         self._populate_devices("out", out_dev_id)
         self._populate_channels("in")
         self._populate_channels("out")
-        self._set_combo_data(self.in_mic_channel, _int_value(parser, "audio", "in_ch_mic"))
-        self._set_combo_data(self.in_loop_channel, _int_value(parser, "audio", "in_ch_loop"))
-        self._set_combo_data(self.out_speaker_channel, _int_value(parser, "audio", "out_ch_spkr"))
-        self._set_combo_data(self.out_ref_channel, _int_value(parser, "audio", "out_ch_ref"))
+        self._set_combo_data(self.in_mic_channel, _int_value(parser, "audio", "in_ch_mic", 0))
+        self._set_combo_data(self.in_loop_channel, _int_value(parser, "audio", "in_ch_loop", 1))
+        self._set_combo_data(self.out_speaker_channel, _int_value(parser, "audio", "out_ch_spkr", 0))
+        self._set_combo_data(self.out_ref_channel, _int_value(parser, "audio", "out_ch_ref", 1))
 
         self.level = self._spin(_float_value(parser, "sweep", "sweep_level_dbfs", -20.0), -120, 0, "", 1)
         self.level.setFixedWidth(110)
@@ -335,10 +382,11 @@ class AudioSetupPane(QWidget):
         row = QHBoxLayout(group)
         row.setSpacing(8)
         current_calibration = project.get_project_data().get("stage5_vars")
-        current_scale = current_spl = None
+        current_scale = current_spl = current_weighting = None
         if isinstance(current_calibration, dict):
             current_scale = current_calibration.get("frd_db_offset")
             current_spl = current_calibration.get("spl_db")
+            current_weighting = current_calibration.get("spl_meter_weighting")
         self.held_cal_level_dbfs = None
         self.cal_level = QLabel(_format_dbfs(None))
         self.cal_level.setStyleSheet("font-family: Consolas; font-weight: 700; font-size: 15px;")
@@ -346,13 +394,14 @@ class AudioSetupPane(QWidget):
         self._set_combo_items(
             self.cal_weighting,
             {key: label for key, label in SPL_WEIGHTING_OPTIONS.items()},
-            "a_weighted_inputs",
+            _spl_weighting_key(current_weighting),
             styled_field=True,
             fit_to_contents=True,
         )
         self.cal_weighting.setMinimumContentsLength(len("None"))
         self.cal_weighting.setFixedWidth(self.cal_weighting.fontMetrics().horizontalAdvance("None") + 30)
         self.cal_weighting.currentIndexChanged.connect(self.on_cal_weighting_changed)
+        project.update_spl_calibration({"spl_meter_weighting": _spl_weighting_label(self._combo_data(self.cal_weighting))})
         try:
             spl_value = 0.0 if current_spl is None else float(current_spl)
         except (TypeError, ValueError):
@@ -400,7 +449,7 @@ class AudioSetupPane(QWidget):
         self.hpf_enable = QCheckBox("Protection HPF")
         self.hpf_enable.setChecked(hpf_raw.strip().lower() not in ("", "none", "0"))
         self.hpf_enable.setStyleSheet(toggle_style())
-        self.hpf = QLineEdit(_optional_float_text(parser, "sweep", "protect_hpf_hz"))
+        self.hpf = QLineEdit(_optional_float_text(parser, "sweep", "protect_hpf_hz") or DEFAULT_PROTECTION_HPF_HZ)
         self.hpf.setFixedWidth(120)
         self.hpf_order = self._spin(_int_value(parser, "sweep", "protect_hpf_order", 1), 1, 8, "", 0)
         self.hpf_order.setFixedWidth(86)
@@ -641,7 +690,7 @@ class AudioSetupPane(QWidget):
             current = next(iter(opts))
         self._set_combo_items(combo, opts, current)
 
-    def _populate_channels(self, role: str) -> None:
+    def _populate_channels(self, role: str, reset: bool = False) -> None:
         capability = "input" if role == "in" else "output"
         dev_id = self.selected_device_id(role)
         opts = _channel_options(self.catalog, dev_id, capability)
@@ -650,18 +699,21 @@ class AudioSetupPane(QWidget):
             if role == "in"
             else (self.out_speaker_channel, self.out_ref_channel)
         )
-        for combo in targets:
-            current = combo.currentData()
+        for index, combo in enumerate(targets):
+            current = opts[min(index, len(opts) - 1)] if reset and opts else combo.currentData()
             if current not in opts and opts:
-                current = opts[0]
+                current = opts[min(index, len(opts) - 1)]
             self._set_combo_items(combo, opts, current)
 
-    def _populate_sample_rates(self, current=None) -> None:
+    def _populate_sample_rates(self, current=None, prefer_default: bool = False) -> None:
         rates = get_supported_sample_rates(self.selected_device_id("in"), self.selected_device_id("out"))
         if not rates and current:
             rates = [int(current)]
-        elif rates and current not in rates:
-            current = rates[0]
+        elif rates:
+            if prefer_default and PREFERRED_SAMPLE_RATE in rates:
+                current = PREFERRED_SAMPLE_RATE
+            elif current not in rates:
+                current = PREFERRED_SAMPLE_RATE if PREFERRED_SAMPLE_RATE in rates else rates[0]
         self._set_combo_items(
             self.fs,
             _sample_rate_options(rates),
@@ -672,18 +724,20 @@ class AudioSetupPane(QWidget):
     def refresh_devices_for_api(self) -> None:
         self._populate_devices("in", self.selected_device_id("in"))
         self._populate_devices("out", self.selected_device_id("out"))
-        self._populate_channels("in")
-        self._populate_channels("out")
-        self._populate_sample_rates(self._combo_data(self.fs))
+        self._populate_channels("in", reset=True)
+        self._populate_channels("out", reset=True)
+        self._populate_sample_rates(self._combo_data(self.fs), prefer_default=True)
         self.apply_audio_setup_now()
 
     def on_device_change(self, role: str) -> None:
-        self._populate_channels(role)
-        self._populate_sample_rates(self._combo_data(self.fs))
+        self._populate_channels(role, reset=True)
+        self._populate_sample_rates(self._combo_data(self.fs), prefer_default=True)
         self.apply_audio_setup_now()
 
     def update_hpf_field_state(self) -> None:
         enabled = self.hpf_enable.isChecked()
+        if enabled and not self.hpf.text().strip():
+            self.hpf.setText(DEFAULT_PROTECTION_HPF_HZ)
         self.hpf.setEnabled(enabled)
         self.hpf_order.setEnabled(enabled)
         self.hpf_corr.setEnabled(enabled)
@@ -725,8 +779,6 @@ class AudioSetupPane(QWidget):
         in_name, in_api = self._device_metadata("in")
         out_name, out_api = self._device_metadata("out")
         values = {
-            ("audio", "in_dev"): self.selected_device_id("in"),
-            ("audio", "out_dev"): self.selected_device_id("out"),
             ("audio", "in_ch_mic"): self._combo_data(self.in_mic_channel),
             ("audio", "in_ch_loop"): self._combo_data(self.in_loop_channel),
             ("audio", "out_ch_spkr"): self._combo_data(self.out_speaker_channel),
@@ -755,7 +807,11 @@ class AudioSetupPane(QWidget):
             ("sweep", "h3_test_db"): self.h3.text(),
         }
         try:
-            save_config_values(self.config_file, values, self.backend.load)
+            save_config_values(
+                self.config_file,
+                values,
+                self.backend.load,
+            )
             fresh = _read_config(self.config_file)
             project.update_audio_setup(_section_dict(fresh, "audio"), _section_dict(fresh, "sweep"))
             self.saved.emit()
@@ -818,6 +874,7 @@ class AudioSetupPane(QWidget):
         self.held_cal_level_dbfs = None
         self.cal_level.setText(_format_dbfs(None))
         self.update_cal_level_label()
+        project.update_spl_calibration({"spl_meter_weighting": _spl_weighting_label(self._combo_data(self.cal_weighting))})
 
     def calculate_spl_offset(self) -> None:
         if self.held_cal_level_dbfs is None:
@@ -830,6 +887,7 @@ class AudioSetupPane(QWidget):
             self.spl_reading.value() if self.held_cal_level_dbfs is not None else None,
             self.held_cal_level_dbfs,
             self.spl_offset.value(),
+            _spl_weighting_label(self._combo_data(self.cal_weighting)),
         )
         if calibration is None:
             return False
