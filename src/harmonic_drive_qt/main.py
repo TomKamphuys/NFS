@@ -26,15 +26,32 @@ def apply_app_style(app: QApplication) -> None:
     app.setStyleSheet(app_stylesheet())
 
 
+def _startup_warning_is_audio_setup(message: str) -> bool:
+    text = str(message).casefold()
+    return any(
+        marker in text
+        for marker in (
+            "open audio setup",
+            "audio setup",
+            "audio device",
+            "audio api",
+        )
+    )
+
+
 def show_startup_warning(window: MainWindow, backend: BackendManager) -> None:
     if not backend.load_warning:
         return
+    is_audio_setup_warning = _startup_warning_is_audio_setup(backend.load_warning)
     QMessageBox.warning(
         window,
-        "Scanner Startup Warning",
+        "Audio Setup Warning" if is_audio_setup_warning else "Scanner Startup Warning",
         backend.load_warning,
     )
-    window.show_settings("scanner")
+    if is_audio_setup_warning:
+        window.show_audio()
+    else:
+        window.show_settings("scanner")
 
 
 def main() -> int:
@@ -63,7 +80,10 @@ def main() -> int:
         worker.signals.finished.connect(lambda: show_startup_warning(window, backend))
 
         def show_unexpected_load_failure(message: str) -> None:
-            backend.load_warning = f"The scanner backend did not load:\n\n{message}"
+            if _startup_warning_is_audio_setup(message):
+                backend.load_warning = f"Audio setup needs attention:\n\n{message}"
+            else:
+                backend.load_warning = f"The scanner backend did not load:\n\n{message}"
             show_startup_warning(window, backend)
 
         worker.signals.failed.connect(show_unexpected_load_failure)

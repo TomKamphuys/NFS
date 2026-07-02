@@ -544,6 +544,7 @@ class ControlPane(QWidget):
     def _save_measurement_project_snapshot(self) -> None:
         title = project.get_project_name() or project.DEFAULT_PROJECT_NAME
         project.set_project_name(title)
+        project.apply_system_calibration_to_project(self.backend.config_file)
         saved_dir = project.save_project_to(project.get_project_dir(), title, self.backend.config_file)
         self.backend.set_project_dir(saved_dir)
 

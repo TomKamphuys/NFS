@@ -13,10 +13,26 @@ from loguru import logger
 
 LEGACY_PROJECT_FILENAME = "project.json"
 APP_SECTION = "app"
+CALIBRATION_SECTION = "calibration"
 DEFAULT_PROJECT_NAME = "HALS_Project"
 TEMP_PROJECT_DIR = Path(tempfile.gettempdir()) / "HALS_working_project"
 GLOBAL_SWEEP_CONFIG_KEYS = {"sweep_level_dbfs"}
 DEFAULT_CONFIG_FILENAME = "config_default.ini"
+NESTED_CALIBRATION_KEYS = {
+    "output_voltage_calibration",
+    "voltage_calibration",
+}
+INPUT_CALIBRATION_KEYS = {
+    "frd_db_offset",
+    "spl_db",
+    "reference_input_rms_dbfs",
+    "spl_meter_weighting",
+    "input_calibration_method",
+    "voltage_calibration",
+}
+PROJECT_CALIBRATION_KEYS = INPUT_CALIBRATION_KEYS | {
+    "output_voltage_calibration",
+}
 
 _project_dir = TEMP_PROJECT_DIR
 _project_data: Dict[str, Any] = {}
@@ -309,6 +325,146 @@ def build_spl_calibration(
     }
     if spl_meter_weighting is not None:
         calibration["spl_meter_weighting"] = str(spl_meter_weighting)
+    return calibration
+
+
+def _flatten_calibration(calibration: Dict[str, Any]) -> Dict[str, Any]:
+    flattened: Dict[str, Any] = {}
+    for key, value in calibration.items():
+        if key in NESTED_CALIBRATION_KEYS and isinstance(value, dict):
+            for child_key, child_value in value.items():
+                flattened[f"{key}.{child_key}"] = child_value
+        else:
+            flattened[key] = value
+    return flattened
+
+
+def _parse_calibration_value(key: str, value: Any) -> Any:
+    text = str(value).strip()
+    if key in {"spl_meter_weighting", "input_calibration_method"}:
+        return text
+    if text.lower() == "none":
+        return None
+    try:
+        return float(text)
+    except ValueError:
+        return text
+
+
+def _unflatten_calibration(values: Dict[str, Any]) -> Dict[str, Any]:
+    calibration: Dict[str, Any] = {}
+    for key, value in values.items():
+        value_key = key.split(".", 1)[-1]
+        parsed = _parse_calibration_value(value_key, value)
+        if "." in key:
+            parent, child = key.split(".", 1)
+            if parent in NESTED_CALIBRATION_KEYS:
+                nested = calibration.get(parent)
+                if not isinstance(nested, dict):
+                    nested = {}
+                    calibration[parent] = nested
+                nested[child] = parsed
+                continue
+        calibration[key] = parsed
+    return calibration
+
+
+def get_system_calibration(config_file: str | Path = "config.ini") -> Dict[str, Any]:
+    parser = configparser.ConfigParser(inline_comment_prefixes=("#", ";"))
+    parser.optionxform = str  # type: ignore[assignment]
+    parser.read(config_file)
+    if not parser.has_section(CALIBRATION_SECTION):
+        return {}
+    return _unflatten_calibration(dict(parser.items(CALIBRATION_SECTION)))
+
+
+def update_system_calibration(
+    config_file: str | Path,
+    calibration: Dict[str, Any],
+    *,
+    replace_input: bool = False,
+) -> Dict[str, Any]:
+    current = get_system_calibration(config_file)
+    if replace_input:
+        for key in INPUT_CALIBRATION_KEYS:
+            current.pop(key, None)
+    current.update(calibration)
+
+    parser = configparser.ConfigParser(inline_comment_prefixes=("#", ";"))
+    parser.optionxform = str  # type: ignore[assignment]
+    parser.read(config_file)
+    if not parser.has_section(CALIBRATION_SECTION):
+        parser.add_section(CALIBRATION_SECTION)
+    parser.remove_section(CALIBRATION_SECTION)
+    parser.add_section(CALIBRATION_SECTION)
+    for key, value in _flatten_calibration(current).items():
+        parser.set(CALIBRATION_SECTION, key, "None" if value is None else str(value))
+    with open(config_file, "w", encoding="utf-8") as f:
+        parser.write(f)
+    return current
+
+
+def apply_system_calibration_to_project(config_file: str | Path = "config.ini") -> None:
+    current = _project_data.get("stage5_vars")
+    if not isinstance(current, dict):
+        current = {}
+    for key in PROJECT_CALIBRATION_KEYS:
+        current.pop(key, None)
+    system_calibration = get_system_calibration(config_file)
+    current.update(system_calibration)
+    if current:
+        _project_data["stage5_vars"] = current
+    else:
+        _project_data.pop("stage5_vars", None)
+    _project_data.pop("spl_calibration", None)
+
+
+def build_voltage_calibration(
+    output_level_dbfs: Any,
+    output_vrms: Any,
+    amplifier_gain_db: Any = None,
+    reference_input_rms_dbfs: Any = None,
+    microphone_sensitivity_mv_pa: Any = None,
+) -> Dict[str, Any]:
+    output_level_float = float(output_level_dbfs)
+    output_vrms_float = float(output_vrms)
+    if output_vrms_float <= 0.0:
+        raise ValueError("Output voltage must be greater than zero.")
+
+    calibration: Dict[str, Any] = {
+        "output_voltage_calibration": {
+            "output_level_dbfs": output_level_float,
+            "output_vrms": output_vrms_float,
+        }
+    }
+    if amplifier_gain_db is not None:
+        calibration["output_voltage_calibration"]["amplifier_gain_db"] = float(amplifier_gain_db)
+
+    if reference_input_rms_dbfs is None and microphone_sensitivity_mv_pa is None:
+        return calibration
+    if reference_input_rms_dbfs is None or microphone_sensitivity_mv_pa is None:
+        raise ValueError("Input dBFS and microphone sensitivity are both required for voltage SPL calibration.")
+
+    sensitivity_v_pa = float(microphone_sensitivity_mv_pa) / 1000.0
+    if sensitivity_v_pa <= 0.0:
+        raise ValueError("Microphone sensitivity must be greater than zero.")
+    reference_float = float(reference_input_rms_dbfs)
+    reference_pa = output_vrms_float / sensitivity_v_pa
+    spl_db = 94.0 + 20.0 * math.log10(reference_pa)
+    calibration.update(
+        build_spl_calibration(
+            spl_db,
+            reference_float,
+            spl_meter_weighting="Unweighted",
+        )
+        or {}
+    )
+    calibration["input_calibration_method"] = "voltage"
+    calibration["voltage_calibration"] = {
+        "microphone_sensitivity_mv_pa": float(microphone_sensitivity_mv_pa),
+        "reference_input_rms_dbfs": reference_float,
+        "reference_input_vrms": output_vrms_float,
+    }
     return calibration
 
 

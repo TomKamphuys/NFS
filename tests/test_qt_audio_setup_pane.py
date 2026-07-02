@@ -8,7 +8,7 @@ pytest.importorskip("PySide6")
 
 from harmonic_drive_qt.audio_setup_pane import AudioSetupPane
 from harmonic_drive import project
-from harmonic_drive_qt.qt_compat import QApplication, QLabel, QMessageBox, QSizePolicy
+from harmonic_drive_qt.qt_compat import QApplication, QLabel, QMessageBox, QGroupBox, QSizePolicy
 from harmonic_drive_qt.styles import app_stylesheet
 from harmonic_drive_qt.styles import toggle_style
 
@@ -469,11 +469,13 @@ def test_audio_pane_updates_config_and_project_memory_without_project_json(tmp_p
         data = project.get_project_data()
         assert data["sweep_settings"]["sweep_dur_s"] == "2.5"
         assert "sweep_level_dbfs" not in data["sweep_settings"]
-        assert data["stage5_vars"] == {
+        assert "stage5_vars" not in data
+        assert project.get_system_calibration(str(config_file)) == {
             "frd_db_offset": 109.75,
             "spl_db": 82.0,
             "reference_input_rms_dbfs": -27.5,
             "spl_meter_weighting": "C",
+            "input_calibration_method": "spl_meter",
         }
         assert not list(session_dir.glob("*_project.json"))
         content = config_file.read_text(encoding="utf-8")
@@ -550,7 +552,6 @@ def test_audio_auto_apply_does_not_overwrite_saved_calibration(tmp_path, monkeyp
             "frd_db_offset": 100.0,
             "spl_db": 80.0,
             "reference_input_rms_dbfs": -20.0,
-            "spl_meter_weighting": "C",
         }
     finally:
         pane.auto_apply_timer.stop()
@@ -604,12 +605,23 @@ def test_audio_pane_loads_saved_calibration_fields_without_live_mic_level(tmp_pa
     )
 
     project.set_project_dir(tmp_path / "session", str(config_file))
-    project.update_spl_calibration(
+    project.update_system_calibration(
+        str(config_file),
         {
             "frd_db_offset": 109.75,
             "spl_db": 82.0,
             "reference_input_rms_dbfs": -27.5,
             "spl_meter_weighting": "A",
+            "input_calibration_method": "spl_meter",
+        },
+        replace_input=True,
+    )
+    project.update_spl_calibration(
+        {
+            "frd_db_offset": 120.0,
+            "spl_db": 90.0,
+            "reference_input_rms_dbfs": -30.0,
+            "spl_meter_weighting": "C",
         }
     )
 
@@ -687,7 +699,7 @@ def test_spl_calibration_weighting_selector_changes_meter_source_and_label(tmp_p
         assert pane.cal_label.text() == "Mic RMS\ndBFS(C)"
         assert pane.held_cal_level_dbfs == -20.0
         assert pane.cal_level.text() == "-20.0 dBFS"
-        assert project.get_project_data()["stage5_vars"]["spl_meter_weighting"] == "C"
+        assert "stage5_vars" not in project.get_project_data()
 
         pane._set_combo_data(pane.cal_weighting, "a_weighted_inputs")
         for _ in range(5):
@@ -695,15 +707,15 @@ def test_spl_calibration_weighting_selector_changes_meter_source_and_label(tmp_p
         assert pane.cal_label.text() == "Mic RMS\ndBFS(A)"
         assert pane.held_cal_level_dbfs == -25.0
         assert pane.cal_level.text() == "-25.0 dBFS"
-        assert project.get_project_data()["stage5_vars"]["spl_meter_weighting"] == "A"
+        assert "stage5_vars" not in project.get_project_data()
 
         pane._set_combo_data(pane.cal_weighting, "inputs")
         for _ in range(5):
             pane.refresh_cal_meter()
-        assert pane.cal_label.text() == "Mic RMS\ndBFS None"
+        assert pane.cal_label.text() == "Mic RMS\ndBFS Unweighted"
         assert pane.held_cal_level_dbfs == -15.0
         assert pane.cal_level.text() == "-15.0 dBFS"
-        assert project.get_project_data()["stage5_vars"]["spl_meter_weighting"] == "None"
+        assert "stage5_vars" not in project.get_project_data()
         assert pane.spl_reading.width() < 100
         assert pane.spl_offset.width() < 100
 
@@ -777,15 +789,123 @@ def test_save_spl_calibration_can_create_missing_project_json_after_prompt(tmp_p
         pane.spl_offset.setValue(109.75)
         pane.save_spl_calibration()
 
-        saved_file = session_dir / "Speaker_A_project.json"
-        content = saved_file.read_text(encoding="utf-8")
-        assert '"frd_db_offset": 109.75' in content
-        assert '"spl_db": 82.0' in content
-        assert '"reference_input_rms_dbfs": -27.5' in content
-        assert '"spl_meter_weighting": "C"' in content
-        assert '"sweep_dur_s": "2.5"' in content
-        assert '"output_filename": "Speaker_A_grid.csv"' in content
-        assert "sweep_level_dbfs" not in content
+        assert not (session_dir / "Speaker_A_project.json").exists()
+        assert project.get_system_calibration(str(config_file)) == {
+            "frd_db_offset": 109.75,
+            "spl_db": 82.0,
+            "reference_input_rms_dbfs": -27.5,
+            "spl_meter_weighting": "C",
+            "input_calibration_method": "spl_meter",
+        }
+    finally:
+        pane.auto_apply_timer.stop()
+        pane.cal_timer.stop()
+        pane.deleteLater()
+
+
+def test_voltage_calibration_can_save_output_only_then_input_spl(tmp_path, monkeypatch):
+    _app()
+    config_file = tmp_path / "config.ini"
+    config_file.write_text(
+        "[audio]\n"
+        "in_dev = 1\n"
+        "out_dev = 2\n"
+        "in_ch_mic = 1\n"
+        "in_ch_loop = 0\n"
+        "out_ch_spkr = 0\n"
+        "out_ch_ref = 1\n"
+        "fs = 48000\n"
+        "blocksize = 2048\n"
+        "wasapi_exclusive = False\n"
+        "in_dev_hostapi = ASIO\n"
+        "out_dev_hostapi = ASIO\n"
+        "[sweep]\n"
+        "sweep_level_dbfs = -20.0\n"
+        "sweep_dur_s = 1.0\n"
+        "num_sweeps = 1\n"
+        "protect_hpf_hz = None\n"
+        "protect_hpf_order = 1\n"
+        "protect_hpf_correction = False\n"
+        "protect_hpf_corr_db_cap = 12.0\n"
+        "naming_convention = dimitri\n"
+        "align_to_first_marker = False\n"
+        "pre_sil_ms = 0.0\n"
+        "post_sil_ms = 0.0\n"
+        "mic_tail_taper_ms = 0.0\n"
+        "debug_saves = False\n"
+        "h2_test_db = None\n"
+        "h3_test_db = None\n",
+        encoding="utf-8",
+    )
+    catalog = {
+        1: {"name": "Input", "hostapi": "ASIO", "input_channels": [0, 1], "output_channels": []},
+        2: {"name": "Output", "hostapi": "ASIO", "input_channels": [], "output_channels": [0, 1]},
+    }
+    meter_state = {
+        "active": True,
+        "inputs": [{"peak_dbfs": -90.0, "rms_dbfs": -95.0}, {"peak_dbfs": -12.0, "rms_dbfs": -30.0}],
+        "c_weighted_inputs": [{"peak_dbfs": -90.0, "rms_dbfs": -95.0}, {"peak_dbfs": -12.0, "rms_dbfs": -30.0}],
+    }
+
+    monkeypatch.setattr("harmonic_drive_qt.audio_setup_pane.get_devices_and_channels", lambda: catalog)
+    monkeypatch.setattr(
+        "harmonic_drive_qt.audio_setup_pane.get_supported_sample_rates",
+        lambda _in_dev, _out_dev: [48000],
+    )
+    monkeypatch.setattr("harmonic_drive_qt.audio_setup_pane.get_audio_meter_state", lambda: meter_state)
+    monkeypatch.setattr(QMessageBox, "information", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        lambda *args, **kwargs: QMessageBox.StandardButton.Save,
+    )
+
+    session_dir = tmp_path / "session"
+    project.set_project_dir(session_dir, str(config_file))
+    project.set_project_name("Voltage Speaker")
+    pane = AudioSetupPane(Mock(), str(config_file))
+    try:
+        assert not any("Measured output" in group.toolTip() for group in pane.findChildren(QGroupBox))
+        assert any(
+            label.text() == "?" and "Measured output" in label.toolTip()
+            for label in pane.findChildren(QLabel)
+        )
+        assert pane.voltage_input_label.text() == "Input RMS\ndBFS"
+        assert "#831843" in pane.voltage_input_label.styleSheet()
+
+        pane.level.setValue(-20.0)
+        pane.voltage_output_vrms.setValue(0.25)
+        pane.save_output_voltage_calibration()
+
+        data = project.get_system_calibration(str(config_file))
+        assert data["output_voltage_calibration"] == {
+            "output_level_dbfs": -20.0,
+            "output_vrms": 0.25,
+        }
+        assert "voltage_calibration" not in data
+        assert "250 mVrms interface output" in pane.sweep_level_voltage.text()
+        assert "speaker input" not in pane.sweep_level_voltage.text()
+
+        pane.voltage_amp_gain.setValue(26.0)
+        pane.update_sweep_voltage_label()
+        assert "speaker input" in pane.sweep_level_voltage.text()
+
+        for _ in range(5):
+            pane.refresh_cal_meter()
+        pane.mic_sensitivity.setValue(12.5)
+        pane.save_voltage_spl_calibration()
+
+        data = project.get_system_calibration(str(config_file))
+        assert data["output_voltage_calibration"]["amplifier_gain_db"] == 26.0
+        assert data["voltage_calibration"] == {
+            "microphone_sensitivity_mv_pa": 12.5,
+            "reference_input_rms_dbfs": -30.0,
+            "reference_input_vrms": 0.25,
+        }
+        assert data["spl_meter_weighting"] == "Unweighted"
+        assert data["frd_db_offset"] == 150.02
+        assert pane.cal_weighting.currentData() == "inputs"
+        assert not (session_dir / "Voltage_Speaker_project.json").exists()
     finally:
         pane.auto_apply_timer.stop()
         pane.cal_timer.stop()

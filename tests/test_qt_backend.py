@@ -1,5 +1,5 @@
 import harmonic_drive_qt.backend as qt_backend
-from harmonic_drive_qt.backend import BackendManager, format_scanner_error
+from harmonic_drive_qt.backend import BackendManager, format_nfs_error, format_scanner_error
 
 
 class FakeAudio:
@@ -34,6 +34,21 @@ def test_format_scanner_error_for_nonresponsive_controller():
     assert message == "Scanner not responding on the selected port. Check the port and controller type."
 
 
+def test_format_nfs_error_for_audio_setup_failure():
+    message = format_nfs_error(
+        RuntimeError(
+            "Could not find audio device 'RME' on 'ASIO'. "
+            "Open Audio Setup and select the audio API and device again."
+        )
+    )
+
+    assert message == (
+        "Audio setup needs attention: Could not find audio device 'RME' on 'ASIO'. "
+        "Open Audio Setup and select the audio API and device again."
+    )
+    assert "Near Field Scanner unavailable" not in message
+
+
 def test_backend_load_keeps_ui_available_when_scanner_port_missing(monkeypatch):
     def raise_missing_port(_config_file):
         raise Exception("could not open port 'COM5': FileNotFoundError")
@@ -52,6 +67,48 @@ def test_backend_load_keeps_ui_available_when_scanner_port_missing(monkeypatch):
     assert manager.load_warning == (
         "Scanner connection failed on COM5. Check the port and controller connection."
     )
+
+
+def test_scanner_command_reports_load_warning_when_scanner_missing():
+    manager = BackendManager("config.ini")
+    try:
+        manager.load_warning = "Scanner not responding on the selected port."
+
+        try:
+            manager.scanner_command("home")
+        except RuntimeError as exc:
+            message = str(exc)
+        else:
+            raise AssertionError("scanner_command should fail without a scanner")
+    finally:
+        manager.shutdown()
+
+    assert message == "Scanner not responding on the selected port."
+
+
+def test_backend_load_reports_audio_setup_warning_without_scanner_label(monkeypatch):
+    scanner = object()
+
+    def raise_audio_setup_error(_scanner, _config_file):
+        raise RuntimeError(
+            "Could not find audio device 'RME' on 'ASIO'. "
+            "Open Audio Setup and select the audio API and device again."
+        )
+
+    monkeypatch.setattr(qt_backend, "setup_logging", lambda *args, **kwargs: None)
+    monkeypatch.setattr(qt_backend.ScannerFactory, "create", lambda _config_file: scanner)
+    monkeypatch.setattr(qt_backend.NearFieldScannerFactory, "create", raise_audio_setup_error)
+
+    manager = BackendManager("config.ini")
+    try:
+        manager.load()
+    finally:
+        manager.shutdown()
+
+    assert manager.scanner is scanner
+    assert manager.nfs is None
+    assert manager.load_warning.startswith("Audio setup needs attention:")
+    assert "Near Field Scanner unavailable" not in manager.load_warning
 
 
 def test_test_sweep_uses_audio_backend_when_scanner_backend_is_missing(monkeypatch):

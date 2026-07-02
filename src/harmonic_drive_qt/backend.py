@@ -25,6 +25,22 @@ from nfs.logging_config import setup_logging
 from .qt_compat import QObject, QRunnable, Signal, Slot
 
 
+def is_audio_setup_error(message: str) -> bool:
+    text = str(message).casefold()
+    return any(
+        marker in text
+        for marker in (
+            "open audio setup",
+            "audio setup",
+            "audio device",
+            "audio api",
+            "host api",
+            "input device",
+            "output device",
+        )
+    )
+
+
 def format_scanner_error(exc: Exception) -> str:
     text = str(exc)
     match = re.search(r"port '([^']+)'", text, re.IGNORECASE)
@@ -36,6 +52,13 @@ def format_scanner_error(exc: Exception) -> str:
     if "No GRBL response" in text:
         return "Scanner not responding on the selected port. Check the port and controller type."
     return f"Scanner unavailable: {exc}"
+
+
+def format_nfs_error(exc: Exception) -> str:
+    text = str(exc)
+    if is_audio_setup_error(text):
+        return f"Audio setup needs attention: {text}"
+    return f"Near Field Scanner unavailable: {text}"
 
 
 class BackendManager:
@@ -131,9 +154,12 @@ class BackendManager:
                 set_status("Initializing Near Field Scanner")
                 self.nfs = NearFieldScannerFactory.create(self.scanner, self.config_file)
             except Exception as exc:
-                self.load_warning = f"Near Field Scanner unavailable: {exc}"
+                self.load_warning = format_nfs_error(exc)
                 logger.error(self.load_warning)
-                set_status("Near Field Scanner unavailable; continuing")
+                if is_audio_setup_error(self.load_warning):
+                    set_status("Audio setup unavailable; continuing")
+                else:
+                    set_status("Near Field Scanner unavailable; continuing")
 
         if self.project_dir is not None:
             self.set_project_dir(self.project_dir)
@@ -164,22 +190,22 @@ class BackendManager:
 
     def jog(self, method_name: str, value: float) -> None:
         if self.scanner is None:
-            raise RuntimeError("Scanner is not loaded")
+            raise RuntimeError(self.load_warning or "Scanner is not loaded")
         getattr(self.scanner, method_name)(value)
 
     def scanner_command(self, method_name: str) -> None:
         if self.scanner is None:
-            raise RuntimeError("Scanner is not loaded")
+            raise RuntimeError(self.load_warning or "Scanner is not loaded")
         getattr(self.scanner, method_name)()
 
     def set_as_zero(self) -> None:
         if self.scanner is None:
-            raise RuntimeError("Scanner is not loaded")
+            raise RuntimeError(self.load_warning or "Scanner is not loaded")
         self.scanner.set_as_zero()
 
     def set_speaker_center_above_stool(self, height: float = 0.0) -> None:
         if self.scanner is None:
-            raise RuntimeError("Scanner is not loaded")
+            raise RuntimeError(self.load_warning or "Scanner is not loaded")
         self.scanner.set_speaker_center_above_stool(height)
 
     def take_single_measurement(self) -> None:

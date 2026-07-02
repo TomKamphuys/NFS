@@ -2,6 +2,8 @@ import configparser
 import tempfile
 from pathlib import Path
 
+import pytest
+
 from harmonic_drive.control import loaded_grid_file_exists, measurement_outputs_exist
 from harmonic_drive import project
 from harmonic_drive.gui import NO_SESSION_FOLDER_TEXT, resolve_session_folder_value
@@ -195,6 +197,94 @@ def test_spl_calibration_truncates_frd_offset_to_two_decimals(tmp_path):
         "spl_db": None,
         "reference_input_rms_dbfs": None,
     }
+
+
+def test_voltage_calibration_builds_output_and_spl_calibration():
+    calibration = project.build_voltage_calibration(
+        -20.0,
+        0.25,
+        26.0,
+        -30.0,
+        12.5,
+    )
+
+    assert calibration["output_voltage_calibration"] == {
+        "output_level_dbfs": -20.0,
+        "output_vrms": 0.25,
+        "amplifier_gain_db": 26.0,
+    }
+    assert calibration["voltage_calibration"] == {
+        "microphone_sensitivity_mv_pa": 12.5,
+        "reference_input_rms_dbfs": -30.0,
+        "reference_input_vrms": 0.25,
+    }
+    assert calibration["spl_meter_weighting"] == "Unweighted"
+    assert calibration["input_calibration_method"] == "voltage"
+    assert calibration["spl_db"] == pytest.approx(120.0205999)
+    assert calibration["frd_db_offset"] == 150.02
+
+
+def test_system_calibration_is_sticky_and_input_method_replaces_stale_details(tmp_path):
+    config_file = tmp_path / "config.ini"
+    _write_config(config_file)
+
+    project.update_system_calibration(
+        str(config_file),
+        project.build_voltage_calibration(-20.0, 0.25, 26.0, -30.0, 12.5),
+        replace_input=True,
+    )
+    project.update_system_calibration(
+        str(config_file),
+        {
+            **(project.build_spl_calibration(82.0, -27.5, spl_meter_weighting="C") or {}),
+            "input_calibration_method": "spl_meter",
+        },
+        replace_input=True,
+    )
+
+    calibration = project.get_system_calibration(str(config_file))
+    assert calibration["output_voltage_calibration"] == {
+        "output_level_dbfs": -20.0,
+        "output_vrms": 0.25,
+        "amplifier_gain_db": 26.0,
+    }
+    assert "voltage_calibration" not in calibration
+    assert calibration["input_calibration_method"] == "spl_meter"
+    assert calibration["frd_db_offset"] == 109.5
+
+
+def test_system_calibration_is_only_copied_to_project_when_explicitly_applied(tmp_path):
+    config_file = tmp_path / "config.ini"
+    _write_config(config_file)
+    project.set_project_dir(tmp_path / "work", str(config_file))
+    project.update_spl_calibration(
+        {
+            "frd_db_offset": 88.0,
+            "spl_db": 78.0,
+            "reference_input_rms_dbfs": -10.0,
+            "spl_meter_weighting": "A",
+        }
+    )
+    project.update_system_calibration(
+        str(config_file),
+        {
+            **(project.build_spl_calibration(82.0, -27.5, spl_meter_weighting="C") or {}),
+            "input_calibration_method": "spl_meter",
+        },
+        replace_input=True,
+    )
+
+    saved_dir = project.save_project_to(tmp_path / "manual" / "speaker_a", "Speaker A", str(config_file))
+    manual_content = next(saved_dir.glob("*_project.json")).read_text(encoding="utf-8")
+    assert '"frd_db_offset": 88.0' in manual_content
+    assert '"spl_meter_weighting": "A"' in manual_content
+
+    project.apply_system_calibration_to_project(str(config_file))
+    saved_dir = project.save_project_to(tmp_path / "measurement" / "speaker_a", "Speaker A", str(config_file))
+    measurement_content = next(saved_dir.glob("*_project.json")).read_text(encoding="utf-8")
+    assert '"frd_db_offset": 109.5' in measurement_content
+    assert '"spl_meter_weighting": "C"' in measurement_content
+    assert '"input_calibration_method": "spl_meter"' in measurement_content
 
 
 def test_project_apply_does_not_overwrite_global_audio(tmp_path):

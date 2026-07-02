@@ -135,10 +135,26 @@ def _format_dbfs(value: float | None) -> str:
     return f"{value:.1f} dBFS"
 
 
+def _format_vrms(value: float | None) -> str:
+    if value is None:
+        return ""
+    if value < 1.0:
+        return f"{value * 1000.0:.0f} mVrms"
+    return f"{value:.2f} Vrms"
+
+
+def _optional_stage5_float(stage5_vars: dict[str, Any], key: str) -> float | None:
+    try:
+        value = stage5_vars.get(key)
+        return None if value is None else float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 SPL_WEIGHTING_OPTIONS = {
     "a_weighted_inputs": "A",
     "c_weighted_inputs": "C",
-    "inputs": "None",
+    "inputs": "Unweighted",
 }
 DEFAULT_SPL_WEIGHTING = "c_weighted_inputs"
 
@@ -175,7 +191,9 @@ class AudioSetupPane(QWidget):
         self.auto_apply_enabled = False
         self.sine_running = False
         self.held_cal_level_dbfs: float | None = None
+        self.held_voltage_input_dbfs: float | None = None
         self.cal_meter_readings: list[float] = []
+        self.voltage_meter_readings: list[float] = []
         self._build_ui()
         self.auto_apply_enabled = True
 
@@ -243,7 +261,6 @@ class AudioSetupPane(QWidget):
         self.out_ref_channel = QComboBox()
         device_row.addWidget(self._device_group("Input", self.in_device, self.in_mic_channel, self.in_loop_channel))
         device_row.addWidget(self._device_group("Output", self.out_device, self.out_speaker_channel, self.out_ref_channel, output=True))
-        layout.addLayout(device_row)
 
         self._populate_devices("in", in_dev_id)
         self._populate_devices("out", out_dev_id)
@@ -256,12 +273,17 @@ class AudioSetupPane(QWidget):
 
         self.level = self._spin(_float_value(parser, "sweep", "sweep_level_dbfs", -20.0), -120, 0, "", 1)
         self.level.setFixedWidth(110)
+        self.sweep_level_voltage = QLabel("")
+        self.sweep_level_voltage.setStyleSheet("color: #475569; font-weight: 700;")
+        self.sweep_level_voltage.setVisible(False)
         self.fs = QComboBox()
         self.fs.setProperty("fitToContents", True)
         self._populate_sample_rates(_int_value(parser, "audio", "fs", 48000))
         top_settings_row.addWidget(self._labeled_with_unit("Output level", self.level, "dBFS"))
         top_settings_row.addWidget(self._labeled_with_unit("FS", self.fs, "Hz"))
         top_settings_row.addStretch(1)
+        layout.addWidget(self.sweep_level_voltage)
+        layout.addLayout(device_row)
 
         advanced_audio = QGroupBox("Advanced audio settings")
         advanced_audio.setCheckable(True)
@@ -283,6 +305,7 @@ class AudioSetupPane(QWidget):
 
         layout.addWidget(self._build_sine_group(parser))
         layout.addWidget(self._build_spl_group())
+        self.update_sweep_voltage_label()
         layout.addWidget(self._build_sweep_group(parser))
         layout.addStretch(1)
 
@@ -290,6 +313,7 @@ class AudioSetupPane(QWidget):
         self.api_select.currentIndexChanged.connect(self.refresh_devices_for_api)
         self.in_device.currentIndexChanged.connect(lambda: self.on_device_change("in"))
         self.out_device.currentIndexChanged.connect(lambda: self.on_device_change("out"))
+        self.level.valueChanged.connect(self.update_sweep_voltage_label)
 
     def _device_group(self, title: str, device: QComboBox, first: QComboBox, second: QComboBox, output: bool = False) -> QFrame:
         group = QFrame()
@@ -349,44 +373,65 @@ class AudioSetupPane(QWidget):
         row.addStretch(1)
         return group
 
-    def _build_spl_group(self) -> QGroupBox:
-        curve_path = _weighting_curve_image_path()
-        tooltip_text = (
-            "<div style='color: #111827; font-weight: 400; font-size: 12px;'>"
-            f"<img src='{curve_path}' width='520'><br>"
-            "<div style='white-space: pre;'>"
-            "1. Set the weighting.<br>"
-            "2. Play the 1 kHz sine from the speaker with the mic connected.<br>"
-            "3. Put the SPL meter at the same distance as the mic, then enter its reading in Meter Reading.<br>"
-            "4. Click Calibrate to calculate the difference between the mic input RMS level and the meter reading.<br>"
-            "   This becomes the calibration dB offset.<br><br>"
-            "* Choose the weighting that matches your physical SPL meter.<br>"
-            "* Use None for an electrical voltage reference.<br>"
-            "* You can stop the sine tone after you get the reading; the mic input RMS reading will hold.<br>"
-            "* The mic input RMS reading is averaged over 1 second and optionally weighted, so it may not match the direct channel level readout."
-            "</div>"
-            "</div>"
-        )
-        group = QGroupBox("SPL Calibration")
-        help_badge = QLabel("?")
-        help_badge.setParent(group)
-        help_badge.setFixedSize(18, 18)
-        help_badge.move(114, 0)
-        help_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        help_badge.setToolTip(tooltip_text)
-        help_badge.setStyleSheet(
+    def _help_badge(self, tooltip_text: str) -> QLabel:
+        badge = QLabel("?")
+        badge.setFixedSize(18, 18)
+        badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        badge.setToolTip(tooltip_text)
+        badge.setStyleSheet(
             "background: #eef6ff; border: 1px solid #7db2e8; border-radius: 9px; "
             "color: #3978bd; font-size: 12px; font-weight: 900;"
         )
+        return badge
 
-        row = QHBoxLayout(group)
-        row.setSpacing(8)
-        current_calibration = project.get_project_data().get("stage5_vars")
+    def _method_header(self, title: str, tooltip_text: str) -> QWidget:
+        wrapper = QWidget()
+        layout = QHBoxLayout(wrapper)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+        label = QLabel(title)
+        label.setStyleSheet("font-weight: 800; color: #0f172a;")
+        layout.addWidget(label)
+        layout.addWidget(self._help_badge(tooltip_text))
+        layout.addStretch(1)
+        return wrapper
+
+    def _build_spl_group(self) -> QGroupBox:
+        curve_path = _weighting_curve_image_path()
+        spl_tooltip_text = (
+            "<div style='color: #111827; font-weight: 400; font-size: 12px;'>"
+            f"<img src='{curve_path}'><br>"
+            "<div style='white-space: pre;'>"
+            "Method Two - SPL Meter Calibration Mode<br><br>"
+            "This method calibrates the input/SPL offset only.<br><br>"
+            "1. Choose the weighting that matches your physical SPL meter.<br>"
+            "2. Play the 1 kHz sine from the speaker with the mic connected.<br>"
+            "3. Put the SPL meter at the same distance as the mic, then enter its reading in Meter Reading.<br>"
+            "4. Click Calibrate to calculate the difference between the mic input RMS level and the meter reading.<br>"
+            "   This becomes the calibration dB offset."
+            "</div>"
+            "</div>"
+        )
+        group = QGroupBox("Calibration")
+        group.setCheckable(True)
+        group.setChecked(False)
+        group_layout = QVBoxLayout(group)
+        group_layout.setSpacing(8)
+        current_calibration = project.get_system_calibration(self.config_file)
         current_scale = current_spl = current_weighting = None
         if isinstance(current_calibration, dict):
             current_scale = current_calibration.get("frd_db_offset")
             current_spl = current_calibration.get("spl_db")
             current_weighting = current_calibration.get("spl_meter_weighting")
+
+        method_one = self._build_voltage_calibration_group(current_calibration if isinstance(current_calibration, dict) else {})
+
+        method_two = QGroupBox("")
+        method_two_layout = QVBoxLayout(method_two)
+        method_two_layout.setSpacing(8)
+        method_two_layout.addWidget(self._method_header("Method Two - SPL Meter Calibration Mode", spl_tooltip_text))
+        row = QHBoxLayout()
+        row.setSpacing(8)
         self.held_cal_level_dbfs = None
         self.cal_level = QLabel(_format_dbfs(None))
         self.cal_level.setStyleSheet("font-family: Consolas; font-weight: 700; font-size: 15px;")
@@ -398,10 +443,9 @@ class AudioSetupPane(QWidget):
             styled_field=True,
             fit_to_contents=True,
         )
-        self.cal_weighting.setMinimumContentsLength(len("None"))
-        self.cal_weighting.setFixedWidth(self.cal_weighting.fontMetrics().horizontalAdvance("None") + 30)
+        self.cal_weighting.setMinimumContentsLength(len("Unweighted"))
+        self.cal_weighting.setFixedWidth(self.cal_weighting.fontMetrics().horizontalAdvance("Unweighted") + 30)
         self.cal_weighting.currentIndexChanged.connect(self.on_cal_weighting_changed)
-        project.update_spl_calibration({"spl_meter_weighting": _spl_weighting_label(self._combo_data(self.cal_weighting))})
         try:
             spl_value = 0.0 if current_spl is None else float(current_spl)
         except (TypeError, ValueError):
@@ -415,9 +459,9 @@ class AudioSetupPane(QWidget):
         primary_button(calc)
         calc.setFixedSize(100, 36)
         calc.clicked.connect(self.calculate_spl_offset)
-        save = QPushButton("Save Cal")
+        save = QPushButton("Save Input Cal")
         primary_button(save)
-        save.setFixedSize(100, 36)
+        save.setFixedSize(112, 36)
         save.clicked.connect(self.save_spl_calibration)
         cal_box = QWidget()
         cal_box.setStyleSheet("border: 1px solid #fbcfe8; border-radius: 4px; background: #fff6fb;")
@@ -437,6 +481,97 @@ class AudioSetupPane(QWidget):
         row.addWidget(save)
         row.setAlignment(save, Qt.AlignmentFlag.AlignBottom)
         row.addStretch(1)
+        method_two_layout.addLayout(row)
+        group_layout.addWidget(method_one)
+        group_layout.addWidget(method_two)
+        self._collapse_group_children(group, [method_one, method_two])
+        return group
+
+    def _build_voltage_calibration_group(self, current_calibration: dict[str, Any]) -> QGroupBox:
+        group = QGroupBox("")
+        tooltip_text = (
+            "<div style='color: #111827; font-weight: 400; font-size: 12px;'>"
+            "<div style='white-space: pre;'>"
+            "Method One - Voltage Calibration Mode<br><br>"
+            "Output voltage calibration:<br>"
+            "1. Play sine from the selected output.<br>"
+            "2. Measure Vrms with a trueRMS meter and enter it under Measured output.<br><br>"
+            "Input voltage calibration:<br>"
+            "3. Loop the signal into the selected mic input.<br>"
+            "4. Enter mic sensitivity in mV/Pa.<br>"
+            "5. Save input voltage calibration.<br><br>"
+            "The calibration is derived from the measured sine output voltage, the input level in dBFS when driven by that signal, and the mic sensitivity in mV/Pa (mV at 94 dB SPL).<br><br>"
+            "Calibration is only valid while the interface gain/settings remain unchanged."
+            "</div>"
+            "</div>"
+        )
+        layout = QVBoxLayout(group)
+        layout.setSpacing(8)
+
+        output_cal = current_calibration.get("output_voltage_calibration")
+        if not isinstance(output_cal, dict):
+            output_cal = {}
+        voltage_cal = current_calibration.get("voltage_calibration")
+        if not isinstance(voltage_cal, dict):
+            voltage_cal = {}
+
+        layout.addWidget(self._method_header("Method One - Voltage Calibration Mode", tooltip_text))
+        output_title = QLabel("1) Output Voltage Calibration")
+        output_title.setStyleSheet("font-weight: 800; color: #0f172a;")
+        output_row = QHBoxLayout()
+        self.voltage_output_vrms = self._spin(_optional_stage5_float(output_cal, "output_vrms") or 0.0, 0.0, 1000.0, "", 4)
+        self.voltage_output_vrms.setFixedWidth(110)
+        amp_gain = _optional_stage5_float(output_cal, "amplifier_gain_db")
+        self.voltage_amp_gain = self._spin(0.0 if amp_gain is None else amp_gain, -120.0, 120.0, "", 1)
+        self.voltage_amp_gain.setFixedWidth(90)
+        self.voltage_amp_gain.setSpecialValueText("")
+        save_output = QPushButton("Save Output Cal")
+        primary_button(save_output)
+        save_output.setFixedSize(128, 36)
+        save_output.clicked.connect(self.save_output_voltage_calibration)
+        output_vrms_field = self._labeled_with_unit("Measured output", self.voltage_output_vrms, "Vrms")
+        amp_gain_field = self._labeled_with_unit("Amplifier gain", self.voltage_amp_gain, "dB")
+        output_row.addWidget(output_vrms_field)
+        output_row.addWidget(amp_gain_field)
+        output_row.addWidget(save_output)
+        output_row.setAlignment(save_output, Qt.AlignmentFlag.AlignBottom)
+        output_row.addStretch(1)
+
+        input_title = QLabel("2) Input Voltage Calibration")
+        input_title.setStyleSheet("font-weight: 800; color: #0f172a;")
+        input_row = QHBoxLayout()
+        saved_voltage_input = _optional_stage5_float(voltage_cal, "reference_input_rms_dbfs")
+        self.held_voltage_input_dbfs = saved_voltage_input
+        self.voltage_input_level = QLabel(_format_dbfs(saved_voltage_input))
+        self.voltage_input_level.setStyleSheet("font-family: Consolas; font-weight: 700; font-size: 15px;")
+        voltage_level_box = QWidget()
+        voltage_level_box.setStyleSheet("border: 1px solid #fbcfe8; border-radius: 4px; background: #fff6fb;")
+        voltage_level_layout = QHBoxLayout(voltage_level_box)
+        voltage_level_layout.setContentsMargins(8, 2, 8, 2)
+        self.voltage_input_label = QLabel("Input RMS\ndBFS")
+        self.voltage_input_label.setStyleSheet("color: #831843; font-size: 10px; font-weight: 700;")
+        voltage_level_layout.addWidget(self.voltage_input_label)
+        voltage_level_layout.addWidget(self.voltage_input_level)
+        sensitivity = _optional_stage5_float(voltage_cal, "microphone_sensitivity_mv_pa")
+        self.mic_sensitivity = self._spin(0.0 if sensitivity is None else sensitivity, 0.0, 100000.0, "", 3)
+        self.mic_sensitivity.setFixedWidth(112)
+        calibrate_input = QPushButton("Save Input Cal")
+        primary_button(calibrate_input)
+        calibrate_input.setFixedSize(112, 36)
+        calibrate_input.clicked.connect(self.save_voltage_spl_calibration)
+        input_row.addWidget(voltage_level_box)
+        mic_sensitivity_field = self._labeled_with_unit("Mic sensitivity", self.mic_sensitivity, "mV/Pa")
+        input_row.addWidget(mic_sensitivity_field)
+        input_row.addWidget(calibrate_input)
+        input_row.setAlignment(calibrate_input, Qt.AlignmentFlag.AlignBottom)
+        input_row.addStretch(1)
+
+        layout.addWidget(output_title)
+        layout.addLayout(output_row)
+        layout.addWidget(input_title)
+        layout.addLayout(input_row)
+        self.voltage_output_vrms.valueChanged.connect(self.update_sweep_voltage_label)
+        self.voltage_amp_gain.valueChanged.connect(self.update_sweep_voltage_label)
         return group
 
     def _build_sweep_group(self, parser) -> QGroupBox:
@@ -851,22 +986,83 @@ class AudioSetupPane(QWidget):
         if not state.get("active"):
             return
         inputs = state.get(str(self._combo_data(self.cal_weighting)), [])
-        if len(inputs) < 2:
+        if len(inputs) >= 2:
+            rms = inputs[1].get("rms_dbfs")
+            if rms is not None:
+                self.cal_meter_readings.append(float(rms))
+                if len(self.cal_meter_readings) >= 5:
+                    mean_power = sum(10.0 ** (value / 10.0) for value in self.cal_meter_readings) / len(self.cal_meter_readings)
+                    self.held_cal_level_dbfs = 10.0 * math.log10(max(mean_power, 1e-12))
+                    self.cal_meter_readings.clear()
+                    self.cal_level.setText(_format_dbfs(self.held_cal_level_dbfs))
+
+        raw_inputs = state.get("inputs", [])
+        try:
+            mic_index = int(self._combo_data(self.in_mic_channel))
+        except (TypeError, ValueError):
+            mic_index = 1
+        if mic_index >= len(raw_inputs):
             return
-        rms = inputs[1].get("rms_dbfs")
-        if rms is None:
+        voltage_rms = raw_inputs[mic_index].get("rms_dbfs")
+        if voltage_rms is None:
             return
-        self.cal_meter_readings.append(float(rms))
-        if len(self.cal_meter_readings) < 5:
+        self.voltage_meter_readings.append(float(voltage_rms))
+        if len(self.voltage_meter_readings) < 5:
             return
-        mean_power = sum(10.0 ** (value / 10.0) for value in self.cal_meter_readings) / len(self.cal_meter_readings)
-        self.held_cal_level_dbfs = 10.0 * math.log10(max(mean_power, 1e-12))
-        self.cal_meter_readings.clear()
-        self.cal_level.setText(_format_dbfs(self.held_cal_level_dbfs))
+        mean_voltage_power = sum(10.0 ** (value / 10.0) for value in self.voltage_meter_readings) / len(self.voltage_meter_readings)
+        self.held_voltage_input_dbfs = 10.0 * math.log10(max(mean_voltage_power, 1e-12))
+        self.voltage_meter_readings.clear()
+        if hasattr(self, "voltage_input_level"):
+            self.voltage_input_level.setText(_format_dbfs(self.held_voltage_input_dbfs))
+
+    def _current_output_voltage_calibration(self) -> dict[str, float] | None:
+        if hasattr(self, "voltage_output_vrms") and self.voltage_output_vrms.value() > 0.0:
+            calibration = {
+                "output_level_dbfs": self.level.value(),
+                "output_vrms": self.voltage_output_vrms.value(),
+            }
+            if self.voltage_amp_gain.value() != 0.0:
+                calibration["amplifier_gain_db"] = self.voltage_amp_gain.value()
+            return calibration
+        stage5_vars = project.get_system_calibration(self.config_file)
+        if not isinstance(stage5_vars, dict):
+            return None
+        output_cal = stage5_vars.get("output_voltage_calibration")
+        if not isinstance(output_cal, dict):
+            return None
+        try:
+            calibration = {
+                "output_level_dbfs": float(output_cal["output_level_dbfs"]),
+                "output_vrms": float(output_cal["output_vrms"]),
+            }
+            if output_cal.get("amplifier_gain_db") is not None:
+                calibration["amplifier_gain_db"] = float(output_cal["amplifier_gain_db"])
+        except (KeyError, TypeError, ValueError):
+            return None
+        return calibration
+
+    def update_sweep_voltage_label(self) -> None:
+        if not hasattr(self, "sweep_level_voltage"):
+            return
+        calibration = self._current_output_voltage_calibration()
+        if not calibration:
+            self.sweep_level_voltage.setText("")
+            self.sweep_level_voltage.setVisible(False)
+            return
+        interface_vrms = calibration["output_vrms"] * 10.0 ** (
+            (self.level.value() - calibration["output_level_dbfs"]) / 20.0
+        )
+        text = f"{_format_vrms(interface_vrms)} interface output"
+        amp_gain = calibration.get("amplifier_gain_db")
+        if amp_gain is not None:
+            speaker_vrms = interface_vrms * 10.0 ** (amp_gain / 20.0)
+            text += f" / {_format_vrms(speaker_vrms)} speaker input"
+        self.sweep_level_voltage.setText(text)
+        self.sweep_level_voltage.setVisible(True)
 
     def update_cal_level_label(self) -> None:
         weighting = SPL_WEIGHTING_OPTIONS.get(str(self._combo_data(self.cal_weighting)), "A")
-        suffix = f"({weighting})" if weighting != "None" else " None"
+        suffix = f"({weighting})" if weighting != "Unweighted" else " Unweighted"
         self.cal_label.setText(f"Mic RMS\ndBFS{suffix}")
 
     def on_cal_weighting_changed(self) -> None:
@@ -874,7 +1070,6 @@ class AudioSetupPane(QWidget):
         self.held_cal_level_dbfs = None
         self.cal_level.setText(_format_dbfs(None))
         self.update_cal_level_label()
-        project.update_spl_calibration({"spl_meter_weighting": _spl_weighting_label(self._combo_data(self.cal_weighting))})
 
     def calculate_spl_offset(self) -> None:
         if self.held_cal_level_dbfs is None:
@@ -891,29 +1086,56 @@ class AudioSetupPane(QWidget):
         )
         if calibration is None:
             return False
-        project.update_spl_calibration(calibration)
+        calibration["input_calibration_method"] = "spl_meter"
+        project.update_system_calibration(self.config_file, calibration, replace_input=True)
         return True
+
+    def save_output_voltage_calibration(self) -> None:
+        try:
+            calibration = project.build_voltage_calibration(
+                self.level.value(),
+                self.voltage_output_vrms.value(),
+                self.voltage_amp_gain.value() if self.voltage_amp_gain.value() != 0.0 else None,
+            )
+        except ValueError as exc:
+            QMessageBox.warning(self, "Voltage Calibration", str(exc))
+            return
+        project.update_system_calibration(self.config_file, calibration)
+        self.update_sweep_voltage_label()
+        self._show_system_calibration_saved("Output voltage calibration saved.")
+
+    def save_voltage_spl_calibration(self) -> None:
+        if self.held_voltage_input_dbfs is None:
+            QMessageBox.warning(self, "Voltage Calibration", "Play the loopback signal until the input level readout appears.")
+            return
+        try:
+            calibration = project.build_voltage_calibration(
+                self.level.value(),
+                self.voltage_output_vrms.value(),
+                self.voltage_amp_gain.value() if self.voltage_amp_gain.value() != 0.0 else None,
+                self.held_voltage_input_dbfs,
+                self.mic_sensitivity.value(),
+            )
+        except ValueError as exc:
+            QMessageBox.warning(self, "Voltage Calibration", str(exc))
+            return
+        project.update_system_calibration(self.config_file, calibration, replace_input=True)
+        self._set_combo_data(self.cal_weighting, "inputs")
+        self.held_cal_level_dbfs = self.held_voltage_input_dbfs
+        self.spl_reading.setValue(float(calibration.get("spl_db") or 0.0))
+        self.spl_offset.setValue(float(calibration.get("frd_db_offset") or 0.0))
+        self.update_sweep_voltage_label()
+        self._show_system_calibration_saved("Input voltage calibration saved.")
 
     def save_spl_calibration(self) -> None:
         if not self.update_calibration_from_offset():
             QMessageBox.warning(self, "SPL Calibration", "Enter or calculate an SPL offset first.")
             return
+        self._show_system_calibration_saved("SPL meter input calibration saved.")
+
+    def _show_system_calibration_saved(self, message: str) -> None:
         self.flush_pending_changes()
-        project_path = project.get_project_json_path()
-        if not project_path.exists():
-            result = QMessageBox.question(
-                self,
-                "Create Project Save File",
-                f"No project save file exists for '{project.get_project_name()}'.\n\n"
-                f"Saving calibration will create:\n{project_path}\n\n"
-                "This saves the current sweep and grid generator settings as well. Continue?",
-                QMessageBox.StandardButton.Cancel | QMessageBox.StandardButton.Save,
-                QMessageBox.StandardButton.Cancel,
-            )
-            if result != QMessageBox.StandardButton.Save:
-                return
-        project.save_project()
-        QMessageBox.information(self, "SPL Calibration", "SPL calibration saved.")
+        QMessageBox.information(self, "Calibration", message)
 
     def test_sweep(self) -> None:
         self.save_audio_setup(notify=False)

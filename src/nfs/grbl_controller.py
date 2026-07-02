@@ -664,11 +664,6 @@ class GrblControllerFactory:
             if debug_serial:
                 logger.info("GRBL serial startup wait: 3.0s")
             time.sleep(3)
-            grbl_streamer.incremental_streaming = True
-            if debug_serial:
-                logger.info("GRBL serial sending startup status mask command: $10=2")
-            grbl_streamer.send_immediately("$10=2")  # Force the report format to match what we expect.
-
             connection = GrblStreamerClientConnection(grbl_streamer, event_handler, debug_serial=debug_serial)
             try:
                 instance = ESP32Duino(
@@ -676,6 +671,10 @@ class GrblControllerFactory:
                     debug_serial=debug_serial,
                     verify_on_connect=verify_controller,
                 )
+                grbl_streamer.incremental_streaming = True
+                if debug_serial:
+                    logger.info("GRBL serial sending startup status mask command: $10=2")
+                instance.send("$10=2", ack_timeout_s=ESP32Duino.PROBE_ACK_TIMEOUT_S)
             except Exception:
                 try:
                     connection.close()
@@ -825,6 +824,57 @@ class GrblStreamerClientConnection:
         Close the connection.
         """
         self._grbl_streamer.disconnect()
+        self._force_close_streamer_interface()
+
+    def _force_close_streamer_interface(self) -> None:
+        """
+        Close grbl-streamer internals even if its connected flag was never set.
+
+        grbl-streamer only runs its normal disconnect path when it has seen a
+        GRBL boot message and set connected=True. The serial interface can still
+        be open before that happens, so hot-swapping away from Arduino must not
+        rely on that flag to release the COM port.
+        """
+        streamer_state = getattr(self._grbl_streamer, "__dict__", {})
+        iface = streamer_state.get("_iface")
+        if iface is None:
+            return
+
+        logger.info("Forcing GRBL serial interface close")
+
+        poll_thread = streamer_state.get("_thread_polling")
+        if poll_thread is not None:
+            try:
+                self._grbl_streamer._poll_keep_alive = False
+                if poll_thread.is_alive():
+                    poll_thread.join(timeout=2.0)
+            except Exception as exc:
+                logger.warning(f"Failed to stop GRBL polling thread: {exc}")
+            finally:
+                self._grbl_streamer._thread_polling = None
+
+        try:
+            iface.stop()
+        except Exception as exc:
+            logger.warning(f"Failed to stop GRBL serial interface: {exc}")
+        finally:
+            self._grbl_streamer._iface = None
+
+        read_thread = streamer_state.get("_thread_read_iface")
+        try:
+            self._grbl_streamer._iface_read_do = False
+            queue_obj = streamer_state.get("_queue")
+            if queue_obj is not None:
+                queue_obj.put("dummy_msg_for_joining_thread")
+            if read_thread is not None and read_thread.is_alive():
+                read_thread.join(timeout=2.0)
+                if read_thread.is_alive():
+                    logger.warning("GRBL reader thread did not stop after forced close")
+        except Exception as exc:
+            logger.warning(f"Failed to stop GRBL reader thread: {exc}")
+        finally:
+            self._grbl_streamer._thread_read_iface = None
+            self._grbl_streamer.connected = False
 
 
 class ESP32Duino(IGrblController):
@@ -872,7 +922,8 @@ class ESP32Duino(IGrblController):
         """Initialize the connection by unlocking and clearing the buffer."""
         if getattr(self, "_debug_serial", False):
             logger.info("GRBL serial probing controller with {}", self.UNLOCK_COMMAND)
-        self.send(self.UNLOCK_COMMAND, ack_timeout_s=self.PROBE_ACK_TIMEOUT_S)
+        self._connection.killalarm()
+        self._wait_for_ack(self.PROBE_ACK_TIMEOUT_S)
 
     def shutdown(self) -> None:
         """

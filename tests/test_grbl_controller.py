@@ -109,6 +109,44 @@ def test_grbl_streamer_client_connection():
     mock_streamer.disconnect.assert_called_once()
 
 
+def test_grbl_streamer_client_connection_force_closes_open_iface_when_not_connected():
+    iface = Mock()
+    mock_streamer = Mock()
+    mock_streamer.__dict__["_iface"] = iface
+    mock_streamer.__dict__["_thread_polling"] = None
+    mock_streamer.__dict__["_thread_read_iface"] = None
+    mock_streamer.__dict__["_queue"] = Mock()
+    mock_streamer.connected = False
+    handler = EventHandler()
+    conn = GrblStreamerClientConnection(mock_streamer, handler)
+
+    conn.close()
+
+    mock_streamer.disconnect.assert_called_once()
+    iface.stop.assert_called_once()
+    assert mock_streamer._iface is None
+    assert mock_streamer.connected is False
+
+
+def test_grbl_streamer_client_connection_force_closes_reader_thread():
+    read_thread = Mock()
+    read_thread.is_alive.side_effect = [True, False]
+    queue_obj = Mock()
+    mock_streamer = Mock()
+    mock_streamer.__dict__["_iface"] = Mock()
+    mock_streamer.__dict__["_thread_polling"] = None
+    mock_streamer.__dict__["_thread_read_iface"] = read_thread
+    mock_streamer.__dict__["_queue"] = queue_obj
+    handler = EventHandler()
+    conn = GrblStreamerClientConnection(mock_streamer, handler)
+
+    conn.close()
+
+    queue_obj.put.assert_called_once_with("dummy_msg_for_joining_thread")
+    read_thread.join.assert_called_once_with(timeout=2.0)
+    assert mock_streamer._thread_read_iface is None
+
+
 def test_event_handler_on_error():
     handler = EventHandler()
     with pytest.raises(Exception, match="ERROR: event=on_error"):
@@ -167,11 +205,12 @@ def test_grbl_controller_mock_simulated_dro_emits_motion_updates():
 
 def test_esp32_duino_initialization():
     mock_conn = Mock()
-    # __init__ calls _unlock which calls send which calls _wait_for_ack which calls _receive
+    # __init__ calls _unlock, which must bypass the guarded send path while in Alarm.
     mock_conn.receive.return_value = "ok"
 
     controller = ESP32Duino(mock_conn)
-    mock_conn.send.assert_called_with("$X\n")
+    mock_conn.killalarm.assert_called_once()
+    mock_conn.send.assert_not_called()
 
 
 def test_esp32_duino_initialization_times_out_without_grbl_response(monkeypatch):
@@ -183,6 +222,7 @@ def test_esp32_duino_initialization_times_out_without_grbl_response(monkeypatch)
 
     with pytest.raises(TimeoutError, match="No GRBL response"):
         ESP32Duino(mock_conn)
+    mock_conn.killalarm.assert_called_once()
 
 
 def test_esp32_duino_can_skip_controller_verification():
@@ -206,6 +246,19 @@ def test_esp32_duino_send():
     controller.send("G0 X10")
     mock_conn.send.assert_called_with("G0 X10\n")
     assert mock_conn.receive.call_count >= 3
+
+
+def test_esp32_duino_unlock_bypasses_guarded_send_path():
+    mock_conn = Mock()
+    mock_conn.receive.return_value = "ok"
+
+    ESP32Duino(mock_conn)
+
+    mock_conn.killalarm.assert_called_once()
+    assert not any(
+        call.args == ("$X\n",)
+        for call in mock_conn.send.call_args_list
+    )
 
 
 def test_esp32_duino_send_does_not_use_probe_timeout(monkeypatch):
@@ -260,6 +313,7 @@ def test_esp32_duino_control_commands():
     mock_conn = Mock()
     mock_conn.receive.return_value = "ok"
     controller = ESP32Duino(mock_conn)
+    mock_conn.reset_mock()
 
     controller.killalarm()
     mock_conn.killalarm.assert_called_once()

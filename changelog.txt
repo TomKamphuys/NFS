@@ -1,4 +1,40 @@
 --------
+02/07/26
+--------
+Fixed PySide GRBL streamer hot-swapping when switching Arduino -> Mock ->
+Arduino. The GRBL streamer library could leave COM5 open if its internal
+connected flag was false even though the serial interface had been opened,
+causing the next Arduino reconnect to fail with "Access is denied" and leaving
+the scanner backend unloaded. The NFS wrapper now force-closes the underlying
+streamer interface during shutdown if the normal disconnect path leaves it
+open.
+
+Arduino startup unlock now uses the streamer's alarm-clear path so `$X` is not
+blocked by the normal send guard when GRBLHAL is in Alarm, and reconnect
+diagnostics surface the saved scanner load warning instead of the generic
+"Scanner is not loaded" message.
+
+Files touched:
+src/nfs/grbl_controller.py
+src/harmonic_drive_qt/backend.py
+tests/test_grbl_controller.py
+tests/test_qt_backend.py
+
+--------
+01/07/26
+--------
+PySide Audio Setup now places calibration workflows under one expandable
+Calibration section. Method One provides output voltage calibration and input
+voltage calibration from loopback dBFS plus microphone sensitivity, with
+optional amplifier gain display for estimated speaker-terminal voltage. Method
+Two keeps the existing SPL meter input calibration workflow. Both methods have
+their own help badge tooltips.
+
+Calibration saves now system-level/sticky for the current audio hardware,
+and measurement project JSON snapshots copy the current system calibration
+only when a real measurement is taken.
+
+--------
 30/06/26
 --------
 PySide audio setup now resolves audio devices from saved device name plus host
