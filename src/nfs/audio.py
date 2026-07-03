@@ -1047,6 +1047,8 @@ class Audio(IAudio):
         self.hw = hw_config
         self.cap = capture_config
         self._sine_stream = None
+        self._sine_level_lock = threading.Lock()
+        self._sine_level_dbfs: float | None = None
 
         self.sweep_gen = sweep_gen
         self.marker_gen = marker_gen
@@ -1370,6 +1372,7 @@ class Audio(IAudio):
         :param duration_s: Duration in seconds. If None, plays until stop_sine() is called.
         """
         self.stop_sine()
+        self.update_sine_level(level_dbfs)
 
         logger.info(
             f"Playing sine: {frequency} Hz, {level_dbfs} dBFS, {'until stopped' if duration_s is None else f'for {duration_s} s'}")
@@ -1493,17 +1496,14 @@ class Audio(IAudio):
             phase = 0.0
             phase_inc = 2 * np.pi * frequency / fs
 
-            # For indefinite sine, we use the target_amp directly.
-            # (Filtering and re-normalizing a steady-state sine wave with a linear filter
-            # results in the same sine wave with a possible phase shift, which we ignore here).
-            effective_amp = target_amp
-
             def callback(indata, outdata, frames, time_info, status):
                 nonlocal phase
                 if status:
                     logger.warning(f"Sine Callback Status: {status}")
                 t = np.arange(frames)
-                s = (np.sin(phase + phase_inc * t) * effective_amp).astype(np.float32)
+                with self._sine_level_lock:
+                    level = level_dbfs if self._sine_level_dbfs is None else self._sine_level_dbfs
+                s = (np.sin(phase + phase_inc * t) * DSPUtils.db_to_lin(level)).astype(np.float32)
                 phase = (phase + phase_inc * frames) % (2 * np.pi)
 
                 if use_asio_out:
@@ -1557,6 +1557,11 @@ class Audio(IAudio):
             )
             self._sine_stream.start()
 
+    def update_sine_level(self, level_dbfs: float) -> None:
+        """Updates the level used by active continuous sine playback."""
+        with self._sine_level_lock:
+            self._sine_level_dbfs = float(level_dbfs)
+
     def stop_sine(self) -> None:
         """Stops any active sine wave playback."""
         if self._sine_stream is not None:
@@ -1567,6 +1572,8 @@ class Audio(IAudio):
             except Exception as e:
                 logger.debug(f"Error closing sine stream: {e}")
             self._sine_stream = None
+        with self._sine_level_lock:
+            self._sine_level_dbfs = None
         sd.stop()
         reset_audio_meter_state(active=False)
 
@@ -1688,6 +1695,10 @@ class MockInterfaceAudio(Audio):
         """
         logger.info(
             f"[MOCK-INTERFACE] Playing sine: {frequency} Hz, {level_dbfs} dBFS, {'until stopped' if duration_s is None else f'for {duration_s} s'}")
+        self.update_sine_level(level_dbfs)
+
+    def update_sine_level(self, level_dbfs: float) -> None:
+        logger.info(f"[MOCK-INTERFACE] Updated sine level: {level_dbfs} dBFS")
 
     def stop_sine(self) -> None:
         """Stops sine playback."""
@@ -1722,6 +1733,10 @@ class AudioMock(IAudio):
         """
         logger.info(
             f"[MOCK] Playing sine: {frequency} Hz, {level_dbfs} dBFS, {'until stopped' if duration_s is None else f'for {duration_s} s'}")
+        self.update_sine_level(level_dbfs)
+
+    def update_sine_level(self, level_dbfs: float) -> None:
+        logger.info(f"[MOCK] Updated sine level: {level_dbfs} dBFS")
 
     def stop_sine(self) -> None:
         """Stops sine playback."""
@@ -1733,10 +1748,16 @@ class AudioFactory:
     """Parses config and performs Dependency Injection assembling."""
 
     @staticmethod
+    def _normalize_decimal_text(value: str) -> str:
+        return value.replace(",", ".")
+
+    @staticmethod
     def _get_required_config(config: configparser.ConfigParser, section: str, key: str, type_func):
         if not config.has_option(section, key):
             raise KeyError(f"Missing required config: [{section}] {key}")
         val = config.get(section, key).split('#')[0].split(';')[0].strip()
+        if type_func in (float, int):
+            val = AudioFactory._normalize_decimal_text(val)
         return type_func(val)
 
     @staticmethod
@@ -1770,12 +1791,12 @@ class AudioFactory:
             raise KeyError(f"Config file missing [{sweep_section}] section")
 
         def parse_optional_float(s):
-            return None if s.lower() == "none" else float(s)
+            return None if s.lower() == "none" else float(AudioFactory._normalize_decimal_text(s))
 
         def optional_config_int(key: str, fallback: int = -1) -> int:
             raw = config.get(audio_section, key, fallback=str(fallback)).split('#')[0].split(';')[0].strip()
             try:
-                return int(float(raw))
+                return int(float(AudioFactory._normalize_decimal_text(raw)))
             except ValueError:
                 return fallback
 
@@ -1861,7 +1882,9 @@ class AudioFactory:
         if protect_hz is not None and protect_hz > 0:
             order = AudioFactory._get_required_config(config, sweep_section, 'PROTECT_HPF_ORDER', int)
             hpf_correction = config.getboolean(sweep_section, 'PROTECT_HPF_CORRECTION', fallback=False)
-            hpf_corr_db_cap = config.getfloat(sweep_section, 'PROTECT_HPF_CORR_DB_CAP', fallback=12.0)
+            hpf_corr_raw = config.get(sweep_section, 'PROTECT_HPF_CORR_DB_CAP', fallback='12.0')
+            hpf_corr_raw = hpf_corr_raw.split('#')[0].split(';')[0].strip()
+            hpf_corr_db_cap = float(AudioFactory._normalize_decimal_text(hpf_corr_raw))
             filter_engine = ProtectionFilter(fs, protect_hz, order, hpf_correction, hpf_corr_db_cap)
         else:
             filter_engine = None

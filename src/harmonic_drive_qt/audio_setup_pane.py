@@ -48,6 +48,18 @@ PREFERRED_SAMPLE_RATE = 48000
 DEFAULT_PROTECTION_HPF_HZ = "500.0"
 
 
+def _normalize_decimal_text(value: str) -> str:
+    return value.strip().replace(",", ".")
+
+
+def _normalize_decimal_editor_text(widget: QLineEdit, text: str) -> None:
+    if "," not in text:
+        return
+    cursor_pos = widget.cursorPosition()
+    widget.setText(text.replace(",", "."))
+    widget.setCursorPosition(cursor_pos)
+
+
 def _read_config(config_file: str) -> configparser.ConfigParser:
     parser = configparser.ConfigParser(inline_comment_prefixes=("#", ";"))
     parser.optionxform = str  # type: ignore[assignment]
@@ -61,14 +73,14 @@ def _value(parser: configparser.ConfigParser, section: str, key: str, fallback: 
 
 def _int_value(parser, section: str, key: str, fallback: int = 0) -> int:
     try:
-        return int(float(_value(parser, section, key, str(fallback))))
+        return int(float(_normalize_decimal_text(_value(parser, section, key, str(fallback)))))
     except ValueError:
         return fallback
 
 
 def _float_value(parser, section: str, key: str, fallback: float = 0.0) -> float:
     try:
-        return float(_value(parser, section, key, str(fallback)))
+        return float(_normalize_decimal_text(_value(parser, section, key, str(fallback))))
     except ValueError:
         return fallback
 
@@ -77,7 +89,7 @@ def _optional_float_text(parser, section: str, key: str, fallback: str = "") -> 
     raw = _value(parser, section, key, fallback)
     if raw.strip().lower() in ("", "none"):
         return ""
-    return raw
+    return _normalize_decimal_text(raw)
 
 
 def _section_dict(parser: configparser.ConfigParser, section: str) -> dict[str, str]:
@@ -146,7 +158,7 @@ def _format_vrms(value: float | None) -> str:
 def _optional_stage5_float(stage5_vars: dict[str, Any], key: str) -> float | None:
     try:
         value = stage5_vars.get(key)
-        return None if value is None else float(value)
+        return None if value is None else float(_normalize_decimal_text(str(value)))
     except (TypeError, ValueError):
         return None
 
@@ -176,6 +188,51 @@ def _spl_weighting_label(value: Any) -> str:
 
 def _weighting_curve_image_path() -> str:
     return str(Path(__file__).resolve().parents[2] / "images" / "frequency_weighting.png")
+
+
+def _qt_icon_path(name: str) -> str:
+    return (Path(__file__).resolve().parent / "icons" / name).as_posix()
+
+
+def _output_level_spin_style() -> str:
+    up_icon = _qt_icon_path("spin-chevron-up.svg")
+    down_icon = _qt_icon_path("spin-chevron-down.svg")
+    return (
+        "QDoubleSpinBox#OutputLevelSpin {"
+        "background: #ffffff;"
+        "border: 1px solid #bfc8d4;"
+        "border-radius: 4px;"
+        "color: #111827;"
+        "font-size: 10pt;"
+        "min-height: 22px;"
+        "padding: 2px 54px 2px 8px;"
+        "}"
+        "QDoubleSpinBox#OutputLevelSpin::up-button {"
+        "subcontrol-origin: border;"
+        "subcontrol-position: center right;"
+        "width: 22px;"
+        "height: 20px;"
+        "right: 28px;"
+        "border: none;"
+        "background: transparent;"
+        "}"
+        "QDoubleSpinBox#OutputLevelSpin::down-button {"
+        "subcontrol-origin: border;"
+        "subcontrol-position: center right;"
+        "width: 22px;"
+        "height: 20px;"
+        "right: 5px;"
+        "border: none;"
+        "background: transparent;"
+        "}"
+        "QDoubleSpinBox#OutputLevelSpin::up-button:hover,"
+        "QDoubleSpinBox#OutputLevelSpin::down-button:hover {"
+        "background: #f3f4f6;"
+        "border-radius: 3px;"
+        "}"
+        f"QDoubleSpinBox#OutputLevelSpin::up-arrow {{ image: url({up_icon}); width: 13px; height: 13px; }}"
+        f"QDoubleSpinBox#OutputLevelSpin::down-arrow {{ image: url({down_icon}); width: 13px; height: 13px; }}"
+    )
 
 
 class AudioSetupPane(QWidget):
@@ -272,14 +329,20 @@ class AudioSetupPane(QWidget):
         self._set_combo_data(self.out_ref_channel, _int_value(parser, "audio", "out_ch_ref", 1))
 
         self.level = self._spin(_float_value(parser, "sweep", "sweep_level_dbfs", -20.0), -120, 0, "", 1)
-        self.level.setFixedWidth(110)
+        self.level.setObjectName("OutputLevelSpin")
+        self.level.setProperty("skipSelectAllOnFocus", True)
+        self.level.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.UpDownArrows)
+        self.level.setSingleStep(1.0)
+        self.level.setStyleSheet(_output_level_spin_style())
+        self.level.setFixedHeight(32)
+        self.level.setFixedWidth(136)
         self.sweep_level_voltage = QLabel("")
         self.sweep_level_voltage.setStyleSheet("color: #475569; font-weight: 700;")
         self.sweep_level_voltage.setVisible(False)
         self.fs = QComboBox()
         self.fs.setProperty("fitToContents", True)
         self._populate_sample_rates(_int_value(parser, "audio", "fs", 48000))
-        top_settings_row.addWidget(self._labeled_with_unit("Output level", self.level, "dBFS"))
+        top_settings_row.addWidget(self._output_level_field())
         top_settings_row.addWidget(self._labeled_with_unit("FS", self.fs, "Hz"))
         top_settings_row.addStretch(1)
         layout.addWidget(self.sweep_level_voltage)
@@ -362,6 +425,7 @@ class AudioSetupPane(QWidget):
         self.sine_duration_text = QLineEdit()
         self.sine_duration_text.setPlaceholderText("Optional")
         self.sine_duration_text.setFixedWidth(120)
+        self._normalize_decimal_editor(self.sine_duration_text)
         self.sine_button = QPushButton("Play Sine")
         primary_button(self.sine_button)
         self.sine_button.setFixedSize(88, 36)
@@ -447,13 +511,13 @@ class AudioSetupPane(QWidget):
         self.cal_weighting.setFixedWidth(self.cal_weighting.fontMetrics().horizontalAdvance("Unweighted") + 30)
         self.cal_weighting.currentIndexChanged.connect(self.on_cal_weighting_changed)
         try:
-            spl_value = 0.0 if current_spl is None else float(current_spl)
+            spl_value = 0.0 if current_spl is None else float(_normalize_decimal_text(str(current_spl)))
         except (TypeError, ValueError):
             spl_value = 0.0
         self.spl_reading = self._spin(spl_value, 0, 200, "", 1)
         self.spl_reading.setSpecialValueText("")
         self.spl_reading.setFixedWidth(self.spl_reading.fontMetrics().horizontalAdvance("100.2") + 34)
-        self.spl_offset = self._spin(float(current_scale or 0.0), -200, 200, "", 2)
+        self.spl_offset = self._spin(float(_normalize_decimal_text(str(current_scale or 0.0))), -200, 200, "", 2)
         self.spl_offset.setFixedWidth(self.spl_offset.fontMetrics().horizontalAdvance("100.2") + 34)
         calc = QPushButton("Calibrate")
         primary_button(calc)
@@ -586,6 +650,7 @@ class AudioSetupPane(QWidget):
         self.hpf_enable.setStyleSheet(toggle_style())
         self.hpf = QLineEdit(_optional_float_text(parser, "sweep", "protect_hpf_hz") or DEFAULT_PROTECTION_HPF_HZ)
         self.hpf.setFixedWidth(120)
+        self._normalize_decimal_editor(self.hpf)
         self.hpf_order = self._spin(_int_value(parser, "sweep", "protect_hpf_order", 1), 1, 8, "", 0)
         self.hpf_order.setFixedWidth(86)
         self.hpf_corr = QCheckBox("HPF Inverse Correction")
@@ -628,8 +693,10 @@ class AudioSetupPane(QWidget):
         self.pre_sil = self._spin(_float_value(parser, "sweep", "pre_sil_ms", 500.0), 0, 60000, " ms", 1)
         self.post_sil = self._spin(_float_value(parser, "sweep", "post_sil_ms", 500.0), 0, 60000, " ms", 1)
         self.taper = self._spin(_float_value(parser, "sweep", "mic_tail_taper_ms", 20.0), 0, 60000, " ms", 1)
-        self.h2 = QLineEdit(_value(parser, "sweep", "h2_test_db", "None"))
-        self.h3 = QLineEdit(_value(parser, "sweep", "h3_test_db", "None"))
+        self.h2 = QLineEdit(_normalize_decimal_text(_value(parser, "sweep", "h2_test_db", "None")))
+        self.h3 = QLineEdit(_normalize_decimal_text(_value(parser, "sweep", "h3_test_db", "None")))
+        self._normalize_decimal_editor(self.h2)
+        self._normalize_decimal_editor(self.h3)
         fields = [
             ("Naming", self.naming), ("", self.align), ("", self.debug),
             ("Pre silence", self.pre_sil), ("Post silence", self.post_sil), ("Mic tail taper", self.taper),
@@ -677,15 +744,20 @@ class AudioSetupPane(QWidget):
         spin.setDecimals(decimals)
         spin.setValue(value)
         spin.setSuffix(suffix)
+        spin.setKeyboardTracking(False)
         spin.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
         original_focus = spin.focusInEvent
 
         def focus_in(event, spin=spin, original_focus=original_focus) -> None:
             original_focus(event)
-            QTimer.singleShot(0, spin.selectAll)
+            if not spin.property("skipSelectAllOnFocus"):
+                QTimer.singleShot(0, spin.selectAll)
 
         spin.focusInEvent = focus_in  # type: ignore[method-assign]
         return spin
+
+    def _normalize_decimal_editor(self, widget: QLineEdit) -> None:
+        widget.textEdited.connect(lambda text, widget=widget: _normalize_decimal_editor_text(widget, text))
 
     def _labeled(self, label: str, widget: QWidget) -> QWidget:
         wrapper = QWidget()
@@ -713,6 +785,28 @@ class AudioSetupPane(QWidget):
         unit_label.setStyleSheet("color: #64748b; font-weight: 700; border: none; padding-bottom: 2px;")
         setattr(widget, "_unit_label", unit_label)
         row.addWidget(widget)
+        row.addWidget(unit_label)
+        row.setAlignment(unit_label, Qt.AlignmentFlag.AlignBottom)
+        layout.addLayout(row)
+        return wrapper
+
+    def _output_level_field(self) -> QWidget:
+        wrapper = QWidget()
+        layout = QVBoxLayout(wrapper)
+        layout.setContentsMargins(0, 0, 0, 0)
+        label = QLabel("Output level")
+        label.setFixedHeight(14)
+        layout.addWidget(label)
+
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(5)
+        unit_label = QLabel("dBFS")
+        unit_label.setStyleSheet("color: #64748b; font-weight: 700; border: none; padding-bottom: 2px;")
+        setattr(self.level, "_field_label", label)
+        setattr(self.level, "_unit_label", unit_label)
+
+        row.addWidget(self.level)
         row.addWidget(unit_label)
         row.setAlignment(unit_label, Qt.AlignmentFlag.AlignBottom)
         layout.addLayout(row)
@@ -747,19 +841,23 @@ class AudioSetupPane(QWidget):
     def _connect_auto_apply_controls(self) -> None:
         immediate_controls = [
             self.in_mic_channel, self.in_loop_channel, self.out_speaker_channel, self.out_ref_channel,
-            self.fs, self.blocksize, self.wasapi, self.level, self.sweep_dur, self.num_sweeps,
-            self.hpf_enable, self.hpf_order, self.hpf_corr, self.hpf_cap, self.naming,
-            self.align, self.debug, self.pre_sil, self.post_sil, self.taper,
+            self.fs, self.wasapi, self.hpf_enable, self.hpf_corr, self.naming,
+            self.align, self.debug,
+        ]
+        commit_controls = [
+            self.blocksize, self.sweep_dur, self.num_sweeps,
+            self.hpf_order, self.hpf_cap, self.pre_sil, self.post_sil, self.taper,
         ]
         for control in immediate_controls:
             if isinstance(control, QComboBox):
                 control.currentIndexChanged.connect(self.apply_audio_setup_now)
             elif isinstance(control, QCheckBox):
                 control.stateChanged.connect(self.apply_audio_setup_now)
-            elif isinstance(control, QDoubleSpinBox):
-                control.valueChanged.connect(self.apply_audio_setup_now)
+        for control in commit_controls:
+            control.editingFinished.connect(self.apply_audio_setup_now)
         for control in (self.hpf, self.h2, self.h3):
-            control.textChanged.connect(self.schedule_auto_apply)
+            control.editingFinished.connect(self.apply_audio_setup_now)
+        self.level.valueChanged.connect(self.apply_output_level_change)
 
     def _combo_data(self, combo: QComboBox) -> Any:
         return combo.currentData()
@@ -900,6 +998,23 @@ class AudioSetupPane(QWidget):
         self.auto_apply_timer.stop()
         self.save_audio_setup(notify=False)
 
+    def adjust_output_level(self, delta_db: float) -> None:
+        self.level.setValue(self.level.value() + delta_db)
+        self.apply_output_level_change()
+
+    def apply_output_level_change(self) -> None:
+        if not self.auto_apply_enabled:
+            return
+        self.level.lineEdit().deselect()
+        self.auto_apply_timer.stop()
+        self.update_running_sine_level()
+        self.save_audio_setup(notify=False, reload_backend=False)
+
+    def update_running_sine_level(self) -> None:
+        if not self.sine_running:
+            return
+        self.backend.update_sine_level(self.level.value())
+
     def flush_pending_changes(self) -> None:
         if self.auto_apply_timer.isActive():
             self.auto_apply_timer.stop()
@@ -910,7 +1025,7 @@ class AudioSetupPane(QWidget):
         info = self.catalog.get(dev_id, {}) if dev_id is not None else {}
         return str(info.get("name", "")), str(info.get("hostapi", ""))
 
-    def save_audio_setup(self, notify: bool = False) -> None:
+    def save_audio_setup(self, notify: bool = False, reload_backend: bool = True) -> None:
         in_name, in_api = self._device_metadata("in")
         out_name, out_api = self._device_metadata("out")
         values = {
@@ -929,7 +1044,7 @@ class AudioSetupPane(QWidget):
             ("sweep", "sweep_dur_s"): self.sweep_dur.value(),
             ("sweep", "sweep_level_dbfs"): self.level.value(),
             ("sweep", "num_sweeps"): int(self.num_sweeps.value()),
-            ("sweep", "protect_hpf_hz"): self.hpf.text() if self.hpf_enable.isChecked() else "None",
+            ("sweep", "protect_hpf_hz"): _normalize_decimal_text(self.hpf.text()) if self.hpf_enable.isChecked() else "None",
             ("sweep", "protect_hpf_order"): int(self.hpf_order.value()),
             ("sweep", "protect_hpf_correction"): self.hpf_corr.isChecked(),
             ("sweep", "protect_hpf_corr_db_cap"): self.hpf_cap.value(),
@@ -938,14 +1053,14 @@ class AudioSetupPane(QWidget):
             ("sweep", "post_sil_ms"): self.post_sil.value(),
             ("sweep", "mic_tail_taper_ms"): self.taper.value(),
             ("sweep", "debug_saves"): self.debug.isChecked(),
-            ("sweep", "h2_test_db"): self.h2.text(),
-            ("sweep", "h3_test_db"): self.h3.text(),
+            ("sweep", "h2_test_db"): _normalize_decimal_text(self.h2.text()),
+            ("sweep", "h3_test_db"): _normalize_decimal_text(self.h3.text()),
         }
         try:
             save_config_values(
                 self.config_file,
                 values,
-                self.backend.load,
+                self.backend.load if reload_backend else None,
             )
             fresh = _read_config(self.config_file)
             project.update_audio_setup(_section_dict(fresh, "audio"), _section_dict(fresh, "sweep"))
@@ -964,7 +1079,7 @@ class AudioSetupPane(QWidget):
             self.sine_button.setText("Play Sine")
             return
         duration_text = self.sine_duration_text.text().strip()
-        duration = float(duration_text) if duration_text else None
+        duration = float(_normalize_decimal_text(duration_text)) if duration_text else None
         self.sine_running = True
         self.sine_button.setText("Stop Sine")
         worker = Worker(self.backend.play_sine, self.sine_freq.value(), self.level.value(), duration)
@@ -1032,11 +1147,13 @@ class AudioSetupPane(QWidget):
             return None
         try:
             calibration = {
-                "output_level_dbfs": float(output_cal["output_level_dbfs"]),
-                "output_vrms": float(output_cal["output_vrms"]),
+                "output_level_dbfs": float(_normalize_decimal_text(str(output_cal["output_level_dbfs"]))),
+                "output_vrms": float(_normalize_decimal_text(str(output_cal["output_vrms"]))),
             }
             if output_cal.get("amplifier_gain_db") is not None:
-                calibration["amplifier_gain_db"] = float(output_cal["amplifier_gain_db"])
+                calibration["amplifier_gain_db"] = float(
+                    _normalize_decimal_text(str(output_cal["amplifier_gain_db"]))
+                )
         except (KeyError, TypeError, ValueError):
             return None
         return calibration
@@ -1134,7 +1251,8 @@ class AudioSetupPane(QWidget):
         self._show_system_calibration_saved("SPL meter input calibration saved.")
 
     def _show_system_calibration_saved(self, message: str) -> None:
-        self.flush_pending_changes()
+        self.auto_apply_timer.stop()
+        self.save_audio_setup(notify=False, reload_backend=False)
         QMessageBox.information(self, "Calibration", message)
 
     def test_sweep(self) -> None:

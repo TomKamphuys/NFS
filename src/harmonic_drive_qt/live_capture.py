@@ -78,6 +78,10 @@ def _project_dir() -> Path:
         return Path.cwd()
 
 
+def _normalize_decimal_text(value: str) -> str:
+    return value.strip().replace(",", ".")
+
+
 def _project_frd_db_offset() -> float | None:
     try:
         from harmonic_drive import project
@@ -86,7 +90,7 @@ def _project_frd_db_offset() -> float | None:
         if not isinstance(stage5_vars, dict):
             return None
         value = stage5_vars.get("frd_db_offset")
-        return None if value is None else float(value)
+        return None if value is None else float(_normalize_decimal_text(str(value)))
     except (TypeError, ValueError):
         return None
     except Exception:

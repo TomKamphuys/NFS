@@ -111,6 +111,30 @@ def test_grid_generation_uses_advanced_settings_when_waypoints_are_blank(tmp_pat
         pane.deleteLater()
 
 
+def test_grid_pane_accepts_comma_decimal_text_inputs(tmp_path):
+    _app()
+    config_file = tmp_path / "config.ini"
+    _write_config(config_file)
+    project.set_project_dir(tmp_path / "speaker_comma", str(config_file))
+
+    pane = GridGeneratorPane(Mock(), str(config_file))
+    try:
+        top_r, top_phi, top_z = pane.waypoint_inputs["top"]
+        top_r.setText("123,4")
+        top_phi.setText("-12,5")
+        top_z.setText("456,7")
+        pane.cap_fraction.setText("0,25")
+        pane.cap_tol.setText("12,5")
+
+        assert pane._waypoint("top") == (123.4, -12.5, 456.7)
+        assert pane._optional_float(pane.cap_fraction.text()) == 0.25
+        assert pane._optional_float(pane.cap_tol.text()) == 12.5
+    finally:
+        pane.shutdown()
+        pane.sync_timer.stop()
+        pane.deleteLater()
+
+
 def test_grid_generation_requires_waypoints_or_advanced_geometry(tmp_path, monkeypatch):
     _app()
     config_file = tmp_path / "config.ini"

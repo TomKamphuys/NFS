@@ -44,6 +44,16 @@ LOG_LEVEL_LABELS = {
     "ERROR": "Quiet",
 }
 
+DECIMAL_TEXT_KINDS = {"int", "float", "opt_float", "optional_float"}
+
+
+def _normalize_decimal_editor_text(widget: QLineEdit, text: str) -> None:
+    if "," not in text:
+        return
+    cursor_pos = widget.cursorPosition()
+    widget.setText(text.replace(",", "."))
+    widget.setCursorPosition(cursor_pos)
+
 
 class SettingsDialog(QDialog):
     def __init__(self, config_file: str, on_apply: Callable[[], None], parent=None):
@@ -424,6 +434,10 @@ class SettingsDialog(QDialog):
         else:
             l.addWidget(lbl)
             widget = QLineEdit(raw)
+            if kind in DECIMAL_TEXT_KINDS:
+                widget.textEdited.connect(
+                    lambda text, widget=widget: _normalize_decimal_editor_text(widget, text)
+                )
             widget.setStyleSheet("border: none; background: transparent; font-size: 13px; color: #0f172a; min-height: 22px; padding: 0;")
             
         if kind != "bool":

@@ -38,6 +38,10 @@ from .qt_compat import (
 )
 
 
+def _decimal_float(value) -> float:
+    return float(str(value).strip().replace(",", "."))
+
+
 def _config_bool(config_file: str, section: str, key: str, fallback: bool) -> bool:
     parser = configparser.ConfigParser(inline_comment_prefixes=("#", ";"))
     parser.read(config_file)
@@ -577,13 +581,13 @@ class ControlPane(QWidget):
                 return
             points = []
             for r, phi, z in zip(df["r_xy_mm"], df["phi_deg"], df["z_mm"]):
-                radius = float(r)
-                angle = float(phi)
+                radius = _decimal_float(r)
+                angle = _decimal_float(phi)
                 points.append(
                     {
                         "r": radius,
                         "p": angle,
-                        "z": float(z),
+                        "z": _decimal_float(z),
                     }
                 )
             self.grid_readout_points = points
@@ -637,7 +641,7 @@ class ControlPane(QWidget):
                         raw = getattr(pos, attr)
                         if callable(raw):
                             raw = raw()
-                        return f"{float(raw):.2f}"
+                        return f"{_decimal_float(raw):.2f}"
                     except Exception:
                         return str(raw)
             return "--"

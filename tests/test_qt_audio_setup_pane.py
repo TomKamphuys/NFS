@@ -8,13 +8,33 @@ pytest.importorskip("PySide6")
 
 from harmonic_drive_qt.audio_setup_pane import AudioSetupPane
 from harmonic_drive import project
-from harmonic_drive_qt.qt_compat import QApplication, QLabel, QMessageBox, QGroupBox, QSizePolicy
+from harmonic_drive_qt.qt_compat import QApplication, QLabel, QMessageBox, QGroupBox, QSizePolicy, QLocale, QDoubleSpinBox, QAbstractSpinBox
 from harmonic_drive_qt.styles import app_stylesheet
 from harmonic_drive_qt.styles import toggle_style
 
 
 def _app():
     return QApplication.instance() or QApplication([])
+
+
+def test_pyside_double_spin_box_accepts_dot_and_comma_regardless_locale():
+    _app()
+    original_locale = QLocale()
+    QLocale.setDefault(QLocale(QLocale.Language.Dutch, QLocale.Country.Netherlands))
+    spin = QDoubleSpinBox()
+    try:
+        spin.setRange(-200.0, 200.0)
+        spin.setDecimals(2)
+
+        assert spin.valueFromText("1.25") == 1.25
+        assert spin.valueFromText("1,25") == 1.25
+        assert spin.textFromValue(1.25) == "1.25"
+        spin.lineEdit().setText("1,25")
+        spin.lineEdit().textEdited.emit("1,25")
+        assert spin.lineEdit().text() == "1.25"
+    finally:
+        QLocale.setDefault(original_locale)
+        spin.deleteLater()
 
 
 def test_plain_audio_combos_use_content_sizing_without_custom_popup(tmp_path, monkeypatch):
@@ -108,6 +128,199 @@ def test_plain_audio_combos_use_content_sizing_without_custom_popup(tmp_path, mo
         assert pane.hpf.text() == "500.0"
         assert pane.hpf.placeholderText() == ""
     finally:
+        pane.cal_timer.stop()
+        pane.deleteLater()
+
+
+def test_audio_pane_saves_comma_decimal_text_fields_as_dot_decimals(tmp_path, monkeypatch):
+    _app()
+    config_file = tmp_path / "config.ini"
+    config_file.write_text(
+        "[audio]\n"
+        "in_dev = 1\n"
+        "out_dev = 2\n"
+        "in_ch_mic = 0\n"
+        "in_ch_loop = 1\n"
+        "out_ch_spkr = 0\n"
+        "out_ch_ref = 1\n"
+        "fs = 48000\n"
+        "blocksize = 2048\n"
+        "wasapi_exclusive = False\n"
+        "in_dev_hostapi = ASIO\n"
+        "out_dev_hostapi = ASIO\n"
+        "[sweep]\n"
+        "sweep_level_dbfs = -20.0\n"
+        "sweep_dur_s = 1.0\n"
+        "num_sweeps = 1\n"
+        "protect_hpf_hz = None\n"
+        "protect_hpf_order = 1\n"
+        "protect_hpf_correction = False\n"
+        "protect_hpf_corr_db_cap = 12.0\n"
+        "naming_convention = dimitri\n"
+        "align_to_first_marker = False\n"
+        "pre_sil_ms = 0.0\n"
+        "post_sil_ms = 0.0\n"
+        "mic_tail_taper_ms = 0.0\n"
+        "debug_saves = False\n"
+        "h2_test_db = None\n"
+        "h3_test_db = None\n",
+        encoding="utf-8",
+    )
+    catalog = {
+        1: {"name": "Input", "hostapi": "ASIO", "input_channels": [0, 1], "output_channels": []},
+        2: {"name": "Output", "hostapi": "ASIO", "input_channels": [], "output_channels": [0, 1]},
+    }
+
+    monkeypatch.setattr("harmonic_drive_qt.audio_setup_pane.get_devices_and_channels", lambda: catalog)
+    monkeypatch.setattr(
+        "harmonic_drive_qt.audio_setup_pane.get_supported_sample_rates",
+        lambda _in_dev, _out_dev: [48000],
+    )
+
+    pane = AudioSetupPane(Mock(), str(config_file))
+    try:
+        pane.hpf_enable.setChecked(True)
+        pane.hpf.setText("600,5")
+        pane.h2.setText("-20,5")
+        pane.h3.setText("None")
+        pane.save_audio_setup(notify=False)
+
+        saved = config_file.read_text(encoding="utf-8")
+        assert "protect_hpf_hz = 600.5" in saved
+        assert "h2_test_db = -20.5" in saved
+        assert "h3_test_db = None" in saved
+    finally:
+        pane.auto_apply_timer.stop()
+        pane.cal_timer.stop()
+        pane.deleteLater()
+
+
+def test_audio_spin_edits_save_only_after_editing_finished(tmp_path, monkeypatch):
+    _app()
+    config_file = tmp_path / "config.ini"
+    config_file.write_text(
+        "[audio]\n"
+        "in_dev = 1\n"
+        "out_dev = 2\n"
+        "in_ch_mic = 0\n"
+        "in_ch_loop = 1\n"
+        "out_ch_spkr = 0\n"
+        "out_ch_ref = 1\n"
+        "fs = 48000\n"
+        "blocksize = 2048\n"
+        "wasapi_exclusive = False\n"
+        "in_dev_hostapi = ASIO\n"
+        "out_dev_hostapi = ASIO\n"
+        "[sweep]\n"
+        "sweep_level_dbfs = -20.0\n"
+        "sweep_dur_s = 1.0\n"
+        "num_sweeps = 1\n"
+        "protect_hpf_hz = None\n"
+        "protect_hpf_order = 1\n"
+        "protect_hpf_correction = False\n"
+        "protect_hpf_corr_db_cap = 12.0\n"
+        "naming_convention = dimitri\n"
+        "align_to_first_marker = False\n"
+        "pre_sil_ms = 0.0\n"
+        "post_sil_ms = 0.0\n"
+        "mic_tail_taper_ms = 0.0\n"
+        "debug_saves = False\n"
+        "h2_test_db = None\n"
+        "h3_test_db = None\n",
+        encoding="utf-8",
+    )
+    catalog = {
+        1: {"name": "Input", "hostapi": "ASIO", "input_channels": [0, 1], "output_channels": []},
+        2: {"name": "Output", "hostapi": "ASIO", "input_channels": [], "output_channels": [0, 1]},
+    }
+    backend = Mock()
+
+    monkeypatch.setattr("harmonic_drive_qt.audio_setup_pane.get_devices_and_channels", lambda: catalog)
+    monkeypatch.setattr(
+        "harmonic_drive_qt.audio_setup_pane.get_supported_sample_rates",
+        lambda _in_dev, _out_dev: [48000],
+    )
+
+    pane = AudioSetupPane(backend, str(config_file))
+    try:
+        backend.load.reset_mock()
+        pane.sweep_dur.setValue(2.0)
+        assert "sweep_dur_s = 1.0" in config_file.read_text(encoding="utf-8")
+        backend.load.assert_not_called()
+
+        pane.sweep_dur.editingFinished.emit()
+
+        assert "sweep_dur_s = 2.0" in config_file.read_text(encoding="utf-8")
+        backend.load.assert_called_once()
+    finally:
+        pane.auto_apply_timer.stop()
+        pane.cal_timer.stop()
+        pane.deleteLater()
+
+
+def test_output_level_spin_arrows_save_without_reload_and_update_running_sine(tmp_path, monkeypatch):
+    _app()
+    config_file = tmp_path / "config.ini"
+    config_file.write_text(
+        "[audio]\n"
+        "in_dev = 1\n"
+        "out_dev = 2\n"
+        "in_ch_mic = 0\n"
+        "in_ch_loop = 1\n"
+        "out_ch_spkr = 0\n"
+        "out_ch_ref = 1\n"
+        "fs = 48000\n"
+        "blocksize = 2048\n"
+        "wasapi_exclusive = False\n"
+        "in_dev_hostapi = ASIO\n"
+        "out_dev_hostapi = ASIO\n"
+        "[sweep]\n"
+        "sweep_level_dbfs = -20.0\n"
+        "sweep_dur_s = 1.0\n"
+        "num_sweeps = 1\n"
+        "protect_hpf_hz = None\n"
+        "protect_hpf_order = 1\n"
+        "protect_hpf_correction = False\n"
+        "protect_hpf_corr_db_cap = 12.0\n"
+        "naming_convention = dimitri\n"
+        "align_to_first_marker = False\n"
+        "pre_sil_ms = 0.0\n"
+        "post_sil_ms = 0.0\n"
+        "mic_tail_taper_ms = 0.0\n"
+        "debug_saves = False\n"
+        "h2_test_db = None\n"
+        "h3_test_db = None\n",
+        encoding="utf-8",
+    )
+    catalog = {
+        1: {"name": "Input", "hostapi": "ASIO", "input_channels": [0, 1], "output_channels": []},
+        2: {"name": "Output", "hostapi": "ASIO", "input_channels": [], "output_channels": [0, 1]},
+    }
+    backend = Mock()
+
+    monkeypatch.setattr("harmonic_drive_qt.audio_setup_pane.get_devices_and_channels", lambda: catalog)
+    monkeypatch.setattr(
+        "harmonic_drive_qt.audio_setup_pane.get_supported_sample_rates",
+        lambda _in_dev, _out_dev: [48000],
+    )
+
+    pane = AudioSetupPane(backend, str(config_file))
+    try:
+        backend.load.reset_mock()
+        pane.sine_running = True
+
+        assert pane.level.buttonSymbols() == QAbstractSpinBox.ButtonSymbols.UpDownArrows
+        assert pane.level.singleStep() == 1.0
+        assert pane.level.objectName() == "OutputLevelSpin"
+        assert "spin-chevron-up.svg" in pane.level.styleSheet()
+        pane.level.stepBy(1)
+
+        assert pane.level.value() == -19.0
+        backend.update_sine_level.assert_called_once_with(-19.0)
+        backend.load.assert_not_called()
+        assert "sweep_level_dbfs = -19.0" in config_file.read_text(encoding="utf-8")
+    finally:
+        pane.auto_apply_timer.stop()
         pane.cal_timer.stop()
         pane.deleteLater()
 

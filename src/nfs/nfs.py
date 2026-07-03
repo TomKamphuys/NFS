@@ -323,6 +323,16 @@ class NearFieldScanner:
         """
         self._audio.stop_sine()
 
+    def update_sine_level(self, level_dbfs: float) -> None:
+        """
+        Updates the active sine tone level when supported by the audio backend.
+        :param level_dbfs: New level in dBFS.
+        :return: None
+        """
+        updater = getattr(self._audio, "update_sine_level", None)
+        if callable(updater):
+            updater(level_dbfs)
+
     def shutdown(self) -> None:
         """
         Shuts down the scanner system gracefully.

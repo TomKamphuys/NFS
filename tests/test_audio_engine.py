@@ -314,6 +314,60 @@ def test_integration_with_mock_audio(tmp_path):
     assert metrics_file.exists()
 
 
+def test_audio_factory_accepts_comma_decimal_config_values(tmp_path):
+    config = configparser.ConfigParser()
+    config["audio"] = {
+        "mode": "mock_interface",
+        "fs": "48000",
+        "in_dev": "0",
+        "out_dev": "0",
+        "in_ch_mic": "1",
+        "in_ch_loop": "0",
+        "out_ch_spkr": "0",
+        "out_ch_ref": "1",
+        "blocksize": "1024",
+        "wasapi_exclusive": "False",
+    }
+    config["sweep"] = {
+        "sweep_dur_s": "0,5",
+        "sweep_level_dbfs": "-10,5",
+        "num_sweeps": "1",
+        "pre_sil_ms": "50,5",
+        "post_sil_ms": "60,5",
+        "mic_tail_taper_ms": "10,5",
+        "align_to_first_marker": "True",
+        "debug_saves": "False",
+        "H2_TEST_DB": "-20,5",
+        "H3_TEST_DB": "None",
+        "protect_hpf_hz": "500,5",
+        "protect_hpf_order": "4",
+        "protect_hpf_correction": "True",
+        "protect_hpf_corr_db_cap": "6,5",
+    }
+    config_path = tmp_path / "comma_config.ini"
+    with open(config_path, "w", encoding="utf-8") as f:
+        config.write(f)
+
+    audio = AudioFactory.create(str(config_path))
+
+    assert audio.cap["sweep_dur_s"] == 0.5
+    assert audio.cap["sweep_level_dbfs"] == -10.5
+    assert audio.cap["pre_sil_ms"] == 50.5
+    assert audio.cap["post_sil_ms"] == 60.5
+    assert audio.harmonic_injector.h2_db == -20.5
+    assert audio.protection_filter.freq_hz == 500.5
+    assert audio.protection_filter.hpf_corr_db_cap == 6.5
+
+    config.remove_option("sweep", "protect_hpf_corr_db_cap")
+    fallback_config_path = tmp_path / "comma_config_fallback.ini"
+    with open(fallback_config_path, "w", encoding="utf-8") as f:
+        config.write(f)
+
+    audio = AudioFactory.create(str(fallback_config_path))
+
+    assert audio.protection_filter.hpf_corr_db_cap == 12.0
+
+
 @patch("nfs.audio.get_devices_and_channels")
 def test_find_device_id_by_name_handles_changed_id(mock_catalog):
     mock_catalog.return_value = {

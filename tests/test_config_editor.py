@@ -33,13 +33,17 @@ def test_coerce():
     assert _coerce("choice", "option1") == "option1"
     assert _coerce("bool", "true") is True
     assert _coerce("int", "42.5") == 42
+    assert _coerce("int", "42,5") == 42
     assert _coerce("float", "3.14") == 3.14
+    assert _coerce("float", "3,14") == 3.14
     assert _coerce("opt_float", "None") is None
     assert _coerce("opt_float", "") is None
     assert _coerce("opt_float", "1.2") == 1.2
+    assert _coerce("opt_float", "1,2") == 1.2
     assert _coerce("optional_float", "None") is None
     assert _coerce("optional_float", "") is None
     assert _coerce("optional_float", "1.2") == 1.2
+    assert _coerce("optional_float", "1,2") == 1.2
     
     with pytest.raises(ValueError, match="Unknown kind"):
         _coerce("unknown", "val")

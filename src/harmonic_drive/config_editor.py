@@ -267,6 +267,10 @@ def _parse_bool(s: str) -> bool:
     return str(s).strip().lower() in ("1", "true", "yes", "on")
 
 
+def _normalize_decimal_text(raw: str) -> str:
+    return raw.replace(",", ".")
+
+
 def _coerce(kind: str, raw: str):
     raw = (raw or "").strip()
     if kind in ("str", "choice"):
@@ -274,13 +278,13 @@ def _coerce(kind: str, raw: str):
     if kind == "bool":
         return _parse_bool(raw)
     if kind == "int":
-        return int(float(raw))
+        return int(float(_normalize_decimal_text(raw)))
     if kind == "float":
-        return float(raw)
+        return float(_normalize_decimal_text(raw))
     if kind in ("opt_float", "optional_float"):
         if raw == "" or raw.lower() == "none":
             return None
-        return float(raw)
+        return float(_normalize_decimal_text(raw))
     raise ValueError(f"Unknown kind: {kind}")
 
 

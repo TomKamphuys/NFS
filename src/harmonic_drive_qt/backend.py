@@ -313,6 +313,17 @@ class BackendManager:
             self.sine_audio = AudioFactory.create(self.config_file)
         return self._run_audio(self.sine_audio.play_sine, frequency, level, duration)
 
+    def update_sine_level(self, level: float) -> None:
+        targets = []
+        if self.nfs is not None and hasattr(self.nfs, "update_sine_level"):
+            targets.append(self.nfs)
+        if self.audio is not None and hasattr(self.audio, "update_sine_level"):
+            targets.append(self.audio)
+        if self.sine_audio is not None and hasattr(self.sine_audio, "update_sine_level"):
+            targets.append(self.sine_audio)
+        for target in targets:
+            self._run_audio(target.update_sine_level, level)
+
     def stop_sine(self) -> None:
         if self.nfs is not None and hasattr(self.nfs, "stop_sine"):
             self.nfs.stop_sine()

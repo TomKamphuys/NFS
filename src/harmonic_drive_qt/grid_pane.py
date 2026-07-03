@@ -53,6 +53,18 @@ GRID_IMAGE_DIR = Path(__file__).resolve().parents[1] / "grid_generator" / "image
 from coord_viewer_core import CoordViewerEngine  # noqa: E402
 
 
+def _normalize_decimal_text(value: str) -> str:
+    return value.strip().replace(",", ".")
+
+
+def _normalize_decimal_editor_text(widget: QLineEdit, text: str) -> None:
+    if "," not in text:
+        return
+    cursor_pos = widget.cursorPosition()
+    widget.setText(text.replace(",", "."))
+    widget.setCursorPosition(cursor_pos)
+
+
 class DiagramLabel(QLabel):
     def __init__(self, text: str, image_path: Path | None = None, parent=None) -> None:
         super().__init__(text, parent)
@@ -428,9 +440,11 @@ class GridGeneratorPane(QWidget):
         self.delta_theta = self._spin(self._gv_float(grid_vars, "delta_theta_deg", 7.5), 0.1, 90, " deg")
         self.wall_thickness = self._spin(self._gv_float(grid_vars, "wall_thickness_mm", 50.0), 0, 1000, " mm")
         self.cap_fraction = QLineEdit(str(grid_vars.get("cap_fraction") or "Auto"))
+        self._normalize_decimal_editor(self.cap_fraction)
         self.p_side = self._spin(self._gv_float(grid_vars, "P_side", 0.5), 0.01, 5.0, "", decimals=2)
         self.p_caps = self._spin(self._gv_float(grid_vars, "P_caps", 0.8), 0.01, 5.0, "", decimals=2)
         self.cap_tol = QLineEdit(self._auto_text(grid_vars.get("cap_tol_mm")))
+        self._normalize_decimal_editor(self.cap_tol)
         self.az_weight = self._spin(self._gv_float(grid_vars, "azimuth_weight_center_deg", 0.0), -180, 180, " deg")
         self.z_rotation = self._spin(self._gv_float(grid_vars, "z_rotation_deg", 90.0), -360, 360, " deg")
         self.reverse_spiral = QCheckBox("Generate reverse spiral")
@@ -630,19 +644,23 @@ class GridGeneratorPane(QWidget):
         text = ""
         if value not in (None, ""):
             try:
-                text = f"{float(value):.1f}"
+                text = f"{float(_normalize_decimal_text(str(value))):.1f}"
             except (TypeError, ValueError):
                 text = str(value)
         edit = QLineEdit(text)
         edit.setValidator(None)
+        self._normalize_decimal_editor(edit)
         return edit
+
+    def _normalize_decimal_editor(self, widget: QLineEdit) -> None:
+        widget.textEdited.connect(lambda text, widget=widget: _normalize_decimal_editor_text(widget, text))
 
     def _gv_float(self, grid_vars: dict, key: str, fallback: float) -> float:
         try:
             value = grid_vars.get(key, fallback)
             if value in (None, ""):
                 return fallback
-            return float(value)
+            return float(_normalize_decimal_text(str(value)))
         except (TypeError, ValueError):
             return fallback
 
@@ -656,7 +674,7 @@ class GridGeneratorPane(QWidget):
         text = widget.text().strip()
         if not text:
             return None
-        return float(text)
+        return float(_normalize_decimal_text(text))
 
     def _waypoint(self, key: str) -> tuple[float, float, float] | None:
         r, phi, z = self.waypoint_inputs[key]
@@ -668,9 +686,9 @@ class GridGeneratorPane(QWidget):
     def _add_extra_position(self, saved: dict | None = None) -> None:
         saved = saved or {}
         name = QLineEdit(str(saved.get("name") or f"point_{len(self.extra_position_rows) + 1}"))
-        r = self._spin(float(saved.get("r") or 0.0), -2000, 2000, "")
-        phi = self._spin(float(saved.get("phi") or 0.0), -360, 360, "")
-        z = self._spin(float(saved.get("z") or 0.0), -2000, 2000, "")
+        r = self._spin(float(_normalize_decimal_text(str(saved.get("r") or 0.0))), -2000, 2000, "")
+        phi = self._spin(float(_normalize_decimal_text(str(saved.get("phi") or 0.0))), -360, 360, "")
+        z = self._spin(float(_normalize_decimal_text(str(saved.get("z") or 0.0))), -2000, 2000, "")
 
         w = QWidget()
         w.setStyleSheet("background: #fbfdff; border: 1px solid #e2e8f0; border-radius: 4px;")
@@ -732,7 +750,7 @@ class GridGeneratorPane(QWidget):
         value = text.strip()
         if not value or value.lower().startswith("auto"):
             return None
-        return float(value)
+        return float(_normalize_decimal_text(value))
 
     def _auto_text(self, value) -> str:
         if value in (None, ""):
