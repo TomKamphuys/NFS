@@ -205,12 +205,13 @@ class ControlPane(QWidget):
 
         if show_rehome:
             rehome = QPushButton("REHOME")
-            warning_button(rehome)
+            self.rehome_button = rehome
             rehome.setIcon(ui_icon("home"))
             rehome.setIconSize(QSize(20, 20))
             rehome.setFixedSize(command_width, 46)
             rehome.clicked.connect(lambda: self._run_command("rehome"))
             commands.addWidget(rehome)
+            self._set_home_button_state(self.home_ok)
 
         zero = QPushButton("ZERO")
         primary_button(zero)
@@ -415,11 +416,15 @@ class ControlPane(QWidget):
     def _set_home_button_state(self, homed: bool) -> None:
         color = "#22c55e" if homed else "#f4c542"
         hover = "#16a34a" if homed else "#e5b834"
-        self.home_button.setStyleSheet(
+        style = (
             f"QPushButton {{ background: {color}; border: 1px solid {color}; "
             "border-radius: 4px; color: #ffffff; font-weight: 800; padding: 7px 11px; }"
             f"QPushButton:hover {{ background: {hover}; border-color: {hover}; }}"
         )
+        self.home_button.setStyleSheet(style)
+        rehome_button = getattr(self, "rehome_button", None)
+        if rehome_button is not None:
+            rehome_button.setStyleSheet(style)
 
     def _ensure_session_folder(self) -> bool:
         return bool(self.require_session_folder())
