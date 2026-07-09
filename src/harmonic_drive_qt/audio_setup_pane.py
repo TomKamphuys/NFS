@@ -642,7 +642,7 @@ class AudioSetupPane(QWidget):
         group = QGroupBox("Sweep Settings")
         layout = QVBoxLayout(group)
         grid = QGridLayout()
-        self.sweep_dur = self._spin(_float_value(parser, "sweep", "sweep_dur_s", 5.0), 0.01, 3600, " s", 2)
+        self.sweep_dur = self._spin(_float_value(parser, "sweep", "sweep_dur_s", 5.0), 0.01, 3600, "", 2)
         self.num_sweeps = self._spin(_int_value(parser, "sweep", "num_sweeps", 1), 1, 100, "", 0)
         hpf_raw = _value(parser, "sweep", "protect_hpf_hz", "None")
         self.hpf_enable = QCheckBox("Protection HPF")
