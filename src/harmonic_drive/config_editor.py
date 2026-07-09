@@ -49,9 +49,17 @@ DISPLAY_LABELS = {
     "show_height_offset_controls": "Show height offset controls",
     "default_project_dir": "Default session folder",
     "cal_tool_height": "Calibration tool height (mm)",
+    "feed_rate": "Feed rate (mm/min)",
     "safe_radius": "Safe radius (mm)",
     "homing_gap": "Homing gap (degrees)",
     "pole_gap": "Pole gap (mm)",
+    "cap_spacing": "Cap spacing (mm)",
+    "wall_spacing": "Wall spacing (mm)",
+    "radius": "Radius (mm)",
+    "height": "Height (mm)",
+    "speaker_height": "Speaker height (mm)",
+    "speaker_width": "Speaker width (mm)",
+    "speaker_depth": "Speaker depth (mm)",
     "use_alternative_motion_controls": "Use alternative motion controls",
 }
 

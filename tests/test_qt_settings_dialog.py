@@ -20,6 +20,18 @@ def test_motion_setting_labels_include_normalized_units():
     assert DISPLAY_LABELS["pole_gap"] == "Pole gap (mm)"
 
 
+def test_numeric_setting_labels_show_correct_units():
+    assert DISPLAY_LABELS["feed_rate"] == "Feed rate (mm/min)"
+    assert DISPLAY_LABELS["cal_tool_height"] == "Calibration tool height (mm)"
+    assert DISPLAY_LABELS["cap_spacing"] == "Cap spacing (mm)"
+    assert DISPLAY_LABELS["wall_spacing"] == "Wall spacing (mm)"
+    assert DISPLAY_LABELS["radius"] == "Radius (mm)"
+    assert DISPLAY_LABELS["height"] == "Height (mm)"
+    assert DISPLAY_LABELS["speaker_height"] == "Speaker height (mm)"
+    assert DISPLAY_LABELS["speaker_width"] == "Speaker width (mm)"
+    assert DISPLAY_LABELS["speaker_depth"] == "Speaker depth (mm)"
+
+
 def test_mock_dro_fields_follow_selected_grbl_streamer_type(tmp_path):
     _app()
     config_file = tmp_path / "config.ini"

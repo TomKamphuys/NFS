@@ -377,7 +377,7 @@ class GridGeneratorPane(QWidget):
         
         r, phi, z = self.waypoint_inputs[key]
         
-        for name, spin in [("Radius", r), ("Phi", phi), ("Height", z)]:
+        for name, spin in [("Radius (mm)", r), ("Phi (deg)", phi), ("Height (mm)", z)]:
             sl = QVBoxLayout()
             sl.setSpacing(0)
             sl_lbl = QLabel(name)
@@ -465,7 +465,7 @@ class GridGeneratorPane(QWidget):
             ("Bottom Cutoff", self.bottom_cutoff), ("Delta Theta", self.delta_theta),
             ("Wall Thickness", self.wall_thickness), ("Cap Fraction", self.cap_fraction),
             ("P Side", self.p_side), ("P Caps", self.p_caps),
-            ("Cap Tol", self.cap_tol), ("Az Weight Center", self.az_weight),
+            ("Cap Tol (mm)", self.cap_tol), ("Az Weight Center", self.az_weight),
             ("Z Rotation", self.z_rotation), ("Side Snake Start", self.snake_start),
         ]
         
@@ -707,7 +707,7 @@ class GridGeneratorPane(QWidget):
         name_box.addWidget(name)
         l.addLayout(name_box)
 
-        for field_label, spin in (("Radius", r), ("Phi", phi), ("Height", z)):
+        for field_label, spin in (("Radius (mm)", r), ("Phi (deg)", phi), ("Height (mm)", z)):
             spin_box = QVBoxLayout()
             spin_box.setSpacing(0)
             lbl = QLabel(field_label)
