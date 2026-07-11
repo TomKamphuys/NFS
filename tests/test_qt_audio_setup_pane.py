@@ -7,7 +7,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("PySide6")
 
 from harmonic_drive_qt.audio_setup_pane import AudioSetupPane
-from harmonic_drive import project
+from harmonic_drive_qt import project
 from harmonic_drive_qt.qt_compat import QApplication, QLabel, QMessageBox, QGroupBox, QSizePolicy, QLocale, QDoubleSpinBox, QAbstractSpinBox
 from harmonic_drive_qt.styles import app_stylesheet
 from harmonic_drive_qt.styles import toggle_style

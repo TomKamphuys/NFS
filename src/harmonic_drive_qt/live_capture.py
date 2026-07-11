@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import configparser
 import math
-import sys
 from pathlib import Path
 
 import numpy as np
@@ -38,6 +37,7 @@ from .qt_compat import (
 )
 from .styles import light_combo, toggle_style
 from .widgets import LevelMeter, LinePlot
+from grid_generator.coord_viewer_core_matplot import CoordViewerEngine
 
 
 LIVE_CAPTURE_CONFIG_SECTION = "live_capture"
@@ -62,16 +62,9 @@ FREQUENCY_SMOOTHING_OPTIONS = {
     24: "1/24",
 }
 
-GRID_SRC = Path(__file__).resolve().parents[1] / "grid"
-if str(GRID_SRC) not in sys.path:
-    sys.path.insert(0, str(GRID_SRC))
-
-from coord_viewer_core import CoordViewerEngine  # noqa: E402
-
-
 def _project_dir() -> Path:
     try:
-        from harmonic_drive import project
+        from . import project
 
         return project.get_project_dir()
     except Exception:
@@ -84,7 +77,7 @@ def _normalize_decimal_text(value: str) -> str:
 
 def _project_frd_db_offset() -> float | None:
     try:
-        from harmonic_drive import project
+        from . import project
 
         stage5_vars = project.get_project_data().get("stage5_vars")
         if not isinstance(stage5_vars, dict):
@@ -153,7 +146,7 @@ def _grid_z_center() -> float:
         except Exception:
             pass
     try:
-        from harmonic_drive import project
+        from . import project
 
         grid_vars = project.get_project_data().get("grid_vars")
         if isinstance(grid_vars, dict):
@@ -169,7 +162,7 @@ def _grid_z_center() -> float:
 def _find_grid_file() -> Path | None:
     root = _project_dir()
     try:
-        from harmonic_drive import project
+        from . import project
 
         grid_name = project.get_grid_filename()
         if grid_name:
@@ -549,7 +542,7 @@ class LiveCapturePane(QWidget):
     def _create_progress_engine(self, backend: str):
         if backend == "pyvista":
             try:
-                from coord_viewer_core_pyvista import CoordViewerPyVista  # noqa: PLC0415
+                from grid_generator.coord_viewer_core_pyvista import CoordViewerPyVista  # noqa: PLC0415
 
                 self._pyvista_error = None
                 return CoordViewerPyVista()

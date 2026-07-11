@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import configparser
+import shutil
+from pathlib import Path
 from typing import Callable
 
-from harmonic_drive.config_editor import (
+from .config_support import (
     DISPLAY_LABELS,
     EDITABLE_SCHEMA,
     CONFIG_EDITOR_SECTION_KEYS,
@@ -45,6 +47,7 @@ LOG_LEVEL_LABELS = {
 }
 
 DECIMAL_TEXT_KINDS = {"int", "float", "opt_float", "optional_float"}
+DEFAULT_CONFIG_FILENAME = "config_default.ini"
 
 
 def _normalize_decimal_editor_text(widget: QLineEdit, text: str) -> None:
@@ -62,27 +65,7 @@ class SettingsDialog(QDialog):
         self.on_apply = on_apply
         self.parser = configparser.ConfigParser(inline_comment_prefixes=("#", ";"))
         self.parser.optionxform = str
-        self.parser.read(self.config_file)
-        
-        self.inputs = {}
-        self.tab_sections: dict[str, int] = {}
-        self.motion_manager_extra_keys = {
-            key
-            for entries in MOTION_MANAGER_TYPES.values()
-            for key, _kind, _tooltip, _options in entries
-        }
-        self.motion_manager_extra_widgets = {}
-        self.motion_manager_mp_section_name = _strip_inline_comment(
-            self.parser.get("motion_manager", "measurement_points", fallback="")
-        )
-        self.measurement_points_extra_keys = {
-            key
-            for entries in MEASUREMENT_POINTS_TYPES.values()
-            for key, _kind, _tooltip, _options in entries
-        }
-        self.measurement_points_extra_widgets = {}
-        self.measurement_points_section_input = None
-        self.measurement_points_type_input = None
+        self._reload_config_state()
         
         self.setWindowTitle("Edit configuration")
         self.resize(760, 560)
@@ -112,16 +95,12 @@ class SettingsDialog(QDialog):
         )
         layout.addWidget(self.tabs)
         
-        for section in EDITABLE_SCHEMA:
-            if self.parser.has_section(section) and section not in CONFIG_EDITOR_HIDDEN_SECTIONS:
-                self._add_tab(section)
-                
-        if self.parser.has_section("motion_manager"):
-            self._add_tab("motion_manager")
+        self._populate_tabs()
             
         btn_layout = QHBoxLayout()
         restore = QPushButton("RESTORE DEFAULTS")
         restore.setStyleSheet("color: #dc2626; font-weight: bold; padding: 8px 16px; border: 1px solid #fca5a5; border-radius: 4px; background: white;")
+        restore.clicked.connect(self.restore_defaults)
         
         cancel = QPushButton("CANCEL")
         cancel.setStyleSheet("color: #3b82f6; font-weight: bold; padding: 8px 16px; border: none; background: transparent;")
@@ -136,6 +115,88 @@ class SettingsDialog(QDialog):
         btn_layout.addWidget(cancel)
         btn_layout.addWidget(ok)
         layout.addLayout(btn_layout)
+
+    def _reload_config_state(self) -> None:
+        self.parser.clear()
+        self.parser.read(self.config_file)
+        self.inputs = {}
+        self.tab_sections: dict[str, int] = {}
+        self.motion_manager_extra_keys = {
+            key
+            for entries in MOTION_MANAGER_TYPES.values()
+            for key, _kind, _tooltip, _options in entries
+        }
+        self.motion_manager_extra_widgets = {}
+        self.motion_manager_mp_section_name = _strip_inline_comment(
+            self.parser.get("motion_manager", "measurement_points", fallback="")
+        )
+        self.measurement_points_extra_keys = {
+            key
+            for entries in MEASUREMENT_POINTS_TYPES.values()
+            for key, _kind, _tooltip, _options in entries
+        }
+        self.measurement_points_extra_widgets = {}
+        self.measurement_points_section_input = None
+        self.measurement_points_type_input = None
+
+    def _populate_tabs(self) -> None:
+        self.tabs.clear()
+        for section in EDITABLE_SCHEMA:
+            if self.parser.has_section(section) and section not in CONFIG_EDITOR_HIDDEN_SECTIONS:
+                self._add_tab(section)
+
+        if self.parser.has_section("motion_manager"):
+            self._add_tab("motion_manager")
+
+    def _default_config_path(self) -> Path:
+        config_path = Path(self.config_file)
+        candidates = [
+            config_path.with_name(DEFAULT_CONFIG_FILENAME),
+            Path(DEFAULT_CONFIG_FILENAME),
+        ]
+        for candidate in candidates:
+            if candidate.exists():
+                return candidate
+        return candidates[0]
+
+    def restore_defaults(self) -> None:
+        default_path = self._default_config_path()
+        if not default_path.exists():
+            QMessageBox.warning(
+                self,
+                "Restore Defaults",
+                f"Default config not found:\n\n{default_path}",
+            )
+            return
+
+        result = QMessageBox.question(
+            self,
+            "Restore Defaults",
+            "Replace the current configuration with config_default.ini?\n\n"
+            "A .old backup will be saved first.",
+            QMessageBox.StandardButton.Cancel | QMessageBox.StandardButton.Yes,
+            QMessageBox.StandardButton.Cancel,
+        )
+        if result != QMessageBox.StandardButton.Yes:
+            return
+
+        config_path = Path(self.config_file)
+        backup_path = config_path.with_suffix(".old")
+        try:
+            if config_path.exists():
+                shutil.copy2(config_path, backup_path)
+            shutil.copy2(default_path, config_path)
+        except OSError as exc:
+            QMessageBox.warning(
+                self,
+                "Restore Defaults",
+                f"Could not restore default config:\n\n{exc}",
+            )
+            return
+
+        self.on_apply()
+        self._reload_config_state()
+        self._populate_tabs()
 
     def _add_tab(self, section: str) -> None:
         scroll = QScrollArea()

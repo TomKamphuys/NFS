@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 import configparser
 
-from harmonic_drive import project
+from . import project
 
 from .audio_setup_pane import AudioSetupPane
 from .backend import BackendManager

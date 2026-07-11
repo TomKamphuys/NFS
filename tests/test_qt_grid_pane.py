@@ -6,7 +6,7 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("PySide6")
 
-from harmonic_drive import project
+from harmonic_drive_qt import project
 from harmonic_drive_qt.grid_pane import GridGeneratorPane
 from harmonic_drive_qt.qt_compat import QApplication, QMessageBox
 

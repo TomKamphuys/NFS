@@ -86,7 +86,7 @@ class BackendManager:
 
     def _initial_project_dir(self) -> Path:
         try:
-            from harmonic_drive import project
+            from . import project
 
             return project.get_project_dir()
         except Exception:

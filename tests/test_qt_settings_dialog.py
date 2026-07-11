@@ -5,9 +5,9 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("PySide6")
 
-from harmonic_drive_qt.qt_compat import QApplication, QComboBox, QLineEdit
+from harmonic_drive_qt.qt_compat import QApplication, QComboBox, QLineEdit, QMessageBox
 from harmonic_drive_qt.settings_dialog import SettingsDialog
-from harmonic_drive.config_editor import DISPLAY_LABELS
+from harmonic_drive_qt.config_support import DISPLAY_LABELS
 
 
 def _app():
@@ -95,6 +95,45 @@ def test_settings_dialog_hides_audio_device_selection_fields(tmp_path):
         "out_dev_hostapi",
     ):
         assert ("audio", key) not in dialog.inputs
+
+
+def test_settings_dialog_restore_defaults_uses_config_default_ini(tmp_path, monkeypatch):
+    _app()
+    config_file = tmp_path / "config.ini"
+    default_file = tmp_path / "config_default.ini"
+    config_file.write_text("[logging]\nlevel = ERROR\n", encoding="utf-8")
+    default_file.write_text("[logging]\nlevel = INFO\n", encoding="utf-8")
+    applied = []
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        lambda *args, **kwargs: QMessageBox.StandardButton.Yes,
+    )
+
+    dialog = SettingsDialog(str(config_file), lambda: applied.append(True))
+    dialog.restore_defaults()
+
+    assert config_file.read_text(encoding="utf-8") == default_file.read_text(encoding="utf-8")
+    assert (tmp_path / "config.old").read_text(encoding="utf-8") == "[logging]\nlevel = ERROR\n"
+    assert applied == [True]
+    level, _kind = dialog.inputs[("logging", "level")]
+    assert isinstance(level, QComboBox)
+    assert level.currentData() == "INFO"
+
+
+def test_settings_dialog_restore_defaults_warns_when_default_missing(tmp_path, monkeypatch):
+    _app()
+    monkeypatch.chdir(tmp_path)
+    config_file = tmp_path / "config.ini"
+    config_file.write_text("[logging]\nlevel = ERROR\n", encoding="utf-8")
+    warnings = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: warnings.append(args))
+
+    dialog = SettingsDialog(str(config_file), lambda: None)
+    dialog.restore_defaults()
+
+    assert "level = ERROR" in config_file.read_text(encoding="utf-8")
+    assert warnings
 
 
 def test_settings_dialog_saves_cylindrical_motion_manager_fields(tmp_path):

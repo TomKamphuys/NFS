@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import sys
 import configparser
 from collections.abc import Callable
 from pathlib import Path
@@ -12,7 +11,8 @@ from loguru import logger
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qtagg import NavigationToolbar2QT as NavigationToolbar
 
-from harmonic_drive import project
+from . import project
+from grid_generator.coord_viewer_core_matplot import CoordViewerEngine
 from grid_generator.grid_gen import generate_measurement_grid
 from grid_generator.path_plan import plan_path
 
@@ -44,13 +44,7 @@ from .qt_compat import (
     Signal,
 )
 
-GRID_SRC = Path(__file__).resolve().parents[1] / "grid"
-if str(GRID_SRC) not in sys.path:
-    sys.path.insert(0, str(GRID_SRC))
-
 GRID_IMAGE_DIR = Path(__file__).resolve().parents[1] / "grid_generator" / "images_grid_gen"
-
-from coord_viewer_core import CoordViewerEngine  # noqa: E402
 
 
 def _normalize_decimal_text(value: str) -> str:
@@ -142,7 +136,7 @@ class GridGeneratorPane(QWidget):
     def _create_viewer_engine(self, backend: str):
         if backend == "pyvista":
             try:
-                from coord_viewer_core_pyvista import CoordViewerPyVista  # noqa: PLC0415
+                from grid_generator.coord_viewer_core_pyvista import CoordViewerPyVista  # noqa: PLC0415
 
                 self._pyvista_error = None
                 return CoordViewerPyVista()

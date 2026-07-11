@@ -7,7 +7,7 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("PySide6")
 
-from harmonic_drive import project
+from harmonic_drive_qt import project
 from harmonic_drive_qt.main_window import MainWindow, NO_SESSION_FOLDER_TEXT
 from harmonic_drive_qt.qt_compat import QApplication, QLineEdit
 

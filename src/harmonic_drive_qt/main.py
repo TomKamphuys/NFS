@@ -62,7 +62,7 @@ def main() -> int:
     app = QApplication(sys.argv)
     apply_app_style(app)
     try:
-        from harmonic_drive import project
+        from harmonic_drive_qt import project
 
         project.reset_temporary_project_dir()
         project.set_project_dir(Path(tempfile.gettempdir()) / "HALS_working_project", args.config)

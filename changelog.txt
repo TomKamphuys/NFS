@@ -1,4 +1,58 @@
 --------
+11/07/26
+--------
+PySide/NiceGUI split cleanup:
+
+Moved the project/session helpers and Qt-needed config schema/helpers into
+harmonic_drive_qt.
+
+Moved the pyvista and maplot fallback grid coordinate viewer engines into
+grid_generator.
+
+Wired in the Settings restore button to restore from config_default.ini.
+
+Files touched:
+src/harmonic_drive_qt/config_support.py
+src/harmonic_drive_qt/project.py
+src/harmonic_drive_qt/audio_setup_pane.py
+src/harmonic_drive_qt/backend.py
+src/harmonic_drive_qt/control_pane.py
+src/harmonic_drive_qt/grid_pane.py
+src/harmonic_drive_qt/live_capture.py
+src/harmonic_drive_qt/main.py
+src/harmonic_drive_qt/main_window.py
+src/harmonic_drive_qt/settings_dialog.py
+src/grid_generator/coord_viewer_core_matplot.py
+src/grid_generator/coord_viewer_core_pyvista.py
+tests/test_coord_viewer_pyvista.py
+tests/test_qt_audio_setup_pane.py
+tests/test_qt_grid_pane.py
+tests/test_qt_main_window_project.py
+tests/test_qt_settings_dialog.py
+
+--------
+09/07/26
+--------
+Tom's PySide updates:
+
+Settings and grid controls now show clearer units for numeric fields,
+including feed rate, calibration height, motion-manager spacing/radius/height
+values, waypoint radius/phi/height fields, and cap tolerance.
+
+The ReHome button now follows the Home button colour state, so both controls
+show the same homed/unhomed status.
+
+Fixed the sweep duration field in Audio Setup so the seconds unit is only
+shown once.
+
+Files touched:
+src/harmonic_drive/config_editor.py
+src/harmonic_drive_qt/audio_setup_pane.py
+src/harmonic_drive_qt/control_pane.py
+src/harmonic_drive_qt/grid_pane.py
+tests/test_qt_settings_dialog.py
+
+--------
 03/07/26
 --------
 Fixed PySide decimal entry so numeric spin boxes accept both decimal points

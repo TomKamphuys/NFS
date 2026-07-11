@@ -7,8 +7,8 @@ import math
 from pathlib import Path
 from typing import Any
 
-from harmonic_drive import project
-from harmonic_drive.config_editor import (
+from . import project
+from .config_support import (
     _channel_options,
     _device_options,
     _parse_bool,

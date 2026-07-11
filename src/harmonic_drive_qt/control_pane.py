@@ -8,8 +8,8 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
-from harmonic_drive import project
-from harmonic_drive.config_editor import _parse_bool, _strip_inline_comment
+from . import project
+from .config_support import _parse_bool, _strip_inline_comment
 
 from .backend import BackendManager, Worker, format_duration
 from .icons import ui_icon
