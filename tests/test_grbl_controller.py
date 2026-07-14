@@ -74,13 +74,17 @@ def test_event_handler_on_stateupdate_supports_legacy_callback():
     assert calls == [(pos, GrblMachineState.IDLE)]
 
 
-def test_grbl_streamer_client_connection():
+@patch('nfs.grbl_controller.time.sleep')
+def test_grbl_streamer_client_connection(_mock_sleep):
     mock_streamer = Mock()
     handler = EventHandler()
     conn = GrblStreamerClientConnection(mock_streamer, handler)
 
+    # On grblHAL, clearing the alarm performs a soft reset followed by $X.
     conn.killalarm()
+    mock_streamer.softreset.assert_called_once()
     mock_streamer.killalarm.assert_called_once()
+    mock_streamer.reset_mock()
 
     conn.softreset()
     mock_streamer.softreset.assert_called_once()
@@ -149,8 +153,14 @@ def test_grbl_streamer_client_connection_force_closes_reader_thread():
 
 def test_event_handler_on_error():
     handler = EventHandler()
-    with pytest.raises(Exception, match="ERROR: event=on_error"):
-        handler.on_grbl_event("on_error", "Some error message")
+    # The error callback runs inside the streamer read thread, so it must not
+    # raise (that would kill the thread). It records the error instead.
+    handler.on_grbl_event("on_error", "Some error message")
+    assert handler.get_last_error() == "Some error message"
+    assert handler.get_received_message() == "error"
+
+    handler.clear_last_error()
+    assert handler.get_last_error() is None
 
 
 def test_event_handler_on_alarm():
