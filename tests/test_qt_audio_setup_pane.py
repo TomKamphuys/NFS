@@ -1099,9 +1099,17 @@ def test_voltage_calibration_can_save_output_only_then_input_spl(tmp_path, monke
         assert "250 mVrms interface output" in pane.sweep_level_voltage.text()
         assert "speaker input" not in pane.sweep_level_voltage.text()
 
+        pane.level.setValue(-10.0)
+        assert pane.sweep_level_voltage.text() == "791 mVrms interface output"
+
+        pane.level.setValue(-20.0)
         pane.voltage_amp_gain.setValue(26.0)
-        pane.update_sweep_voltage_label()
-        assert "speaker input" in pane.sweep_level_voltage.text()
+        pane.save_output_voltage_calibration()
+        pane.level.setValue(-10.0)
+        assert pane.sweep_level_voltage.text() == (
+            "791 mVrms interface output / 15.77 Vrms speaker input"
+        )
+        pane.level.setValue(-20.0)
 
         for _ in range(5):
             pane.refresh_cal_meter()

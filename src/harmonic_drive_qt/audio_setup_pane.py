@@ -1131,14 +1131,10 @@ class AudioSetupPane(QWidget):
             self.voltage_input_level.setText(_format_dbfs(self.held_voltage_input_dbfs))
 
     def _current_output_voltage_calibration(self) -> dict[str, float] | None:
-        if hasattr(self, "voltage_output_vrms") and self.voltage_output_vrms.value() > 0.0:
-            calibration = {
-                "output_level_dbfs": self.level.value(),
-                "output_vrms": self.voltage_output_vrms.value(),
-            }
-            if self.voltage_amp_gain.value() != 0.0:
-                calibration["amplifier_gain_db"] = self.voltage_amp_gain.value()
-            return calibration
+        # The editable fields are the measurement used to create a calibration,
+        # not a measurement at every subsequently selected output level.  Always
+        # scale from the saved dBFS/voltage reference so changing ``self.level``
+        # changes the displayed interface and speaker voltages.
         stage5_vars = project.get_system_calibration(self.config_file)
         if not isinstance(stage5_vars, dict):
             return None

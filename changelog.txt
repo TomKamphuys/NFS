@@ -1,4 +1,14 @@
 --------
+14/07/26
+--------
+Fixed: Audio Setup voltage summary so its interface and speaker output
+voltages scale with the output dBFS level.
+
+Files touched:
+src/harmonic_drive_qt/audio_setup_pane.py
+tests/test_qt_audio_setup_pane.py
+
+--------
 11/07/26
 --------
 PySide/NiceGUI split cleanup:
