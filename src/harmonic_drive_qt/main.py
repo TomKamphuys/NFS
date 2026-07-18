@@ -15,11 +15,13 @@ if __package__ in {None, ""}:
     from harmonic_drive_qt.main_window import MainWindow
     from harmonic_drive_qt.qt_compat import QApplication, QMessageBox, QThreadPool, QTimer
     from harmonic_drive_qt.styles import app_stylesheet
+    from harmonic_drive_qt.wheel_guard import WheelGuard
 else:
     from .backend import BackendManager, Worker
     from .main_window import MainWindow
     from .qt_compat import QApplication, QMessageBox, QThreadPool, QTimer
     from .styles import app_stylesheet
+    from .wheel_guard import WheelGuard
 
 
 def apply_app_style(app: QApplication) -> None:
@@ -61,6 +63,8 @@ def main() -> int:
 
     app = QApplication(sys.argv)
     apply_app_style(app)
+    wheel_guard = WheelGuard(app)
+    app.installEventFilter(wheel_guard)
     try:
         from harmonic_drive_qt import project
 

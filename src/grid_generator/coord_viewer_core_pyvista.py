@@ -279,7 +279,7 @@ class CoordViewerPyVista(QtWidgets.QWidget):
         try:
             # Terrain style keeps Z as the natural up axis, so roll is constrained
             # by the native interactor instead of corrected by jittery camera hooks.
-            self.plotter.enable_terrain_style(mouse_wheel_zooms=True)
+            self.plotter.enable_terrain_style(mouse_wheel_zooms=False)
         except Exception:
             pass
         self.plotter.camera.up = (0.0, 0.0, 1.0)

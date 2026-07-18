@@ -23,6 +23,8 @@ from .qt_compat import (
     QCheckBox,
     QComboBox,
     QDialog,
+    QEvent,
+    QObject,
     QFrame,
     QGridLayout,
     QHBoxLayout,
@@ -58,6 +60,22 @@ def _normalize_decimal_editor_text(widget: QLineEdit, text: str) -> None:
     widget.setCursorPosition(cursor_pos)
 
 
+class _ComboWheelFilter(QObject):
+    """Event filter that stops combo boxes from stealing wheel scrolling.
+
+    When a combo box is inside a scroll area, hovering over it and scrolling
+    would change the selected option instead of scrolling the page. This
+    filter ignores wheel events on combo boxes that do not have keyboard
+    focus, letting the scroll area handle the scroll instead.
+    """
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.Type.Wheel and not obj.hasFocus():
+            event.ignore()
+            return True
+        return super().eventFilter(obj, event)
+
+
 class SettingsDialog(QDialog):
     def __init__(self, config_file: str, on_apply: Callable[[], None], parent=None):
         super().__init__(parent)
@@ -65,6 +83,7 @@ class SettingsDialog(QDialog):
         self.on_apply = on_apply
         self.parser = configparser.ConfigParser(inline_comment_prefixes=("#", ";"))
         self.parser.optionxform = str
+        self._combo_wheel_filter = _ComboWheelFilter(self)
         self._reload_config_state()
         
         self.setWindowTitle("Edit configuration")
@@ -479,6 +498,8 @@ class SettingsDialog(QDialog):
             l.addWidget(lbl)
             widget = QComboBox()
             light_combo(widget)
+            widget.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+            widget.installEventFilter(self._combo_wheel_filter)
             if section == "logging" and key == "level":
                 for value in options or []:
                     widget.addItem(LOG_LEVEL_LABELS.get(value, value), value)

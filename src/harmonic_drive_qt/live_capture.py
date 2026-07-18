@@ -665,6 +665,7 @@ class LiveCapturePane(QWidget):
             widget.setMaximumSize(16777215, 16777215)
             self.progress_canvas = widget
         widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        widget.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
         layout.addWidget(widget, 1)
         self.progress_widget = widget
 

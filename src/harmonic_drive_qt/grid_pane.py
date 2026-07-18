@@ -311,6 +311,7 @@ class GridGeneratorPane(QWidget):
 
         if self.viewer_backend != "pyvista":
             widget.setMinimumHeight(360)
+        widget.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
         self.viewer_layout.addWidget(widget)
         self.viewer_widget = widget
 
