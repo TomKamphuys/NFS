@@ -400,6 +400,84 @@ def test_audio_pane_prefers_saved_name_and_hostapi_over_stale_id(tmp_path, monke
         pane.deleteLater()
 
 
+def test_audio_pane_prompts_when_saved_devices_are_not_found(tmp_path, monkeypatch):
+    _app()
+    config_file = tmp_path / "config.ini"
+    original_config = (
+        "[audio]\n"
+        "in_dev = 1\n"
+        "out_dev = 2\n"
+        "in_dev_name = Missing Input\n"
+        "in_dev_hostapi = ASIO\n"
+        "out_dev_name = Missing Output\n"
+        "out_dev_hostapi = ASIO\n"
+    )
+    config_file.write_text(original_config, encoding="utf-8")
+    catalog = {
+        1: {
+            "name": "Replacement Input",
+            "hostapi": "ASIO",
+            "input_channels": [0, 1],
+            "output_channels": [],
+        },
+        2: {
+            "name": "Replacement Output",
+            "hostapi": "ASIO",
+            "input_channels": [],
+            "output_channels": [0, 1],
+        },
+    }
+
+    monkeypatch.setattr("harmonic_drive_qt.audio_setup_pane.get_devices_and_channels", lambda: catalog)
+    monkeypatch.setattr(
+        "harmonic_drive_qt.audio_setup_pane.get_supported_sample_rates",
+        lambda _in_dev, _out_dev: [48000],
+    )
+    backend = Mock()
+
+    pane = AudioSetupPane(backend, str(config_file))
+    try:
+        assert pane.api_select.placeholderText() == "Select an API"
+        assert pane.api_select.currentIndex() == -1
+        assert pane.api_select.findText("Select an API") == -1
+        assert pane.in_device.placeholderText() == "Select a device"
+        assert pane.out_device.placeholderText() == "Select a device"
+        assert pane.in_device.currentIndex() == -1
+        assert pane.out_device.currentIndex() == -1
+        assert pane.in_device.findText("Select a device") == -1
+        assert pane.out_device.findText("Select a device") == -1
+        assert pane.selected_device_id("in") is None
+        assert pane.selected_device_id("out") is None
+        assert config_file.read_text(encoding="utf-8") == original_config
+        backend.load.assert_not_called()
+
+        pane.api_select.setCurrentIndex(pane.api_select.findText("ASIO"))
+
+        assert pane.in_device.currentIndex() == -1
+        assert pane.out_device.currentIndex() == -1
+        assert pane.in_device.count() == 1
+        assert pane.out_device.count() == 1
+        assert pane.in_device.itemData(0) == 1
+        assert pane.out_device.itemData(0) == 2
+        assert config_file.read_text(encoding="utf-8") == original_config
+        backend.load.assert_not_called()
+
+        pane.in_device.setCurrentIndex(0)
+
+        assert config_file.read_text(encoding="utf-8") == original_config
+        backend.load.assert_not_called()
+
+        pane.out_device.setCurrentIndex(0)
+
+        content = config_file.read_text(encoding="utf-8")
+        assert "in_dev_name = Replacement Input" in content
+        assert "out_dev_name = Replacement Output" in content
+        backend.load.assert_called_once()
+    finally:
+        pane.cal_timer.stop()
+        pane.deleteLater()
+
+
 def test_audio_pane_resets_channels_to_first_then_second_on_api_change(tmp_path, monkeypatch):
     _app()
     config_file = tmp_path / "config.ini"

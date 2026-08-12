@@ -46,6 +46,8 @@ from .qt_compat import (
 
 PREFERRED_SAMPLE_RATE = 48000
 DEFAULT_PROTECTION_HPF_HZ = "500.0"
+SELECT_API_PROMPT = "Select an API"
+SELECT_DEVICE_PROMPT = "Select a device"
 
 
 def _normalize_decimal_text(value: str) -> str:
@@ -119,7 +121,7 @@ def _resolve_config_device_id(
     catalog: dict,
     role: str,
     capability: str,
-) -> int:
+) -> int | None:
     configured_id = _int_value(parser, "audio", f"{role}_dev")
     saved_name = _value(parser, "audio", f"{role}_dev_name", "")
     saved_api = _value(parser, "audio", f"{role}_dev_hostapi", "")
@@ -138,7 +140,7 @@ def _resolve_config_device_id(
             continue
         return int(dev_id)
 
-    return configured_id
+    return None
 
 
 def _format_dbfs(value: float | None) -> str:
@@ -294,13 +296,19 @@ class AudioSetupPane(QWidget):
             or self.catalog.get(out_dev_id, {}).get("hostapi")
             or (api_options[0] if api_options else "")
         )
+        self._require_explicit_device_selection = (
+            in_dev_id not in _device_options_for_api(self.catalog, "input", current_api)
+            or out_dev_id not in _device_options_for_api(self.catalog, "output", current_api)
+        )
         self._set_combo_items(
             self.api_select,
             api_options,
-            current_api,
+            None if self._require_explicit_device_selection else current_api,
             styled_field=True,
             fit_to_contents=True,
         )
+        if self._require_explicit_device_selection:
+            self._set_combo_placeholder(self.api_select, SELECT_API_PROMPT)
         api_field = self._labeled("Audio API", self.api_select)
         api_field.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         top_settings_row = QHBoxLayout()
@@ -319,8 +327,8 @@ class AudioSetupPane(QWidget):
         device_row.addWidget(self._device_group("Input", self.in_device, self.in_mic_channel, self.in_loop_channel))
         device_row.addWidget(self._device_group("Output", self.out_device, self.out_speaker_channel, self.out_ref_channel, output=True))
 
-        self._populate_devices("in", in_dev_id)
-        self._populate_devices("out", out_dev_id)
+        self._populate_devices("in", in_dev_id, prompt_if_missing=True)
+        self._populate_devices("out", out_dev_id, prompt_if_missing=True)
         self._populate_channels("in")
         self._populate_channels("out")
         self._set_combo_data(self.in_mic_channel, _int_value(parser, "audio", "in_ch_mic", 0))
@@ -896,6 +904,12 @@ class AudioSetupPane(QWidget):
                 combo.setCurrentIndex(index)
                 return
 
+    def _set_combo_placeholder(self, combo: QComboBox, text: str) -> None:
+        combo.blockSignals(True)
+        combo.setPlaceholderText(text)
+        combo.setCurrentIndex(-1)
+        combo.blockSignals(False)
+
     def _fit_combo_to_contents(self, combo: QComboBox, options: list | dict) -> None:
         if isinstance(options, dict):
             labels = [str(label) for label in options.values()]
@@ -915,14 +929,28 @@ class AudioSetupPane(QWidget):
         except (TypeError, ValueError):
             return None
 
-    def _populate_devices(self, role: str, current=None) -> None:
+    def _populate_devices(
+        self,
+        role: str,
+        current=None,
+        prompt_if_missing: bool = False,
+    ) -> None:
         selected_api = self.api_select.currentText()
         combo = self.in_device if role == "in" else self.out_device
         capability = "input" if role == "in" else "output"
-        opts = _device_options_for_api(self.catalog, capability, selected_api)
+        opts = (
+            _device_options_for_api(self.catalog, capability, selected_api)
+            if self.api_select.currentIndex() >= 0
+            else {}
+        )
+        show_prompt = prompt_if_missing and current not in opts
         if current not in opts and opts:
-            current = next(iter(opts))
+            if not show_prompt:
+                current = next(iter(opts))
         self._set_combo_items(combo, opts, current)
+        combo.setPlaceholderText(SELECT_DEVICE_PROMPT if show_prompt else "")
+        if show_prompt:
+            self._set_combo_placeholder(combo, SELECT_DEVICE_PROMPT)
 
     def _populate_channels(self, role: str, reset: bool = False) -> None:
         capability = "input" if role == "in" else "output"
@@ -956,8 +984,16 @@ class AudioSetupPane(QWidget):
         )
 
     def refresh_devices_for_api(self) -> None:
-        self._populate_devices("in", self.selected_device_id("in"))
-        self._populate_devices("out", self.selected_device_id("out"))
+        self._populate_devices(
+            "in",
+            self.selected_device_id("in"),
+            prompt_if_missing=self._require_explicit_device_selection,
+        )
+        self._populate_devices(
+            "out",
+            self.selected_device_id("out"),
+            prompt_if_missing=self._require_explicit_device_selection,
+        )
         self._populate_channels("in", reset=True)
         self._populate_channels("out", reset=True)
         self._populate_sample_rates(self._combo_data(self.fs), prefer_default=True)
@@ -1027,6 +1063,12 @@ class AudioSetupPane(QWidget):
         return str(info.get("name", "")), str(info.get("hostapi", ""))
 
     def save_audio_setup(self, notify: bool = False, reload_backend: bool = True) -> None:
+        if (
+            self.api_select.currentIndex() < 0
+            or self.selected_device_id("in") is None
+            or self.selected_device_id("out") is None
+        ):
+            return
         in_name, in_api = self._device_metadata("in")
         out_name, out_api = self._device_metadata("out")
         values = {
@@ -1063,6 +1105,7 @@ class AudioSetupPane(QWidget):
                 values,
                 self.backend.load if reload_backend else None,
             )
+            self._require_explicit_device_selection = False
             fresh = _read_config(self.config_file)
             project.update_audio_setup(_section_dict(fresh, "audio"), _section_dict(fresh, "sweep"))
             self.saved.emit()
