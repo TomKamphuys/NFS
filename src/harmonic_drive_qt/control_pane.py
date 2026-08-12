@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import configparser
 import shutil
+import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -67,6 +68,11 @@ class ControlPane(QWidget):
         self.home_ok = False
         self._homing_in_progress = False
         self.grid_readout_points: list[dict[str, float]] = []
+        self._jog_buttons: list[QPushButton] = []
+        self._jog_in_progress = False
+        self._jog_done = True
+        self._jog_error: str | None = None
+        self._jog_thread: threading.Thread | None = None
         self.progress_event.connect(self._apply_progress_event)
         self._build_ui()
 
@@ -79,6 +85,10 @@ class ControlPane(QWidget):
         self.progress_timer.setInterval(500)
         self.progress_timer.timeout.connect(self.refresh_progress)
         self.progress_timer.start()
+
+        self.jog_timer = QTimer(self)
+        self.jog_timer.setInterval(100)
+        self.jog_timer.timeout.connect(self._check_jog_finished)
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
@@ -275,6 +285,7 @@ class ControlPane(QWidget):
         left_btn.setFixedSize(32, 34)
         row.addWidget(left_btn)
         left_btn.clicked.connect(lambda _checked=False, m=left_method, v=120: self._run_jog(m, v)) # Just an example default
+        self._jog_buttons.append(left_btn)
 
         for value in (120, 60, 20, 10, 5, 1):
             button = QPushButton(str(value))
@@ -282,6 +293,7 @@ class ControlPane(QWidget):
             button.setFixedSize(48, 34)
             button.clicked.connect(lambda _checked=False, m=left_method, v=value: self._run_jog(m, v))
             row.addWidget(button)
+            self._jog_buttons.append(button)
             
         axis_label = QLabel(f"{axis}\n{unit.upper()}")
         axis_label.setStyleSheet("color: white; font-weight: 900; font-size: 10px; border: none;")
@@ -295,12 +307,14 @@ class ControlPane(QWidget):
             button.setFixedSize(48, 34)
             button.clicked.connect(lambda _checked=False, m=right_method, v=value: self._run_jog(m, v))
             row.addWidget(button)
+            self._jog_buttons.append(button)
 
         right_btn = QPushButton(right)
         right_btn.setStyleSheet("QPushButton { background: transparent; color: white; font-weight: bold; border: none; min-width: 32px; }")
         right_btn.setFixedSize(32, 34)
         row.addWidget(right_btn)
         right_btn.clicked.connect(lambda _checked=False, m=right_method, v=120: self._run_jog(m, v))
+        self._jog_buttons.append(right_btn)
         
         return row
 
@@ -498,7 +512,38 @@ class ControlPane(QWidget):
         self.backend.scanner_command("home")
 
     def _run_jog(self, method: str, value: float) -> None:
-        self._run_backend(self.backend.jog, method, value)
+        if self._jog_in_progress:
+            return
+        self._jog_done = False
+        self._jog_error = None
+        self._set_jog_buttons_enabled(False)
+
+        def jog_blocking() -> None:
+            try:
+                self.backend.jog(method, value)
+            except Exception as exc:
+                self._jog_error = str(exc)
+            finally:
+                self._jog_done = True
+
+        self._jog_thread = threading.Thread(target=jog_blocking, daemon=True, name="qt-jog")
+        self._jog_thread.start()
+        self.jog_timer.start()
+
+    def _check_jog_finished(self) -> None:
+        if not self._jog_done:
+            return
+        self.jog_timer.stop()
+        self._jog_thread = None
+        self._set_jog_buttons_enabled(True)
+        message, self._jog_error = self._jog_error, None
+        if message:
+            QMessageBox.warning(self, "Backend Error", message)
+
+    def _set_jog_buttons_enabled(self, enabled: bool) -> None:
+        self._jog_in_progress = not enabled
+        for btn in self._jog_buttons:
+            btn.setEnabled(enabled)
 
     def toggle_sine(self) -> None:
         if self.sine_running:
