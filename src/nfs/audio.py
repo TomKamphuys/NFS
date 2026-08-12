@@ -199,6 +199,211 @@ def _role_frames(
     return role_data
 
 
+class _AudioMeterWorker:
+    """Moves metering and callback-status reporting off the audio callback."""
+
+    _STATUS_NAMES = (
+        "input_underflow",
+        "input_overflow",
+        "output_underflow",
+        "output_overflow",
+    )
+
+    def __init__(self, sample_rate: int, blocksize: int = 0) -> None:
+        self.sample_rate = int(sample_rate)
+        # Capacity absorbs brief scheduling stalls; it is not a delay target.
+        # Processing is capped to the newest 100 ms so meters remain responsive.
+        self._capacity = max(8192, self.sample_rate, int(blocksize))
+        self._max_meter_frames = max(1, int(round(self.sample_rate * 0.1)))
+        self._outputs = np.zeros((self._capacity, 2), dtype=np.float32)
+        self._inputs = np.zeros((self._capacity, 2), dtype=np.float32)
+        self._write_index = 0
+        self._read_index = 0
+        self._dropped_meter_blocks = 0
+        self._skipped_meter_frames = 0
+        self._status_counts = {name: 0 for name in self._STATUS_NAMES}
+        self._status_counts["other"] = 0
+        self._last_reported_counts = dict(self._status_counts)
+        self._last_reported_drops = 0
+        self._last_reported_skipped_frames = 0
+        self._stop_event = threading.Event()
+        self._thread = threading.Thread(
+            target=self._run,
+            daemon=True,
+            name="audio-meter-worker",
+        )
+        a_b, a_a = _a_weighting_filter(self.sample_rate)
+        c_b, c_a = _c_weighting_filter(self.sample_rate)
+        self._a_filter = (a_b, a_a)
+        self._c_filter = (c_b, c_a)
+        self._a_zi = np.zeros((2, max(len(a_a), len(a_b)) - 1), dtype=np.float64)
+        self._c_zi = np.zeros((2, max(len(c_a), len(c_b)) - 1), dtype=np.float64)
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def submit(
+        self,
+        outputs: np.ndarray,
+        output_roles: Tuple[int, int],
+        inputs: np.ndarray,
+        input_roles: Tuple[int, int],
+        status,
+    ) -> None:
+        """Copy one callback block into the preallocated meter ring."""
+        self._record_status(status)
+        frames = min(len(outputs), len(inputs))
+        if frames <= 0:
+            return
+        available = self._capacity - (self._write_index - self._read_index)
+        if frames > available:
+            self._dropped_meter_blocks += 1
+            return
+
+        start = self._write_index % self._capacity
+        first_count = min(frames, self._capacity - start)
+        self._copy_roles(self._outputs, start, outputs, output_roles, first_count, 0)
+        self._copy_roles(self._inputs, start, inputs, input_roles, first_count, 0)
+        remaining = frames - first_count
+        if remaining:
+            self._copy_roles(self._outputs, 0, outputs, output_roles, remaining, first_count)
+            self._copy_roles(self._inputs, 0, inputs, input_roles, remaining, first_count)
+        # Publish only after both channel pairs have been copied completely.
+        self._write_index += frames
+
+    @staticmethod
+    def _copy_roles(
+        destination: np.ndarray,
+        destination_start: int,
+        source: np.ndarray,
+        roles: Tuple[int, int],
+        count: int,
+        source_start: int,
+    ) -> None:
+        destination_end = destination_start + count
+        source_end = source_start + count
+        for destination_channel, source_channel in enumerate(roles):
+            if 0 <= source_channel < source.shape[1]:
+                destination[destination_start:destination_end, destination_channel] = source[
+                    source_start:source_end,
+                    source_channel,
+                ]
+            else:
+                destination[destination_start:destination_end, destination_channel] = 0.0
+
+    def _record_status(self, status) -> None:
+        if not status:
+            return
+        matched = False
+        for name in self._STATUS_NAMES:
+            if bool(getattr(status, name, False)):
+                self._status_counts[name] += 1
+                matched = True
+        # Priming is a normal stream-start condition, not an xrun.
+        if bool(getattr(status, "priming_output", False)):
+            matched = True
+        if not matched:
+            self._status_counts["other"] += 1
+
+    def stop(self) -> None:
+        self._stop_event.set()
+        self._thread.join(timeout=2.0)
+        if self._thread.is_alive():
+            logger.warning("Audio meter worker did not stop within 2 seconds")
+        self._report_callback_status(force=True)
+
+    def _run(self) -> None:
+        next_status_report = time.monotonic() + 1.0
+        while not self._stop_event.is_set():
+            write_index = self._write_index
+            if self._read_index >= write_index:
+                self._stop_event.wait(0.02)
+            else:
+                self._process_available(write_index)
+            now = time.monotonic()
+            if now >= next_status_report:
+                self._report_callback_status()
+                next_status_report = now + 1.0
+
+    def _process_available(self, write_index: int) -> None:
+        available = write_index - self._read_index
+        if available > self._max_meter_frames:
+            skipped = available - self._max_meter_frames
+            self._read_index += skipped
+            self._skipped_meter_frames += skipped
+            # The weighting filters cannot preserve continuity across skipped
+            # display-only samples, so restart their state at the newest window.
+            self._a_zi.fill(0.0)
+            self._c_zi.fill(0.0)
+        frames = min(write_index - self._read_index, self._max_meter_frames)
+        start = self._read_index % self._capacity
+        first_count = min(frames, self._capacity - start)
+        if first_count == frames:
+            outputs = self._outputs[start:start + frames].copy()
+            inputs = self._inputs[start:start + frames].copy()
+        else:
+            remaining = frames - first_count
+            outputs = np.concatenate((self._outputs[start:], self._outputs[:remaining]))
+            inputs = np.concatenate((self._inputs[start:], self._inputs[:remaining]))
+        self._read_index += frames
+
+        a_weighted = self._apply_weighting(inputs, self._a_filter, self._a_zi)
+        c_weighted = self._apply_weighting(inputs, self._c_filter, self._c_zi)
+        update_audio_meter_state(
+            outputs,
+            inputs,
+            active=True,
+            a_weighted_inputs=a_weighted,
+            c_weighted_inputs=c_weighted,
+        )
+
+    @staticmethod
+    def _apply_weighting(
+        inputs: np.ndarray,
+        coefficients: Tuple[np.ndarray, np.ndarray],
+        zi: np.ndarray,
+    ) -> np.ndarray:
+        b, a = coefficients
+        weighted = np.zeros_like(inputs, dtype=np.float32)
+        for channel_index in range(min(2, inputs.shape[1])):
+            filtered, zi[channel_index] = scipy.signal.lfilter(
+                b,
+                a,
+                inputs[:, channel_index],
+                zi=zi[channel_index],
+            )
+            weighted[:, channel_index] = filtered.astype(np.float32)
+        return weighted
+
+    def _report_callback_status(self, force: bool = False) -> None:
+        changes = {
+            name: count - self._last_reported_counts[name]
+            for name, count in self._status_counts.items()
+            if count != self._last_reported_counts[name]
+        }
+        dropped = self._dropped_meter_blocks - self._last_reported_drops
+        skipped = self._skipped_meter_frames - self._last_reported_skipped_frames
+        if changes:
+            logger.warning("Audio callback status counts: {}", changes)
+            self._last_reported_counts = dict(self._status_counts)
+        if dropped:
+            logger.warning(
+                "Audio meter worker dropped {} display block(s); audio capture was unaffected",
+                dropped,
+            )
+            self._last_reported_drops = self._dropped_meter_blocks
+        elif force:
+            self._last_reported_drops = self._dropped_meter_blocks
+        if skipped:
+            logger.warning(
+                "Audio meter worker skipped {} stale display sample frame(s) to remain current",
+                skipped,
+            )
+            self._last_reported_skipped_frames = self._skipped_meter_frames
+        elif force:
+            self._last_reported_skipped_frames = self._skipped_meter_frames
+
+
 def update_audio_meter_state(
     outputs: Optional[np.ndarray] = None,
     inputs: Optional[np.ndarray] = None,
@@ -1047,6 +1252,7 @@ class Audio(IAudio):
         self.hw = hw_config
         self.cap = capture_config
         self._sine_stream = None
+        self._sine_meter_worker: _AudioMeterWorker | None = None
         self._sine_level_lock = threading.Lock()
         self._sine_level_dbfs: float | None = None
 
@@ -1199,12 +1405,20 @@ class Audio(IAudio):
 
         idx_play, idx_rec = 0, 0
         done_evt = threading.Event()
+        meter_worker = _AudioMeterWorker(self.hw['fs'], self.hw['blocksize'])
+        meter_worker.start()
+        output_meter_roles = (0, 1) if use_asio_out else (
+            self.hw['ch_out_spkr'],
+            self.hw['ch_out_ref'],
+        )
+        input_meter_roles = (0, 1) if use_asio_in else (
+            self.hw['ch_in_loop'],
+            self.hw['ch_in_mic'],
+        )
 
         # Real-time Callback
         def callback(indata, outdata, frames, time_info, status):
             nonlocal idx_play, idx_rec
-            if status:
-                logger.warning(f"Audio Status: {status}")
 
             # Output
             n_out = min(frames, total_len - idx_play)
@@ -1228,27 +1442,12 @@ class Audio(IAudio):
                     rec_loop[idx_rec:idx_rec + n_in] = indata[:n_in, self.hw['ch_in_loop']]
                     rec_mic[idx_rec:idx_rec + n_in] = indata[:n_in, self.hw['ch_in_mic']]
 
-            if use_asio_out:
-                meter_out = _role_frames(outdata, 0, 1)
-            else:
-                meter_out = _role_frames(
-                    outdata,
-                    self.hw['ch_out_spkr'],
-                    self.hw['ch_out_ref'],
-                )
-            if use_asio_in:
-                meter_in = _role_frames(indata, 0, 1)
-            else:
-                meter_in = _role_frames(
-                    indata,
-                    self.hw['ch_in_loop'],
-                    self.hw['ch_in_mic'],
-                )
-            update_audio_meter_state(
-                meter_out,
-                meter_in,
-                active=True,
-                sample_rate=self.hw['fs'],
+            meter_worker.submit(
+                outdata,
+                output_meter_roles,
+                indata,
+                input_meter_roles,
+                status,
             )
 
             idx_play += n_out
@@ -1257,12 +1456,15 @@ class Audio(IAudio):
                 done_evt.set()
 
         # 7. Start Stream
-        with sd.Stream(device=(self.hw['dev_in'], self.hw['dev_out']), samplerate=self.hw['fs'],
-                       blocksize=self.hw['blocksize'],
-                       dtype="float32", channels=(in_args[0], out_args[0]), dither_off=True,
-                       extra_settings=(in_args[1], out_args[1]), callback=callback):
-            done_evt.wait()
-        reset_audio_meter_state(active=False)
+        try:
+            with sd.Stream(device=(self.hw['dev_in'], self.hw['dev_out']), samplerate=self.hw['fs'],
+                           blocksize=self.hw['blocksize'],
+                           dtype="float32", channels=(in_args[0], out_args[0]), dither_off=True,
+                           extra_settings=(in_args[1], out_args[1]), callback=callback):
+                done_evt.wait()
+        finally:
+            meter_worker.stop()
+            reset_audio_meter_state(active=False)
 
         avg_mic, avg_loop, mic_slices, psr = self.alignment_engine.sync_and_average(
             rec_mic, rec_loop, marker_single, pre_samps_settle, slot_len, sweep_len
@@ -1386,22 +1588,6 @@ class Audio(IAudio):
         in_api = self._get_api_name(in_dev)
         use_asio_out = "ASIO" in out_api
         use_asio_in = "ASIO" in in_api
-        a_weight_b, a_weight_a = _a_weighting_filter(fs)
-        a_weight_zi = np.zeros((2, max(len(a_weight_a), len(a_weight_b)) - 1), dtype=np.float64)
-        c_weight_b, c_weight_a = _c_weighting_filter(fs)
-        c_weight_zi = np.zeros((2, max(len(c_weight_a), len(c_weight_b)) - 1), dtype=np.float64)
-
-        def weight_inputs(meter_in: np.ndarray, b: np.ndarray, a: np.ndarray, zi: np.ndarray) -> np.ndarray:
-            weighted = np.zeros_like(meter_in, dtype=np.float32)
-            for channel_index in range(min(2, meter_in.shape[1])):
-                filtered, zi[channel_index] = scipy.signal.lfilter(
-                    b,
-                    a,
-                    meter_in[:, channel_index],
-                    zi=zi[channel_index],
-                )
-                weighted[:, channel_index] = filtered.astype(np.float32)
-            return weighted
 
         in_ch_count = max(self.hw['ch_in_mic'], self.hw['ch_in_loop']) + 1
         if use_asio_in:
@@ -1441,65 +1627,67 @@ class Audio(IAudio):
 
             idx_play = 0
             done_evt = threading.Event()
+            meter_worker = _AudioMeterWorker(fs, self.hw['blocksize'])
+            meter_worker.start()
+            output_meter_roles = (0, 1) if use_asio_out else (
+                self.hw['ch_out_spkr'],
+                self.hw['ch_out_ref'],
+            )
+            input_meter_roles = (0, 1) if use_asio_in else (
+                self.hw['ch_in_loop'],
+                self.hw['ch_in_mic'],
+            )
 
             def callback(indata, outdata, frames, time_info, status):
                 nonlocal idx_play
-                if status:
-                    logger.warning(f"Sine Callback Status: {status}")
                 n_out = min(frames, n - idx_play)
                 if n_out > 0:
                     outdata[:n_out, :out_ch_count] = out_data[idx_play:idx_play + n_out, :out_ch_count]
                 if frames > n_out:
                     outdata[n_out:] = 0
-                if use_asio_out:
-                    meter_out = _role_frames(outdata, 0, 1)
-                else:
-                    meter_out = _role_frames(
-                        outdata,
-                        self.hw['ch_out_spkr'],
-                        self.hw['ch_out_ref'],
-                    )
-                if use_asio_in:
-                    meter_in = _role_frames(indata, 0, 1)
-                else:
-                    meter_in = _role_frames(
-                        indata,
-                        self.hw['ch_in_loop'],
-                        self.hw['ch_in_mic'],
-                    )
-                update_audio_meter_state(
-                    meter_out,
-                    meter_in,
-                    active=True,
-                    sample_rate=fs,
-                    a_weighted_inputs=weight_inputs(meter_in, a_weight_b, a_weight_a, a_weight_zi),
-                    c_weighted_inputs=weight_inputs(meter_in, c_weight_b, c_weight_a, c_weight_zi),
+                meter_worker.submit(
+                    outdata,
+                    output_meter_roles,
+                    indata,
+                    input_meter_roles,
+                    status,
                 )
                 idx_play += n_out
                 if idx_play >= n:
                     done_evt.set()
 
-            with sd.Stream(
-                device=(in_dev, out_dev),
-                samplerate=fs,
-                blocksize=self.hw['blocksize'],
-                dtype='float32',
-                channels=(in_args[0], out_ch_count),
-                dither_off=True,
-                extra_settings=(in_args[1], out_args_extra),
-                callback=callback,
-            ):
-                done_evt.wait()
-            reset_audio_meter_state(active=False)
+            try:
+                with sd.Stream(
+                    device=(in_dev, out_dev),
+                    samplerate=fs,
+                    blocksize=self.hw['blocksize'],
+                    dtype='float32',
+                    channels=(in_args[0], out_ch_count),
+                    dither_off=True,
+                    extra_settings=(in_args[1], out_args_extra),
+                    callback=callback,
+                ):
+                    done_evt.wait()
+            finally:
+                meter_worker.stop()
+                reset_audio_meter_state(active=False)
         else:
             # Indefinite playback
             phase = 0.0
             phase_inc = 2 * np.pi * frequency / fs
+            self._sine_meter_worker = _AudioMeterWorker(fs, self.hw['blocksize'])
+            self._sine_meter_worker.start()
+            output_meter_roles = (0, 1) if use_asio_out else (
+                self.hw['ch_out_spkr'],
+                self.hw['ch_out_ref'],
+            )
+            input_meter_roles = (0, 1) if use_asio_in else (
+                self.hw['ch_in_loop'],
+                self.hw['ch_in_mic'],
+            )
 
             def callback(indata, outdata, frames, time_info, status):
                 nonlocal phase
-                if status:
-                    logger.warning(f"Sine Callback Status: {status}")
                 t = np.arange(frames)
                 with self._sine_level_lock:
                     level = level_dbfs if self._sine_level_dbfs is None else self._sine_level_dbfs
@@ -1513,29 +1701,12 @@ class Audio(IAudio):
                     outdata.fill(0)
                     outdata[:, self.hw['ch_out_spkr']] = s
                     outdata[:, self.hw['ch_out_ref']] = s
-                if use_asio_out:
-                    meter_out = _role_frames(outdata, 0, 1)
-                else:
-                    meter_out = _role_frames(
-                        outdata,
-                        self.hw['ch_out_spkr'],
-                        self.hw['ch_out_ref'],
-                    )
-                if use_asio_in:
-                    meter_in = _role_frames(indata, 0, 1)
-                else:
-                    meter_in = _role_frames(
-                        indata,
-                        self.hw['ch_in_loop'],
-                        self.hw['ch_in_mic'],
-                    )
-                update_audio_meter_state(
-                    meter_out,
-                    meter_in,
-                    active=True,
-                    sample_rate=fs,
-                    a_weighted_inputs=weight_inputs(meter_in, a_weight_b, a_weight_a, a_weight_zi),
-                    c_weighted_inputs=weight_inputs(meter_in, c_weight_b, c_weight_a, c_weight_zi),
+                self._sine_meter_worker.submit(
+                    outdata,
+                    output_meter_roles,
+                    indata,
+                    input_meter_roles,
+                    status,
                 )
 
             if use_asio_out:
@@ -1545,17 +1716,24 @@ class Audio(IAudio):
                 out_ch_count = max(self.hw['ch_out_spkr'], self.hw['ch_out_ref']) + 1
                 out_args_extra = sd.WasapiSettings(exclusive=self.hw['wasapi_exclusive']) if "WASAPI" in out_api else None
 
-            self._sine_stream = sd.Stream(
-                device=(in_dev, out_dev),
-                samplerate=fs,
-                blocksize=self.hw['blocksize'],
-                channels=(in_args[0], out_ch_count),
-                extra_settings=(in_args[1], out_args_extra),
-                callback=callback,
-                dtype='float32',
-                dither_off=True,
-            )
-            self._sine_stream.start()
+            try:
+                self._sine_stream = sd.Stream(
+                    device=(in_dev, out_dev),
+                    samplerate=fs,
+                    blocksize=self.hw['blocksize'],
+                    channels=(in_args[0], out_ch_count),
+                    extra_settings=(in_args[1], out_args_extra),
+                    callback=callback,
+                    dtype='float32',
+                    dither_off=True,
+                )
+                self._sine_stream.start()
+            except Exception:
+                self._sine_stream = None
+                self._sine_meter_worker.stop()
+                self._sine_meter_worker = None
+                reset_audio_meter_state(active=False)
+                raise
 
     def update_sine_level(self, level_dbfs: float) -> None:
         """Updates the level used by active continuous sine playback."""
@@ -1572,6 +1750,9 @@ class Audio(IAudio):
             except Exception as e:
                 logger.debug(f"Error closing sine stream: {e}")
             self._sine_stream = None
+        if self._sine_meter_worker is not None:
+            self._sine_meter_worker.stop()
+            self._sine_meter_worker = None
         with self._sine_level_lock:
             self._sine_level_dbfs = None
         sd.stop()

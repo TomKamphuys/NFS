@@ -4,14 +4,17 @@ import scipy.signal
 import configparser
 import json
 import os
+import threading
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
+import nfs.audio as audio_module
 from nfs.audio import (
     MarkerGenerator, SweepGenerator, HarmonicInjector,
     ProtectionFilter, DeconvolutionEngine, AlignmentEngine,
     DSPVerificationTool, AudioFactory, find_device_id_by_name, get_devices_and_channels,
     resolve_device_id_by_saved_identity,
     SINE_RMS_FROM_PEAK,
+    _AudioMeterWorker,
 )
 from nfs.utils.dsp import DSPUtils
 from nfs.datatypes import CylindricalPosition
@@ -20,6 +23,86 @@ from nfs.datatypes import CylindricalPosition
 @pytest.fixture
 def fs():
     return 48000
+
+
+def test_audio_meter_worker_routes_channels_and_publishes_weighted_levels(monkeypatch, fs):
+    published = []
+    updated = threading.Event()
+
+    def capture_update(outputs, inputs, **kwargs):
+        published.append((outputs.copy(), inputs.copy(), kwargs))
+        updated.set()
+
+    monkeypatch.setattr(audio_module, "update_audio_meter_state", capture_update)
+    worker = _AudioMeterWorker(fs)
+    worker.start()
+    outputs = np.zeros((512, 4), dtype=np.float32)
+    inputs = np.zeros((512, 3), dtype=np.float32)
+    outputs[:, 2] = 0.25
+    outputs[:, 3] = -0.5
+    inputs[:, 1] = 0.125
+    inputs[:, 0] = -0.25
+
+    try:
+        worker.submit(outputs, (2, 3), inputs, (1, 0), None)
+        assert updated.wait(2.0)
+    finally:
+        worker.stop()
+
+    meter_outputs, meter_inputs, kwargs = published[-1]
+    assert np.all(meter_outputs[:, 0] == 0.25)
+    assert np.all(meter_outputs[:, 1] == -0.5)
+    assert np.all(meter_inputs[:, 0] == 0.125)
+    assert np.all(meter_inputs[:, 1] == -0.25)
+    assert kwargs["active"] is True
+    assert kwargs["a_weighted_inputs"].shape == meter_inputs.shape
+    assert kwargs["c_weighted_inputs"].shape == meter_inputs.shape
+
+
+def test_audio_meter_worker_defers_callback_status_logging(monkeypatch, fs):
+    warning = Mock()
+    monkeypatch.setattr(audio_module.logger, "warning", warning)
+    status = Mock(
+        input_underflow=False,
+        input_overflow=False,
+        output_underflow=True,
+        output_overflow=False,
+        priming_output=False,
+    )
+    status.__bool__ = Mock(return_value=True)
+    worker = _AudioMeterWorker(fs)
+    worker.start()
+    block = np.zeros((128, 2), dtype=np.float32)
+
+    worker.submit(block, (0, 1), block, (0, 1), status)
+    assert warning.call_count == 0
+    worker.stop()
+
+    assert warning.call_count == 1
+    assert "output_underflow" in str(warning.call_args)
+
+
+def test_audio_meter_worker_skips_backlog_and_processes_latest_100ms(monkeypatch, fs):
+    published = []
+    monkeypatch.setattr(
+        audio_module,
+        "update_audio_meter_state",
+        lambda outputs, inputs, **kwargs: published.append((outputs.copy(), inputs.copy())),
+    )
+    worker = _AudioMeterWorker(fs)
+    older = np.zeros((3000, 2), dtype=np.float32)
+    newer = np.ones((3000, 2), dtype=np.float32)
+
+    worker.submit(older, (0, 1), older, (0, 1), None)
+    worker.submit(newer, (0, 1), newer, (0, 1), None)
+    worker._process_available(worker._write_index)
+
+    meter_outputs, meter_inputs = published[-1]
+    assert len(meter_outputs) == 4800
+    assert len(meter_inputs) == 4800
+    assert np.all(meter_outputs[-3000:] == 1.0)
+    assert np.all(meter_inputs[-3000:] == 1.0)
+    assert worker._skipped_meter_frames == 1200
 
 
 # -----------------------------------------------------------------------------

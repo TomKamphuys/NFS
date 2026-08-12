@@ -252,6 +252,14 @@ def test_audio_spin_edits_save_only_after_editing_finished(tmp_path, monkeypatch
 
         assert "sweep_dur_s = 2.0" in config_file.read_text(encoding="utf-8")
         backend.load.assert_called_once()
+
+        pane.blocksize.setValue(0)
+        assert pane.blocksize.value() == 0
+        assert pane.blocksize.specialValueText() == "Automatic"
+        pane.blocksize.editingFinished.emit()
+
+        assert "blocksize = 0" in config_file.read_text(encoding="utf-8")
+        assert backend.load.call_count == 2
     finally:
         pane.auto_apply_timer.stop()
         pane.cal_timer.stop()

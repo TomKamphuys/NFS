@@ -99,9 +99,9 @@ class SettingsDialog(QDialog):
         layout.setSpacing(8)
         
         title = QLabel("Edit configuration")
-        title.setStyleSheet("font-size: 20px; font-weight: bold; color: #0f172a; border: none;")
+        title.setStyleSheet("font-size: 15pt; font-weight: bold; color: #0f172a; border: none;")
         subtitle = QLabel("config.ini")
-        subtitle.setStyleSheet("color: #64748b; font-size: 12px; border: none; margin-bottom: 8px;")
+        subtitle.setStyleSheet("color: #64748b; font-size: 9pt; border: none; margin-bottom: 8px;")
         
         layout.addWidget(title)
         layout.addWidget(subtitle)
@@ -230,12 +230,12 @@ class SettingsDialog(QDialog):
         
         if section == "scanner":
             lbl = QLabel("Scanner")
-            lbl.setStyleSheet("font-weight: bold; font-size: 14px;")
+            lbl.setStyleSheet("font-weight: bold; font-size: 10.5pt;")
             layout.addWidget(lbl)
             self._build_fields(layout, "scanner", EDITABLE_SCHEMA["scanner"])
             
             lbl2 = QLabel("GRBL connection")
-            lbl2.setStyleSheet("font-weight: bold; font-size: 14px; margin-top: 16px;")
+            lbl2.setStyleSheet("font-weight: bold; font-size: 10.5pt; margin-top: 16px;")
             layout.addWidget(lbl2)
             
             grbl_type_input = None
@@ -277,7 +277,7 @@ class SettingsDialog(QDialog):
                 update_mock_dro_visibility(grbl_type_input.currentText())
         elif section == "motion_manager":
             lbl = QLabel("Motion Manager")
-            lbl.setStyleSheet("font-weight: bold; font-size: 14px;")
+            lbl.setStyleSheet("font-weight: bold; font-size: 10.5pt;")
             layout.addWidget(lbl)
             self._build_motion_manager_fields(layout)
         else:
@@ -349,7 +349,7 @@ class SettingsDialog(QDialog):
         layout.addWidget(separator)
 
         lbl = QLabel("Measurement Points")
-        lbl.setStyleSheet("font-weight: bold; font-size: 14px;")
+        lbl.setStyleSheet("font-weight: bold; font-size: 10.5pt;")
         layout.addWidget(lbl)
         self._build_measurement_points_fields(layout)
 
@@ -485,7 +485,7 @@ class SettingsDialog(QDialog):
             l.setSpacing(0)
         
         lbl = QLabel(label)
-        lbl.setStyleSheet("color: #64748b; font-size: 10px; border: none;")
+        lbl.setStyleSheet("color: #64748b; font-size: 7.5pt; border: none;")
         
         if kind == "bool":
             widget = QCheckBox()
@@ -511,7 +511,7 @@ class SettingsDialog(QDialog):
                 widget.setCurrentText(raw)
             widget.setStyleSheet(
                 "QComboBox { border: none; background: transparent; "
-                "font-size: 13px; color: #0f172a; min-height: 22px; padding: 0; }"
+                "font-size: 9.75pt; color: #0f172a; min-height: 22px; padding: 0; }"
             )
         else:
             l.addWidget(lbl)
@@ -520,7 +520,7 @@ class SettingsDialog(QDialog):
                 widget.textEdited.connect(
                     lambda text, widget=widget: _normalize_decimal_editor_text(widget, text)
                 )
-            widget.setStyleSheet("border: none; background: transparent; font-size: 13px; color: #0f172a; min-height: 22px; padding: 0;")
+            widget.setStyleSheet("border: none; background: transparent; font-size: 9.75pt; color: #0f172a; min-height: 22px; padding: 0;")
             
         if kind != "bool":
             l.addWidget(widget)

@@ -32,6 +32,21 @@ def test_numeric_setting_labels_show_correct_units():
     assert DISPLAY_LABELS["speaker_depth"] == "Speaker depth (mm)"
 
 
+def test_settings_dialog_fonts_have_point_sizes():
+    _app()
+    dialog = SettingsDialog("config.ini", lambda: None)
+    dialog.ensurePolished()
+
+    fonts = [dialog.font()]
+    fonts.extend(
+        widget.font()
+        for widget in dialog.findChildren(object)
+        if callable(getattr(widget, "font", None))
+    )
+
+    assert all(font.pointSizeF() > 0 for font in fonts)
+
+
 def test_mock_dro_fields_follow_selected_grbl_streamer_type(tmp_path):
     _app()
     config_file = tmp_path / "config.ini"

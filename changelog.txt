@@ -1,4 +1,54 @@
 --------
+12/08/26
+--------
+Fixed the harmless QFont::setPointSize(-1) warning shown when scanner startup
+failed and the Scanner settings dialog opened automatically. Settings dialog
+font sizes now use point units throughout, preventing pixel-sized fonts from
+being reused as invalid point sizes without suppressing Qt warnings.
+
+Added regression coverage to ensure every Settings dialog widget has a valid
+positive point size.
+
+Files touched:
+src/harmonic_drive_qt/settings_dialog.py
+tests/test_qt_settings_dialog.py
+
+--------
+12/08/26
+--------
+Improved real-time audio playback and capture robustness without changing
+signal generation, channel routing, measurement capture, or alignment.
+
+Previously, the PortAudio callback calculated the live input/output meters,
+including RMS, peak, clipping, and A/C weighting. This required NumPy/SciPy
+processing, temporary allocations, and a shared meter lock inside the
+real-time audio path, where unpredictable delays could contribute to
+intermittent playback or capture glitches.
+
+Meter samples are now copied into a preallocated ring buffer and processed by
+a separate meter worker. The ring provides scheduling headroom rather than an
+intentional delay: the worker normally processes samples as they arrive and,
+if it falls behind, skips older display samples and processes only the newest
+100 ms. The lossless measurement capture buffers are separate and unchanged.
+
+PortAudio underflow/overflow status is now counted in the callback and logged
+later by the meter worker, replacing logging from inside the real-time
+callback.
+Audio Setup gui now accepts blocksize 0, displayed as "Automatic", so
+PortAudio can select the host API's preferred callback block size when chosen.
+The existing 2048-frame default has not changed.
+
+Added automated test coverage for asynchronous channel routing,
+weighted meters, deferred callback-status reporting, and saving the Automatic
+block-size option.
+
+Files touched:
+src/nfs/audio.py
+src/harmonic_drive_qt/audio_setup_pane.py
+tests/test_audio_engine.py
+tests/test_qt_audio_setup_pane.py
+
+--------
 14/07/26
 --------
 Fixed: Audio Setup voltage summary so its interface and speaker output
