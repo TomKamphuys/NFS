@@ -99,3 +99,38 @@ These features are intended for pipeline testing and verification:
 * **Mock Interfaces:** The `mock_interface` mode simulates hardware latency, DAC FIR anti-aliasing filter group delay, and high-pass characteristic of DC blocking capacitors to test the alignment engine without physical hardware attached.
 * **Harmonic Injection:** Injects artificial 2nd and 3rd order harmonics (`H2_TEST_DB`, `H3_TEST_DB`) to verify the Farina separation logic.
 * **Debug Saves:** Saves raw microphone captures and loopback tracks to a debug folder for manual waveform inspection.
+
+### Electrical-loopback ASIO diagnostic
+
+For intermittent clicks, interruptions, repeated blocks, or streams that are
+clean on one start and faulty on another, double-click
+`Run Audio Diagnostic.bat` in the project folder. The setup window reuses the
+interface and loopback channel choices saved in Audio Setup.
+
+Before starting:
+
+* Connect the displayed physical line output directly to the displayed physical
+  line input using a suitable cable.
+* Disable phantom power on that input.
+* Mute or disconnect loudspeakers because the production-backend comparison
+  intentionally follows the application's real output routing.
+* Do not enable TotalMix, Focusrite, ASIO4ALL, or other software loopback.
+* Never connect a power-amplifier or speaker-level output to the interface input.
+
+The setup window disappears while the test runs. Leave the computer alone until
+the completion window returns; coarse progress appears in the terminal. The
+production application backend is tested first in a fresh process. Direct
+configured-rate tests and deliberate sample-rate transitions then run in their
+own fresh processes, including accurately timed 0.25, 1, and 3 second driver-
+release comparisons. Transition captures last eight seconds. A delayed signal
+while a driver starts is reported as a startup warning; dropout detection then
+uses the separate steady-state portion after the signal has settled.
+If the driver invokes callbacks substantially faster or slower than the
+requested sample rate, the diagnostic reports a driver timing failure instead
+of blaming the physical cable. It then runs one fresh-process minimal direct
+stream to determine whether the same fault exists below the application audio
+backend, and skips the remaining tests whose results would not be meaningful.
+Send the generated file ending in `_SEND_THIS_FILE.zip`. The archive contains
+the raw evidence, effective callback rates, sine phase-integrity results, and
+machine-readable measurements needed for independent analysis, not only an
+automatic pass/fail result.

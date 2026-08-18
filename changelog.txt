@@ -1,4 +1,82 @@
 --------
+18/08/26
+--------
+Added an isolated electrical-loopback audio diagnostic for investigating
+intermittent ASIO playback and capture interruptions across different audio
+interfaces and drivers.
+
+The normal user workflow is a confirmation-first setup window that reuses the
+ASIO device, electrical reference output, and electrical loopback input already
+saved in Audio Setup. Technical selectors remain hidden unless the saved setup
+needs changing. The user must confirm a physical line-output-to-line-input
+connection, phantom power off, and safe loudspeaker routing; software loopback
+is explicitly excluded.
+
+After setup, audio tests run headlessly before any QApplication is created.
+The setup process releases its PortAudio instance, then the production backend
+runs first in a fresh child process so its first-start result is not preceded by
+a direct-stream test or a sample-rate change. Direct configured-rate tests and
+sample-rate-transition tests each run in further fresh processes. Coarse
+terminal progress is printed only between trials, never from the real-time
+callback. The first production-backend stream also checks that the electrical
+return is present and not clipping.
+
+The suite compares a minimal pre-generated callback against the production
+AudioFactory/play_sine path and persistent streams against complete close/reopen
+cycles. Configured-rate direct tests compare Automatic, 128, 512, and 2048
+sample requests, plus the saved explicit size when different. Sample-rate
+changes are isolated in their own suite and repeat an alternate-rate to saved-
+rate transition after requested driver-release intervals of 0.25, 1, and 3
+seconds. Timing-sensitive source, target, and immediate-reopen streams are all
+captured before any correlation, file compression, or progress reporting. The
+requested driver-idle wait, actual driver-idle wait, and full callback-to-
+callback interval are saved separately, preventing offline analysis time from
+silently inflating the experiment. Transition captures last eight seconds.
+
+Offline analysis measures callback timing/status, actual callback frame sizes,
+effective callback frame rate, signal onset, moving correlation, latency
+changes, suspected missing/repeated samples, clock drift, attenuated windows,
+error regularity, and residual noise. Production sine tests use a dedicated
+amplitude, phase-continuity, frequency-offset, and sine-fit analysis so normal
+whole-period ambiguity is not misreported as dropped samples. Both probe and
+sine analysis detect and report late signal onset separately, retain it as a
+startup warning, and classify glitches only after a 250 ms settling guard. This
+leaves more than five seconds of steady-state evidence even after the 2.7-second
+startup delay observed during 96 kHz testing. All callback capture uses
+preallocated buffers; analysis and file writing occur only after the timing-
+sensitive stream sequence finishes.
+
+Grossly unpaced callbacks are now diagnosed before electrical-loopback level.
+Previously, an ASIO4ALL stream running hundreds of times faster than real time
+consumed the test signal before the hardware could play it, after which the
+near-silent input triggered the misleading physical-loopback warning. The
+report now identifies this as a driver timing failure, includes the requested
+and effective callback rates, and does not suggest changing the cable or gain.
+
+When this failure occurs, the long block-size and sample-rate suites are skipped
+but one minimal direct stream runs in another fresh process. It uses the saved
+rate and block request without alternate-format probing and bypasses
+AudioFactory, production sine generation, and metering. This determines whether
+the unpaced callbacks originate below the application backend while avoiding a
+long invalid test.
+
+Each run produces a single SEND_THIS_FILE.zip containing machine-readable
+results, callback traces, deterministic references, and compact captured audio
+for independent re-analysis. Personal configuration paths are omitted. A
+double-click Run Audio Diagnostic.bat launcher is included for non-technical
+testers.
+
+Files touched:
+Run Audio Diagnostic.bat
+src/nfs/audio_diagnostic.py
+src/harmonic_drive_qt/audio_diagnostic_gui.py
+src/harmonic_drive_qt/main.py
+tests/test_audio_diagnostic.py
+tests/test_qt_audio_diagnostic_gui.py
+tests/test_qt_main_startup.py
+Documents/audio_help.md
+
+--------
 12/08/26
 --------
 Fixed the harmless QFont::setPointSize(-1) warning shown when scanner startup

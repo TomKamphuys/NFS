@@ -1,4 +1,5 @@
 import os
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -48,3 +49,70 @@ def test_startup_audio_warning_opens_audio_setup(monkeypatch):
     assert warnings[0][1] == "Audio Setup Warning"
     assert "Near Field Scanner unavailable" not in warnings[0][2]
     assert window.calls == [("audio", None)]
+
+
+def test_headless_diagnostic_runs_before_qapplication(monkeypatch, tmp_path):
+    request = tmp_path / "request.json"
+    request.write_text("{}", encoding="utf-8")
+    result_file = tmp_path / "result.txt"
+    archive = tmp_path / "bundle.zip"
+    archive.write_bytes(b"zip")
+    import nfs.audio_diagnostic as diagnostic
+
+    monkeypatch.setattr(diagnostic, "run_diagnostic", lambda path, launcher_command=None: archive)
+    monkeypatch.setattr(
+        qt_main,
+        "QApplication",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("QApplication was constructed")),
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "harmonic-drive-qt",
+            "--audio-diagnostic-run",
+            str(request),
+            "--audio-diagnostic-result-file",
+            str(result_file),
+        ],
+    )
+
+    assert qt_main.main() == 0
+    assert result_file.read_text(encoding="utf-8") == str(archive)
+
+
+def test_fresh_process_group_runs_before_qapplication(monkeypatch, tmp_path):
+    import nfs.audio_diagnostic as diagnostic
+
+    calls = []
+    monkeypatch.setattr(
+        diagnostic,
+        "run_diagnostic_group",
+        lambda *args, **kwargs: calls.append((args, kwargs)),
+    )
+    monkeypatch.setattr(
+        qt_main,
+        "QApplication",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("QApplication was constructed")),
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "harmonic-drive-qt",
+            "--audio-diagnostic-group",
+            "backend",
+            "--audio-diagnostic-request",
+            str(tmp_path / "request.json"),
+            "--audio-diagnostic-run-dir",
+            str(tmp_path),
+            "--audio-diagnostic-progress-offset",
+            "4",
+            "--audio-diagnostic-progress-total",
+            "33",
+        ],
+    )
+
+    assert qt_main.main() == 0
+    assert calls[0][0][2] == "backend"
+    assert calls[0][1] == {"progress_offset": 4, "progress_total": 33}

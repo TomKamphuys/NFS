@@ -15,6 +15,7 @@ build/
 
 # Test / tooling caches
 .pytest_cache/
+/.tmp_*/
 .coverage
 htmlcov/
 
@@ -33,5 +34,6 @@ tests/measurement_positions.txt
 /measurement_positions.csv
 docs/_build/
 /measurements/
+/audio_diagnostics/
 /config.old
 /tests/Recordings/
