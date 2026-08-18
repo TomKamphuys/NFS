@@ -21,6 +21,23 @@ class FakeWindow:
         self.calls.append(("settings", initial_section))
 
 
+def test_missing_wheel_guard_disables_feature(monkeypatch):
+    app = SimpleNamespace(installEventFilter=lambda guard: pytest.fail("guard was installed"))
+    monkeypatch.setattr(qt_main, "WheelGuard", None)
+
+    assert qt_main.install_wheel_guard(app) is None
+
+
+def test_available_wheel_guard_is_installed(monkeypatch):
+    installed = []
+    app = SimpleNamespace(installEventFilter=installed.append)
+    guard = object()
+    monkeypatch.setattr(qt_main, "WheelGuard", lambda parent: guard)
+
+    assert qt_main.install_wheel_guard(app) is guard
+    assert installed == [guard]
+
+
 def test_startup_scanner_warning_opens_scanner_settings(monkeypatch):
     warnings = []
     monkeypatch.setattr(qt_main.QMessageBox, "warning", lambda *args: warnings.append(args))

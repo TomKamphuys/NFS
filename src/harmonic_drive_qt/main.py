@@ -16,17 +16,34 @@ if __package__ in {None, ""}:
     from harmonic_drive_qt.main_window import MainWindow
     from harmonic_drive_qt.qt_compat import QApplication, QMessageBox, QThreadPool, QTimer
     from harmonic_drive_qt.styles import app_stylesheet
-    from harmonic_drive_qt.wheel_guard import WheelGuard
 else:
     from .backend import BackendManager, Worker
     from .main_window import MainWindow
     from .qt_compat import QApplication, QMessageBox, QThreadPool, QTimer
     from .styles import app_stylesheet
-    from .wheel_guard import WheelGuard
+
+try:
+    if __package__ in {None, ""}:
+        from harmonic_drive_qt.wheel_guard import WheelGuard
+    else:
+        from .wheel_guard import WheelGuard
+except ModuleNotFoundError as exc:
+    if exc.name != "harmonic_drive_qt.wheel_guard":
+        raise
+    WheelGuard = None
 
 
 def apply_app_style(app: QApplication) -> None:
     app.setStyleSheet(app_stylesheet())
+
+
+def install_wheel_guard(app: QApplication):
+    if WheelGuard is None:
+        logger.warning("wheel_guard.py is unavailable; mouse-wheel guarding is disabled")
+        return None
+    wheel_guard = WheelGuard(app)
+    app.installEventFilter(wheel_guard)
+    return wheel_guard
 
 
 def _startup_warning_is_audio_setup(message: str) -> bool:
@@ -217,8 +234,7 @@ def main() -> int:
             )
         return 0
 
-    wheel_guard = WheelGuard(app)
-    app.installEventFilter(wheel_guard)
+    wheel_guard = install_wheel_guard(app)
     try:
         from harmonic_drive_qt import project
 
