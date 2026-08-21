@@ -1,4 +1,12 @@
 --------
+21/08/26
+--------
+Added an App setting that switches all Live Capture 2D graphs (Measurement
+Positions, Frequency Response, and Impulse Response) between the native
+PySide6 painter and Matplotlib. Matplotlib mode bypasses native LinePlot
+construction and can be applied without restarting the app.
+
+--------
 18/08/26
 --------
 Added an isolated electrical-loopback audio diagnostic for investigating

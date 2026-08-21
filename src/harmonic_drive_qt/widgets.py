@@ -5,6 +5,9 @@ from __future__ import annotations
 import math
 from typing import Iterable
 
+from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.figure import Figure
+
 from .qt_compat import QColor, QFont, QFrame, QPainter, QPen, Qt, QWidget
 
 
@@ -362,6 +365,102 @@ class LinePlot(QWidget):
                 top, bottom = sorted((oy, cy))
                 painter.fillRect(plot.left(), top, plot.width(), max(1, bottom - top), overlay)
                 painter.drawRect(plot.left(), top, plot.width(), max(1, bottom - top))
+
+
+class MatplotlibLinePlot(FigureCanvas):
+    """Matplotlib-backed counterpart to :class:`LinePlot`."""
+
+    def __init__(self, title: str, x_label: str = "", y_label: str = "", parent=None) -> None:
+        self.figure = Figure(figsize=(7.0, 3.25), dpi=100, tight_layout=True)
+        self.ax = self.figure.add_subplot(111)
+        super().__init__(self.figure)
+        if parent is not None:
+            self.setParent(parent)
+        self.title = title
+        self.x_label = x_label
+        self.y_label = y_label
+        self.x_values: list[float] = []
+        self.y_values: list[float] = []
+        self.message = "Waiting for data..."
+        self.scatter = False
+        self.log_x = False
+        self.color_points_by_y = False
+        self.y_axis_mode = "linear"
+        self.x_range: tuple[float, float] | None = None
+        self.y_range: tuple[float, float] | None = None
+        self.default_x_range: tuple[float, float] | None = None
+        self.default_y_range: tuple[float, float] | None = None
+        self.setMinimumHeight(130)
+        self._render()
+
+    def set_data(
+        self,
+        x_values: Iterable[float],
+        y_values: Iterable[float],
+        *,
+        title: str | None = None,
+        scatter: bool = False,
+        log_x: bool = False,
+        x_range: tuple[float, float] | None = None,
+        y_range: tuple[float, float] | None = None,
+        y_axis_mode: str | None = None,
+    ) -> None:
+        self.x_values = [float(x) for x in x_values]
+        self.y_values = [float(y) for y in y_values]
+        if title is not None:
+            self.title = title
+        self.scatter = scatter
+        self.log_x = log_x
+        self.x_range = x_range
+        self.y_range = y_range
+        self.default_x_range = x_range
+        self.default_y_range = y_range
+        self.y_axis_mode = y_axis_mode or "linear"
+        self.message = ""
+        self._render()
+
+    def clear_data(self, message: str, title: str | None = None) -> None:
+        self.x_values = []
+        self.y_values = []
+        self.message = message
+        if title is not None:
+            self.title = title
+        self._render()
+
+    def reset_zoom(self) -> None:
+        self.x_range = self.default_x_range
+        self.y_range = self.default_y_range
+        self._render()
+
+    def _render(self) -> None:
+        self.ax.clear()
+        self.ax.set_facecolor("#ffffff")
+        self.figure.patch.set_facecolor("#ffffff")
+        self.ax.set_title(self.title, fontsize=11, fontweight="bold", color="#0f172a")
+        self.ax.set_xlabel(self.x_label, fontsize=9, color="#334155")
+        self.ax.set_ylabel(self.y_label, fontsize=9, color="#334155")
+        self.ax.set_xscale("log" if self.log_x else "linear")
+        self.ax.grid(True, which="both", color="#dbe4ee", linewidth=0.7, alpha=0.9)
+        self.ax.tick_params(colors="#475569", labelsize=8)
+        for spine in self.ax.spines.values():
+            spine.set_color("#94a3b8")
+
+        if self.x_values and self.y_values:
+            if self.scatter:
+                colors = self.y_values if self.color_points_by_y else "#2563eb"
+                self.ax.scatter(self.x_values, self.y_values, s=18, c=colors, cmap="viridis")
+            else:
+                self.ax.plot(self.x_values, self.y_values, color="#2563eb", linewidth=1.4)
+            if self.x_range is not None:
+                self.ax.set_xlim(*self.x_range)
+            if self.y_range is not None:
+                self.ax.set_ylim(*self.y_range)
+        elif self.message:
+            self.ax.text(
+                0.5, 0.5, self.message, transform=self.ax.transAxes,
+                ha="center", va="center", color="#64748b", fontsize=10,
+            )
+        self.draw_idle()
 
 
 class ProgressCloud(QWidget):

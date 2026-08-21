@@ -37,6 +37,7 @@ DISPLAY_LABELS = {
     "speaker_width": "Speaker width (mm)",
     "speaker_depth": "Speaker depth (mm)",
     "use_alternative_motion_controls": "Use alternative motion controls",
+    "use_matplotlib_live_plots": "Use Matplotlib for Live Capture plots",
 }
 
 # ---------------------------------------------------------------------------
@@ -205,6 +206,8 @@ EDITABLE_SCHEMA: Dict[str, List[SchemaEntry]] = {
         ("coord_viewer_backend", "choice",
          "3D coordinate viewer used in the native Grid pane.",
          ["matplotlib", "pyvista"]),
+        ("use_matplotlib_live_plots", "bool",
+         "Render Measurement Positions, Frequency Response, and Impulse Response with Matplotlib, fully bypassing the native PySide6 plot widgets.", None),
         ("show_rehome_button", "bool",
          "Show the ReHome command button in the machine control pane.", None),
         ("show_height_offset_controls", "bool",

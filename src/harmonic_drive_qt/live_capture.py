@@ -36,7 +36,7 @@ from .qt_compat import (
     Qt,
 )
 from .styles import light_combo, toggle_style
-from .widgets import LevelMeter, LinePlot
+from .widgets import LevelMeter, LinePlot, MatplotlibLinePlot
 from grid_generator.coord_viewer_core_matplot import CoordViewerEngine
 
 
@@ -44,6 +44,7 @@ LIVE_CAPTURE_CONFIG_SECTION = "live_capture"
 PANEL_ORDER_CONFIG_KEY = "panel_order"
 VISIBLE_PANELS_CONFIG_KEY = "visible_panels"
 FREQUENCY_SMOOTHING_CONFIG_KEY = "frequency_smoothing_fraction"
+MATPLOTLIB_LIVE_PLOTS_CONFIG_KEY = "use_matplotlib_live_plots"
 PANEL_LABELS = [
     "Audio Meters",
     "Measurement Positions",
@@ -385,7 +386,7 @@ class LiveSection(QFrame):
         QTimer.singleShot(0, self._apply_square_size)
 
     def reset_home(self) -> None:
-        for plot in self.content.findChildren(LinePlot):
+        for plot in self._line_plots():
             plot.reset_zoom()
         if self.home_callback is not None:
             self.home_callback()
@@ -395,12 +396,18 @@ class LiveSection(QFrame):
         if self._square_mode:
             self._apply_square_size()
             return
-        for plot in self.content.findChildren(LinePlot):
+        for plot in self._line_plots():
             base = int(plot.property("baseMinimumHeight") or plot.minimumHeight())
             if not plot.property("baseMinimumHeight"):
                 plot.setProperty("baseMinimumHeight", base)
             plot.setMinimumHeight(base + (220 if self._maximized else 0))
         self.updateGeometry()
+
+    def _line_plots(self) -> list[QWidget]:
+        plots: list[QWidget] = []
+        for plot_type in (LinePlot, MatplotlibLinePlot):
+            plots.extend(self.content.findChildren(plot_type))
+        return plots
 
     def float_view(self) -> None:
         if self._enlarge_dialog is not None:
@@ -508,6 +515,7 @@ class LiveCapturePane(QWidget):
         self.grid_points: list[tuple[float, float, float]] = []
         self.grid_df: pd.DataFrame | None = None
         self.fr_smoothing_fraction = 24
+        self.live_plot_backend = self._read_live_plot_backend()
         self.viewer_backend = self._read_viewer_backend()
         self._pyvista_error: str | None = None
         self._pyvista_fallback_message_shown = False
@@ -538,6 +546,66 @@ class LiveCapturePane(QWidget):
         parser.read(self.config_file)
         backend = parser.get("app", "coord_viewer_backend", fallback="matplotlib").strip().lower()
         return backend if backend in {"matplotlib", "pyvista"} else "matplotlib"
+
+    def _read_live_plot_backend(self) -> str:
+        parser = configparser.ConfigParser(inline_comment_prefixes=("#", ";"))
+        parser.read(self.config_file)
+        try:
+            use_matplotlib = parser.getboolean(
+                "app", MATPLOTLIB_LIVE_PLOTS_CONFIG_KEY, fallback=False
+            )
+        except ValueError:
+            use_matplotlib = False
+        return "matplotlib" if use_matplotlib else "pyside6"
+
+    def _create_line_plot(self, title: str, x_label: str, y_label: str):
+        plot_type = MatplotlibLinePlot if self.live_plot_backend == "matplotlib" else LinePlot
+        return plot_type(title, x_label, y_label)
+
+    def _sync_live_plot_backend(self) -> None:
+        desired_backend = self._read_live_plot_backend()
+        if desired_backend == self.live_plot_backend:
+            return
+
+        self.live_plot_backend = desired_backend
+        replacements = (
+            (
+                "positions",
+                self.positions_layout,
+                "Measurement Positions (Azimuth vs Elevation)",
+                "Azimuth (degrees)",
+                "Elevation (degrees)",
+                240,
+            ),
+            (
+                "frequency",
+                self.frequency_layout,
+                "Frequency Response",
+                "Frequency (Hz)",
+                "Magnitude (dBFS)",
+                325,
+            ),
+            (
+                "impulse",
+                self.impulse_layout,
+                "Impulse Response",
+                "Time (ms)",
+                "Amplitude",
+                286,
+            ),
+        )
+        for attr_name, layout, title, x_label, y_label, minimum_height in replacements:
+            old_plot = getattr(self, attr_name)
+            layout.removeWidget(old_plot)
+            old_plot.setParent(None)
+            old_plot.deleteLater()
+            new_plot = self._create_line_plot(title, x_label, y_label)
+            new_plot.setMinimumHeight(minimum_height)
+            if attr_name == "positions":
+                new_plot.scatter = True
+                new_plot.color_points_by_y = True
+            setattr(self, attr_name, new_plot)
+            layout.addWidget(new_plot)
 
     def _create_progress_engine(self, backend: str):
         if backend == "pyvista":
@@ -608,12 +676,14 @@ class LiveCapturePane(QWidget):
             meters_layout.addWidget(meter, index // 2, index % 2)
 
         self.pos_section, p_content = self._add_section("Measurement Positions")
-        p_layout = QVBoxLayout(p_content)
-        self.positions = LinePlot("Measurement Positions (Azimuth vs Elevation)", "Azimuth (degrees)", "Elevation (degrees)")
+        self.positions_layout = QVBoxLayout(p_content)
+        self.positions = self._create_line_plot(
+            "Measurement Positions (Azimuth vs Elevation)", "Azimuth (degrees)", "Elevation (degrees)"
+        )
         self.positions.setMinimumHeight(240)
         self.positions.scatter = True
         self.positions.color_points_by_y = True
-        p_layout.addWidget(self.positions)
+        self.positions_layout.addWidget(self.positions)
 
         smoothing_field = QWidget()
         smoothing_field.setStyleSheet("background: transparent; border: none;")
@@ -625,16 +695,16 @@ class LiveCapturePane(QWidget):
         smoothing_layout.addWidget(smoothing_label)
         smoothing_layout.addWidget(self.smoothing)
         self.freq_section, f_content = self._add_section("Frequency Response", header_widget=smoothing_field)
-        f_layout = QVBoxLayout(f_content)
-        self.frequency = LinePlot("Frequency Response", "Frequency (Hz)", "Magnitude (dBFS)")
+        self.frequency_layout = QVBoxLayout(f_content)
+        self.frequency = self._create_line_plot("Frequency Response", "Frequency (Hz)", "Magnitude (dBFS)")
         self.frequency.setMinimumHeight(325)
-        f_layout.addWidget(self.frequency)
+        self.frequency_layout.addWidget(self.frequency)
         
         self.imp_section, i_content = self._add_section("Impulse Response")
-        i_layout = QVBoxLayout(i_content)
-        self.impulse = LinePlot("Impulse Response", "Time (ms)", "Amplitude")
+        self.impulse_layout = QVBoxLayout(i_content)
+        self.impulse = self._create_line_plot("Impulse Response", "Time (ms)", "Amplitude")
         self.impulse.setMinimumHeight(286)
-        i_layout.addWidget(self.impulse)
+        self.impulse_layout.addWidget(self.impulse)
 
         prog_section, pr_content = self._add_section("Measurement Progress", self._reset_progress_view, config_label="3D Progress")
         pr_layout = QVBoxLayout(pr_content)
@@ -954,6 +1024,7 @@ class LiveCapturePane(QWidget):
             self.refresh_ir_plots()
 
     def refresh_all(self) -> None:
+        self._sync_live_plot_backend()
         self.grid_points = _load_grid_points()
         self.grid_df = _load_grid_dataframe()
         self.refresh_progress_viewer(0)

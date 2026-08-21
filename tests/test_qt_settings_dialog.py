@@ -5,7 +5,7 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("PySide6")
 
-from harmonic_drive_qt.qt_compat import QApplication, QComboBox, QLineEdit, QMessageBox
+from harmonic_drive_qt.qt_compat import QApplication, QCheckBox, QComboBox, QLineEdit, QMessageBox
 from harmonic_drive_qt.settings_dialog import SettingsDialog
 from harmonic_drive_qt.config_support import DISPLAY_LABELS
 
@@ -45,6 +45,24 @@ def test_settings_dialog_fonts_have_point_sizes():
     )
 
     assert all(font.pointSizeF() > 0 for font in fonts)
+
+
+def test_settings_dialog_saves_matplotlib_live_plot_toggle(tmp_path):
+    _app()
+    config_file = tmp_path / "config.ini"
+    config_file.write_text(
+        "[app]\nuse_matplotlib_live_plots = False\n",
+        encoding="utf-8",
+    )
+    dialog = SettingsDialog(str(config_file), lambda: None)
+    toggle, kind = dialog.inputs[("app", "use_matplotlib_live_plots")]
+
+    assert kind == "bool"
+    assert isinstance(toggle, QCheckBox)
+    toggle.setChecked(True)
+    dialog.save()
+
+    assert "use_matplotlib_live_plots = True" in config_file.read_text(encoding="utf-8")
 
 
 def test_mock_dro_fields_follow_selected_grbl_streamer_type(tmp_path):
