@@ -27,6 +27,7 @@ try:
         QScrollArea,
         QSizePolicy,
         QSplitter,
+        QSplitterHandle,
         QStackedWidget,
         QTabWidget,
         QTextEdit,

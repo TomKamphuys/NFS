@@ -14,6 +14,7 @@ from .grid_pane import GridGeneratorPane
 from .live_capture import LiveCapturePane
 from .settings_dialog import SettingsDialog
 from .styles import danger_button, primary_button
+from .widgets import LocallyPaintedSplitter
 from .qt_compat import (
     QFileDialog,
     QFrame,
@@ -24,7 +25,6 @@ from .qt_compat import (
     QMessageBox,
     QPushButton,
     QSizePolicy,
-    QSplitter,
     QStackedWidget,
     Qt,
     QTimer,
@@ -139,7 +139,7 @@ class MainWindow(QMainWindow):
         content_layout = QVBoxLayout(content_area)
         content_layout.setContentsMargins(0, 12, 0, 0)
         
-        splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter = LocallyPaintedSplitter(Qt.Orientation.Horizontal)
         splitter.setChildrenCollapsible(False)
         splitter.setHandleWidth(8)
         self.splitter = splitter

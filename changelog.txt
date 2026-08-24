@@ -1,4 +1,12 @@
 --------
+24/08/26
+--------
+Moved the main splitter's hover rendering out of the application stylesheet
+and into a dedicated handle that repaints only itself. Crossing the pane
+boundary no longer redraws unchanged native Live Capture plots and therefore
+cannot trigger the observed audio interruptions through expensive plot paints.
+
+--------
 12/08/26
 --------
 Fixed the harmless QFont::setPointSize(-1) warning shown when scanner startup

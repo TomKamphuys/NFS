@@ -5,7 +5,49 @@ from __future__ import annotations
 import math
 from typing import Iterable
 
-from .qt_compat import QColor, QFont, QFrame, QPainter, QPen, Qt, QWidget
+from .qt_compat import (
+    QColor,
+    QFont,
+    QFrame,
+    QPainter,
+    QPen,
+    QSplitter,
+    QSplitterHandle,
+    Qt,
+    QWidget,
+)
+
+
+class LocallyPaintedSplitterHandle(QSplitterHandle):
+    """Splitter handle whose hover repaint is confined to the handle itself."""
+
+    def enterEvent(self, event) -> None:  # noqa: N802 - Qt override
+        self.update()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:  # noqa: N802 - Qt override
+        self.update()
+        super().leaveEvent(event)
+
+    def paintEvent(self, event) -> None:  # noqa: N802 - Qt override
+        painter = QPainter(self)
+        hovered = self.underMouse()
+        painter.fillRect(self.rect(), QColor("#dbeafe" if hovered else "#eef6ff"))
+        painter.setPen(QPen(QColor("#5b9bd8" if hovered else "#cfe4fa")))
+        rect = self.rect()
+        if self.orientation() == Qt.Orientation.Horizontal:
+            painter.drawLine(rect.left(), rect.top(), rect.left(), rect.bottom())
+            painter.drawLine(rect.right(), rect.top(), rect.right(), rect.bottom())
+        else:
+            painter.drawLine(rect.left(), rect.top(), rect.right(), rect.top())
+            painter.drawLine(rect.left(), rect.bottom(), rect.right(), rect.bottom())
+
+
+class LocallyPaintedSplitter(QSplitter):
+    """QSplitter that avoids stylesheet hover invalidation of child widgets."""
+
+    def createHandle(self) -> QSplitterHandle:  # noqa: N802 - Qt override
+        return LocallyPaintedSplitterHandle(self.orientation(), self)
 
 
 class LevelMeter(QFrame):
