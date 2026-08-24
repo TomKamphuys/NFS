@@ -1,4 +1,13 @@
 --------
+24/08/26
+--------
+Restored the native PySide6 Live Capture plots and moved the main splitter's
+hover rendering out of the application stylesheet into a dedicated handle.
+Hovering across the pane boundary now repaints only the eight-pixel handle,
+preventing unchanged frequency-response plots from being redrawn and starving
+the real-time Python audio callback.
+
+--------
 21/08/26
 --------
 Added an App setting that switches all Live Capture 2D graphs (Measurement

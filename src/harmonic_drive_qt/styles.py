@@ -236,26 +236,6 @@ def app_stylesheet() -> str:
     QGroupBox::indicator:checked {{
         image: url("{disclosure_open}");
     }}
-    QSplitter::handle:horizontal {{
-        background: #eef6ff;
-        border-left: 1px solid #cfe4fa;
-        border-right: 1px solid #cfe4fa;
-    }}
-    QSplitter::handle:horizontal:hover {{
-        background: #dbeafe;
-        border-left-color: {BLUE};
-        border-right-color: {BLUE};
-    }}
-    QSplitter::handle:vertical {{
-        background: #eef6ff;
-        border-top: 1px solid #cfe4fa;
-        border-bottom: 1px solid #cfe4fa;
-    }}
-    QSplitter::handle:vertical:hover {{
-        background: #dbeafe;
-        border-top-color: {BLUE};
-        border-bottom-color: {BLUE};
-    }}
     """
 
 
