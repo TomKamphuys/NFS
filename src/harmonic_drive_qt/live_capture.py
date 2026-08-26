@@ -14,6 +14,7 @@ from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 
 from .backend import BackendManager
 from .icons import ui_icon
+from .matplotlib_plot import MatplotlibPlot
 from .qt_compat import (
     QAbstractSpinBox,
     QCheckBox,
@@ -35,8 +36,8 @@ from .qt_compat import (
     QWidget,
     Qt,
 )
-from .styles import light_combo, toggle_style
-from .widgets import LevelMeter, LinePlot
+from .styles import header_combo, toggle_style
+from .widgets import LevelMeter
 from grid_generator.coord_viewer_core_matplot import CoordViewerEngine
 
 
@@ -385,7 +386,7 @@ class LiveSection(QFrame):
         QTimer.singleShot(0, self._apply_square_size)
 
     def reset_home(self) -> None:
-        for plot in self.content.findChildren(LinePlot):
+        for plot in self.content.findChildren(MatplotlibPlot):
             plot.reset_zoom()
         if self.home_callback is not None:
             self.home_callback()
@@ -395,7 +396,7 @@ class LiveSection(QFrame):
         if self._square_mode:
             self._apply_square_size()
             return
-        for plot in self.content.findChildren(LinePlot):
+        for plot in self.content.findChildren(MatplotlibPlot):
             base = int(plot.property("baseMinimumHeight") or plot.minimumHeight())
             if not plot.property("baseMinimumHeight"):
                 plot.setProperty("baseMinimumHeight", base)
@@ -562,7 +563,7 @@ class LiveCapturePane(QWidget):
         title = QLabel("Live Capture")
         title.setStyleSheet("font-size: 20px; font-weight: 800; color: #000000; border: none;")
         self.smoothing = QComboBox()
-        light_combo(self.smoothing)
+        header_combo(self.smoothing)
         for fraction, label in FREQUENCY_SMOOTHING_OPTIONS.items():
             self.smoothing.addItem(label, fraction)
         self.smoothing.setFixedWidth(82)
@@ -609,14 +610,17 @@ class LiveCapturePane(QWidget):
 
         self.pos_section, p_content = self._add_section("Measurement Positions")
         p_layout = QVBoxLayout(p_content)
-        self.positions = LinePlot("Measurement Positions (Azimuth vs Elevation)", "Azimuth (degrees)", "Elevation (degrees)")
+        self.positions = MatplotlibPlot("Measurement Positions (Azimuth vs Elevation)", "Azimuth (degrees)", "Elevation (degrees)")
         self.positions.setMinimumHeight(240)
         self.positions.scatter = True
         self.positions.color_points_by_y = True
         p_layout.addWidget(self.positions)
 
         smoothing_field = QWidget()
-        smoothing_field.setStyleSheet("background: transparent; border: none;")
+        smoothing_field.setObjectName("SmoothingField")
+        smoothing_field.setStyleSheet(
+            "QWidget#SmoothingField { background: transparent; border: none; }"
+        )
         smoothing_layout = QHBoxLayout(smoothing_field)
         smoothing_layout.setContentsMargins(0, 0, 0, 0)
         smoothing_layout.setSpacing(5)
@@ -626,13 +630,13 @@ class LiveCapturePane(QWidget):
         smoothing_layout.addWidget(self.smoothing)
         self.freq_section, f_content = self._add_section("Frequency Response", header_widget=smoothing_field)
         f_layout = QVBoxLayout(f_content)
-        self.frequency = LinePlot("Frequency Response", "Frequency (Hz)", "Magnitude (dBFS)")
+        self.frequency = MatplotlibPlot("Frequency Response", "Frequency (Hz)", "Magnitude (dBFS)")
         self.frequency.setMinimumHeight(325)
         f_layout.addWidget(self.frequency)
         
         self.imp_section, i_content = self._add_section("Impulse Response")
         i_layout = QVBoxLayout(i_content)
-        self.impulse = LinePlot("Impulse Response", "Time (ms)", "Amplitude")
+        self.impulse = MatplotlibPlot("Impulse Response", "Time (ms)", "Amplitude")
         self.impulse.setMinimumHeight(286)
         i_layout.addWidget(self.impulse)
 
@@ -1101,7 +1105,9 @@ class LiveCapturePane(QWidget):
         fraction = int(self.fr_smoothing_fraction or 0)
         plot_freqs = freqs[valid]
         smoothed = _smooth_fractional_octave(plot_freqs, mag_db[valid], fraction)
-        audible = (plot_freqs >= 20.0) & (plot_freqs <= 20000.0)
+        nyquist = float(fs) / 2.0
+        lower_frequency = 20.0 if nyquist > 20.0 else max(float(plot_freqs[0]), nyquist / 1000.0)
+        audible = (plot_freqs >= lower_frequency) & (plot_freqs <= nyquist)
         smooth_label = "unsmoothed" if fraction <= 0 else f"1/{fraction} Oct Smoothed"
         self.imp_section.set_detail(f"Zoomed: {title_name}")
         if frd_db_offset is not None:
@@ -1115,6 +1121,6 @@ class LiveCapturePane(QWidget):
             smoothed[audible],
             title="Frequency Response",
             log_x=True,
-            x_range=(20, 20000),
+            x_range=(lower_frequency, nyquist),
             y_range=_auto_db_range(smoothed[audible]),
         )

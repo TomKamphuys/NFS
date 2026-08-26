@@ -21,6 +21,7 @@ classifiers = [
 dependencies = [
   "numpy",
   "pandas",
+  "matplotlib>=3.9",
   "plotly",
   "scipy",
   "loguru",

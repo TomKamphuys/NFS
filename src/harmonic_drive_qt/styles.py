@@ -268,6 +268,22 @@ def light_combo(combo) -> None:
     combo.setView(view)
 
 
+def header_combo(combo) -> None:
+    """Style a compact header combo so its expandable affordance is obvious."""
+    down_arrow = (Path(__file__).resolve().parent / "icons" / "spin-chevron-down.svg").as_posix()
+    light_combo(combo)
+    combo.setFixedHeight(24)
+    combo.setStyleSheet(
+        "QComboBox { background: #ffffff; color: #0f172a; "
+        "border: 1px solid #94a3b8; border-radius: 3px; "
+        "padding: 1px 24px 1px 7px; font-size: 11px; }"
+        "QComboBox:hover, QComboBox:focus { border-color: #3978bd; }"
+        "QComboBox::drop-down { subcontrol-origin: padding; subcontrol-position: top right; "
+        "width: 20px; border: none; border-left: 1px solid #cbd5e1; background: #f8fafc; }"
+        f'QComboBox::down-arrow {{ image: url("{down_arrow}"); width: 12px; height: 12px; }}'
+    )
+
+
 def primary_button(button) -> None:
     button.setObjectName("PrimaryButton")
     button.setStyleSheet(

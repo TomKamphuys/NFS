@@ -816,6 +816,7 @@ source = { editable = "." }
 dependencies = [
     { name = "grbl-streamer" },
     { name = "loguru" },
+    { name = "matplotlib" },
     { name = "nicegui", extra = ["highcharts"] },
     { name = "numpy" },
     { name = "pandas" },
@@ -854,6 +855,7 @@ dev = [
 requires-dist = [
     { name = "grbl-streamer", specifier = ">=2.0.2" },
     { name = "loguru" },
+    { name = "matplotlib", specifier = ">=3.9" },
     { name = "matplotlib", marker = "extra == 'native'", specifier = ">=3.9" },
     { name = "mypy", marker = "extra == 'dev'" },
     { name = "nicegui", extras = ["highcharts"], specifier = ">=2.24.2" },
