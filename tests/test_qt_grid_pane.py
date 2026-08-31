@@ -111,6 +111,40 @@ def test_grid_generation_uses_advanced_settings_when_waypoints_are_blank(tmp_pat
         pane.deleteLater()
 
 
+def test_saved_grid_geometry_uses_waypoints_over_advanced_settings(tmp_path):
+    _app()
+    config_file = tmp_path / "config.ini"
+    _write_config(config_file)
+    project.set_project_dir(tmp_path / "speaker_waypoints", str(config_file))
+
+    pane = GridGeneratorPane(Mock(), str(config_file))
+    try:
+        pane.cyl_radius.setValue(999.0)
+        pane.cyl_height.setValue(888.0)
+        pane.bottom_cutoff.setValue(777.0)
+        for field, value in zip(pane.waypoint_inputs["top"], (240.0, 10.0, 350.0)):
+            field.setText(str(value))
+        for field, value in zip(pane.waypoint_inputs["bottom"], (42.0, -20.0, -50.0)):
+            field.setText(str(value))
+
+        geometry = pane._generation_geometry_mode()
+        assert geometry == "waypoints"
+        effective = {
+            "cyl_radius_mm": 240.0,
+            "cyl_height_mm": 400.0,
+            "bottom_cutoff_mm": 42.0,
+        }
+        grid_vars = pane._grid_vars("grid.csv", effective)
+
+        assert grid_vars["cyl_radius_mm"] == 240.0
+        assert grid_vars["cyl_height_mm"] == 400.0
+        assert grid_vars["bottom_cutoff_mm"] == 42.0
+    finally:
+        pane.shutdown()
+        pane.sync_timer.stop()
+        pane.deleteLater()
+
+
 def test_grid_pane_accepts_comma_decimal_text_inputs(tmp_path):
     _app()
     config_file = tmp_path / "config.ini"

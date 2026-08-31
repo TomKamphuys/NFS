@@ -1,4 +1,18 @@
 --------
+31/08/26
+--------
+Fixed: Grid Generator project json so waypoints take priority over manual
+Advanced grid settings.
+
+Added regression coverage for waypoint-derived geometry and bottom-cutoff
+priority.
+
+Files touched:
+src/grid_generator/grid_gen_gui.py
+src/harmonic_drive_qt/grid_pane.py
+tests/test_qt_grid_pane.py
+
+--------
 24/08/26
 --------
 Moved the main splitter's hover rendering out of the application stylesheet

@@ -13,7 +13,10 @@ from matplotlib.backends.backend_qtagg import NavigationToolbar2QT as Navigation
 
 from . import project
 from grid_generator.coord_viewer_core_matplot import CoordViewerEngine
-from grid_generator.grid_gen import generate_measurement_grid
+from grid_generator.grid_gen import (
+    calculate_geometry_from_cylindrical_waypoints,
+    generate_measurement_grid,
+)
 from grid_generator.path_plan import plan_path
 
 from .backend import BackendManager, Worker
@@ -846,6 +849,9 @@ class GridGeneratorPane(QWidget):
         use_manual_geometry = self._use_manual_geometry_for_next_generation
         top = None if use_manual_geometry else self._waypoint("top")
         bottom = None if use_manual_geometry else self._waypoint("bottom")
+        effective_geometry = None
+        if top is not None and bottom is not None:
+            effective_geometry = calculate_geometry_from_cylindrical_waypoints(top, bottom)
         tweeter = self._waypoint("tweeter")
         cap_tol = self._optional_float(self.cap_tol.text())
         if cap_tol is None:
@@ -887,18 +893,19 @@ class GridGeneratorPane(QWidget):
             side_snake_start=self.snake_start.currentText(),
             show_replay=False,
         )
-        grid_vars = self._grid_vars(output_path.name)
+        grid_vars = self._grid_vars(output_path.name, effective_geometry)
         project.update_grid_vars(grid_vars)
         project.apply_to_config(self.config_file)
         project.save_project()
         self.grid_saved.emit(output_path.name, grid_vars)
         self.generated.emit(planned, str(output_path))
 
-    def _grid_vars(self, filename: str) -> dict:
+    def _grid_vars(self, filename: str, effective_geometry: dict | None = None) -> dict:
         def wp_value(key: str, index: int):
             waypoint = self._waypoint(key)
             return "" if waypoint is None else waypoint[index]
 
+        effective_geometry = effective_geometry or {}
         return {
             "output_filename": filename,
             "top_r": wp_value("top", 0),
@@ -933,11 +940,11 @@ class GridGeneratorPane(QWidget):
             "wp_baffle_tr_z": wp_value("baffle_top_r", 2),
             "num_points": int(self.num_points.value()),
             "azimuth_density_ratio": self.az_density.value(),
-            "cyl_radius_mm": self.cyl_radius.value(),
-            "cyl_height_mm": self.cyl_height.value(),
+            "cyl_radius_mm": effective_geometry.get("cyl_radius_mm", self.cyl_radius.value()),
+            "cyl_height_mm": effective_geometry.get("cyl_height_mm", self.cyl_height.value()),
             "phi_min_deg": self.phi_min.value(),
             "phi_max_deg": self.phi_max.value(),
-            "bottom_cutoff_mm": self.bottom_cutoff.value(),
+            "bottom_cutoff_mm": effective_geometry.get("bottom_cutoff_mm", self.bottom_cutoff.value()),
             "delta_theta_deg": self.delta_theta.value(),
             "wall_thickness_mm": self.wall_thickness.value(),
             "cap_fraction": self.cap_fraction.text(),

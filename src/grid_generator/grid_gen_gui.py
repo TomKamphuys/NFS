@@ -11,11 +11,11 @@ import asyncio
 from pathlib import Path
 
 try:
-    from .grid_gen import generate_measurement_grid
+    from .grid_gen import calculate_geometry_from_cylindrical_waypoints, generate_measurement_grid
     from .path_plan import plan_path
     from .coord_viewer_core import CoordViewerEngine
 except ImportError:
-    from grid_gen import generate_measurement_grid
+    from grid_gen import calculate_geometry_from_cylindrical_waypoints, generate_measurement_grid
     from path_plan import plan_path
     from coord_viewer_core import CoordViewerEngine
 
@@ -295,6 +295,14 @@ def build_grid_gen_ui(
                         
                     cf_val = None if str(g_cap_frac.value).strip().lower() in ('auto', 'none', '') else float(g_cap_frac.value)
                     
+                    top_crit_pos = get_wp(wp_top_r, wp_top_phi, wp_top_z)
+                    bot_crit_pos = get_wp(wp_bot_r, wp_bot_phi, wp_bot_z)
+                    effective_geometry = (
+                        calculate_geometry_from_cylindrical_waypoints(top_crit_pos, bot_crit_pos)
+                        if top_crit_pos is not None and bot_crit_pos is not None
+                        else {}
+                    )
+
                     grid_data = generate_measurement_grid(
                         cyl_radius_mm=g_rad.value,
                         cyl_height_mm=g_ht.value,
@@ -318,8 +326,8 @@ def build_grid_gen_ui(
                         baffle_bot_l_pos=get_wp(wp_baffle_bl_r, wp_baffle_bl_phi, wp_baffle_bl_z),
                         baffle_top_l_pos=get_wp(wp_baffle_tl_r, wp_baffle_tl_phi, wp_baffle_tl_z),
                         baffle_top_r_pos=get_wp(wp_baffle_tr_r, wp_baffle_tr_phi, wp_baffle_tr_z),
-                        top_crit_pos=get_wp(wp_top_r, wp_top_phi, wp_top_z),
-                        bot_crit_pos=get_wp(wp_bot_r, wp_bot_phi, wp_bot_z)
+                        top_crit_pos=top_crit_pos,
+                        bot_crit_pos=bot_crit_pos
                     )
                     
                     ct_val_str = str(g_cap_tol.value).strip().lower()
@@ -347,13 +355,13 @@ def build_grid_gen_ui(
                     scrub_slider.set_value(0)
                     if on_grid_saved_callback:
                         grid_vars = {
-                            'cyl_radius_mm': str(g_rad.value),
-                            'cyl_height_mm': str(g_ht.value),
+                            'cyl_radius_mm': str(effective_geometry.get('cyl_radius_mm', g_rad.value)),
+                            'cyl_height_mm': str(effective_geometry.get('cyl_height_mm', g_ht.value)),
                             'num_points': str(g_pts.value),
                             'azimuth_density_ratio': str(g_az_dens.value),
                             'phi_min_deg': str(g_phi_min.value),
                             'phi_max_deg': str(g_phi_max.value),
-                            'bottom_cutoff_mm': str(g_bot_cut.value),
+                            'bottom_cutoff_mm': str(effective_geometry.get('bottom_cutoff_mm', g_bot_cut.value)),
                             'delta_theta_deg': str(g_d_theta.value),
                             'wall_thickness_mm': str(g_wall_th.value),
                             'cap_fraction': str(g_cap_frac.value),
