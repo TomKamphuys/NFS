@@ -420,6 +420,7 @@ class EventHandler:
         Initialize the EventHandler.
         """
         self._received_message = ''
+        self._last_error: Optional[str] = None
         self._current_position = None
         self._machine_position = None
 
@@ -452,6 +453,20 @@ class EventHandler:
         :param value: The message string.
         """
         self._received_message = value
+
+    def get_last_error(self) -> Optional[str]:
+        """
+        Get the last error reported by the GRBL device, if any.
+
+        :return: The last error message, or None if no error has occurred.
+        """
+        return self._last_error
+
+    def clear_last_error(self) -> None:
+        """
+        Clear the last recorded error.
+        """
+        self._last_error = None
 
     def get_current_position(self) -> CylindricalPosition:
         """
@@ -534,8 +549,14 @@ class EventHandler:
             args = []
             for d in data:
                 args.append(str(d))
-            logger.error("ERROR: event={} data={}".format(event.ljust(30), ", ".join(args)))
-            raise Exception("ERROR: event={} data={}".format(event.ljust(30), ", ".join(args)))
+            message = ", ".join(args)
+            logger.error("GRBL error: {}", message)
+            # NOTE: This callback runs inside the grbl_streamer read thread.
+            # Raising here would kill that thread and silently break all
+            # further serial communication. Instead we record the error and
+            # unblock any code waiting for an acknowledgment.
+            self._last_error = message
+            self._received_message = 'error'
 
         if event == 'on_alarm':
             self._received_message = 'ok'
@@ -736,9 +757,20 @@ class GrblStreamerClientConnection:
 
     def killalarm(self) -> None:
         """
-        Send a killalarm command to the streamer.
+        Clear the alarm state on the GRBL device.
+
+        On grblHAL a bare ``$X`` unlock is rejected in several alarm states
+        (e.g. it responds with ``error:79``). Performing a soft reset
+        (``Ctrl-X``) first brings the controller into a clean, known state
+        from which ``$X`` reliably clears the alarm.
         """
-        logger.trace(f'GrblStreamerClientConnection: Sending message: killalarm')
+        logger.trace('GrblStreamerClientConnection: clearing alarm (soft reset + $X)')
+        # Any previously recorded error is stale once we start recovering.
+        self._event_handler.clear_last_error()
+        self._grbl_streamer.softreset()
+        # Give the controller time to reboot and report its state before
+        # sending the unlock command.
+        time.sleep(2.0)
         self._grbl_streamer.killalarm()
 
     def softreset(self) -> None:
@@ -802,6 +834,14 @@ class GrblStreamerClientConnection:
         :return: A GrblMachineState enum value.
         """
         return self._event_handler.get_state()
+
+    def get_last_error(self) -> Optional[str]:
+        """
+        Get the last error reported by the GRBL device, if any.
+
+        :return: The last error message, or None if no error has occurred.
+        """
+        return self._event_handler.get_last_error()
 
     def get_state_raw(self) -> str:
         """
@@ -1071,6 +1111,13 @@ class ESP32Duino(IGrblController):
                 if getattr(self, "_debug_serial", False):
                     logger.info("GRBL serial ACK received")
                 return
+            if "error" in result:
+                # The device reported an error instead of acknowledging the
+                # command. Surface it on the calling thread instead of
+                # blocking/timing out silently.
+                detail = self._connection.get_last_error() or result
+                logger.error("GRBL serial reported error while waiting for ACK: {}", detail)
+                raise RuntimeError(f"GRBL reported an error: {detail}")
         if getattr(self, "_debug_serial", False):
             logger.error("GRBL serial ACK timeout after {}s", timeout_s)
         raise TimeoutError(
