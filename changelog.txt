@@ -1,3 +1,805 @@
+--------
+31/08/26
+--------
+Fixed: Grid Generator project json so waypoints take priority over manual
+Advanced grid settings.
+
+Added regression coverage for waypoint-derived geometry and bottom-cutoff
+priority.
+
+Files touched:
+src/grid_generator/grid_gen_gui.py
+src/harmonic_drive_qt/grid_pane.py
+tests/test_qt_grid_pane.py
+
+--------
+24/08/26
+--------
+Moved the main splitter's hover rendering out of the application stylesheet
+and into a dedicated handle that repaints only itself. Crossing the pane
+boundary no longer redraws unchanged native Live Capture plots and therefore
+cannot trigger the observed audio interruptions through expensive plot paints.
+
+--------
+12/08/26
+--------
+Fixed the harmless QFont::setPointSize(-1) warning shown when scanner startup
+failed and the Scanner settings dialog opened automatically. Settings dialog
+font sizes now use point units throughout, preventing pixel-sized fonts from
+being reused as invalid point sizes without suppressing Qt warnings.
+
+Added regression coverage to ensure every Settings dialog widget has a valid
+positive point size.
+
+Files touched:
+src/harmonic_drive_qt/settings_dialog.py
+tests/test_qt_settings_dialog.py
+
+--------
+12/08/26
+--------
+Improved real-time audio playback and capture robustness without changing
+signal generation, channel routing, measurement capture, or alignment.
+
+Previously, the PortAudio callback calculated the live input/output meters,
+including RMS, peak, clipping, and A/C weighting. This required NumPy/SciPy
+processing, temporary allocations, and a shared meter lock inside the
+real-time audio path, where unpredictable delays could contribute to
+intermittent playback or capture glitches.
+
+Meter samples are now copied into a preallocated ring buffer and processed by
+a separate meter worker. The ring provides scheduling headroom rather than an
+intentional delay: the worker normally processes samples as they arrive and,
+if it falls behind, skips older display samples and processes only the newest
+100 ms. The lossless measurement capture buffers are separate and unchanged.
+
+PortAudio underflow/overflow status is now counted in the callback and logged
+later by the meter worker, replacing logging from inside the real-time
+callback.
+Audio Setup gui now accepts blocksize 0, displayed as "Automatic", so
+PortAudio can select the host API's preferred callback block size when chosen.
+The existing 2048-frame default has not changed.
+
+Added automated test coverage for asynchronous channel routing,
+weighted meters, deferred callback-status reporting, and saving the Automatic
+block-size option.
+
+Files touched:
+src/nfs/audio.py
+src/harmonic_drive_qt/audio_setup_pane.py
+tests/test_audio_engine.py
+tests/test_qt_audio_setup_pane.py
+
+--------
+14/07/26
+--------
+Fixed: Audio Setup voltage summary so its interface and speaker output
+voltages scale with the output dBFS level.
+
+Files touched:
+src/harmonic_drive_qt/audio_setup_pane.py
+tests/test_qt_audio_setup_pane.py
+
+--------
+11/07/26
+--------
+PySide/NiceGUI split cleanup:
+
+Moved the project/session helpers and Qt-needed config schema/helpers into
+harmonic_drive_qt.
+
+Moved the pyvista and maplot fallback grid coordinate viewer engines into
+grid_generator.
+
+Wired in the Settings restore button to restore from config_default.ini.
+
+Files touched:
+src/harmonic_drive_qt/config_support.py
+src/harmonic_drive_qt/project.py
+src/harmonic_drive_qt/audio_setup_pane.py
+src/harmonic_drive_qt/backend.py
+src/harmonic_drive_qt/control_pane.py
+src/harmonic_drive_qt/grid_pane.py
+src/harmonic_drive_qt/live_capture.py
+src/harmonic_drive_qt/main.py
+src/harmonic_drive_qt/main_window.py
+src/harmonic_drive_qt/settings_dialog.py
+src/grid_generator/coord_viewer_core_matplot.py
+src/grid_generator/coord_viewer_core_pyvista.py
+tests/test_coord_viewer_pyvista.py
+tests/test_qt_audio_setup_pane.py
+tests/test_qt_grid_pane.py
+tests/test_qt_main_window_project.py
+tests/test_qt_settings_dialog.py
+
+--------
+09/07/26
+--------
+Tom's PySide updates:
+
+Settings and grid controls now show clearer units for numeric fields,
+including feed rate, calibration height, motion-manager spacing/radius/height
+values, waypoint radius/phi/height fields, and cap tolerance.
+
+The ReHome button now follows the Home button colour state, so both controls
+show the same homed/unhomed status.
+
+Fixed the sweep duration field in Audio Setup so the seconds unit is only
+shown once.
+
+Files touched:
+src/harmonic_drive/config_editor.py
+src/harmonic_drive_qt/audio_setup_pane.py
+src/harmonic_drive_qt/control_pane.py
+src/harmonic_drive_qt/grid_pane.py
+tests/test_qt_settings_dialog.py
+
+--------
+03/07/26
+--------
+Fixed PySide decimal entry so numeric spin boxes accept both decimal points
+and commas while converting commas to decimal points.
+
+Audio Setup output level now has arrow control with 1 dB steps.
+
+Typed numeric edits in Audio Setup are committed when the user
+finishes editing rather than on every intermediate value, avoiding backend
+reloads while a number is still being entered.
+
+Output level changes are saved without a backend reload and are pushed to
+any running continuous sine tone immediately, so level adjustments no longer
+need a manual stop/restart.
+
+Files touched:
+src/harmonic_drive/config_editor.py
+src/harmonic_drive_qt/audio_setup_pane.py
+src/harmonic_drive_qt/backend.py
+src/harmonic_drive_qt/control_pane.py
+src/harmonic_drive_qt/grid_pane.py
+src/harmonic_drive_qt/live_capture.py
+src/harmonic_drive_qt/qt_compat.py
+src/harmonic_drive_qt/settings_dialog.py
+src/nfs/audio.py
+src/nfs/nfs.py
+tests/test_audio_engine.py
+tests/test_config_editor.py
+tests/test_qt_audio_setup_pane.py
+tests/test_qt_backend.py
+tests/test_qt_grid_pane.py
+
+--------
+02/07/26
+--------
+Fixed PySide GRBL streamer hot-swapping when switching Arduino -> Mock ->
+Arduino. The GRBL streamer library could leave COM5 open if its internal
+connected flag was false even though the serial interface had been opened,
+causing the next Arduino reconnect to fail with "Access is denied" and leaving
+the scanner backend unloaded. The NFS wrapper now force-closes the underlying
+streamer interface during shutdown if the normal disconnect path leaves it
+open.
+
+Arduino startup unlock now uses the streamer's alarm-clear path so `$X` is not
+blocked by the normal send guard when GRBLHAL is in Alarm, and reconnect
+diagnostics surface the saved scanner load warning instead of the generic
+"Scanner is not loaded" message.
+
+Files touched:
+src/nfs/grbl_controller.py
+src/harmonic_drive_qt/backend.py
+tests/test_grbl_controller.py
+tests/test_qt_backend.py
+
+--------
+01/07/26
+--------
+PySide Audio Setup now places calibration workflows under one expandable
+Calibration section. Method One provides output voltage calibration and input
+voltage calibration from loopback dBFS plus microphone sensitivity, with
+optional amplifier gain display for estimated speaker-terminal voltage. Method
+Two keeps the existing SPL meter input calibration workflow. Both methods have
+their own help badge tooltips.
+
+Calibration saves now system-level/sticky for the current audio hardware,
+and measurement project JSON snapshots copy the current system calibration
+only when a real measurement is taken.
+
+--------
+30/06/26
+--------
+PySide audio setup now resolves audio devices from saved device name plus host
+API, making device ID numbers an implementation detail only. The Settings
+dialog no longer exposes audio device fields owned by Audio Setup, avoiding
+accidental audio setup edits.
+
+Fixed: Audio channel selectors now use zero-based channel indices for all
+PortAudio host APIs, matching the indices used by the capture/playback engine.
+Changed: Audio Setup now prefers 48 kHz when changing API/device.
+
+The Protection HPF frequency field now behaves like the other disabled sweep
+fields: when HPF is off it displays a grey default of 500 Hz, while config still
+saves HPF as None until the user enables it.
+
+SPL calibration now defaults the meter weighting selector to C-weighting and
+saves the selected weighting in the project data alongside the SPL calibration
+values, so project reloads restore the user's weighting choice.
+
+The PyVista coordinate viewer now keeps the robot/STL datum fixed at viewer
+Z=0. Generated grid points with negative Z coordinates render below the stool.
+
+Files touched:
+src/grid/coord_viewer_core_pyvista.py
+src/harmonic_drive/project.py
+src/harmonic_drive_qt/audio_setup_pane.py
+src/harmonic_drive_qt/settings_dialog.py
+src/nfs/audio.py
+src/list_sound_devices.py
+tests/test_audio_engine.py
+tests/test_coord_viewer_pyvista.py
+tests/test_project.py
+tests/test_qt_audio_setup_pane.py
+tests/test_qt_settings_dialog.py
+
+--------
+27/06/26
+--------
+Audio IR output is now scaled to the sine sweep RMS reference, so captured
+impulse responses represent the RMS value of the playback sweep rather than
+the peak-normalized sweep amplitude.
+
+Qt Test Sweep now shares the audio-only backend path used by sine playback
+when the scanner/NFS backend is unavailable, allowing test sweeps to run even
+when the scanner is not connected.
+
+Files touched:
+src/harmonic_drive_qt/backend.py
+src/nfs/audio.py
+tests/test_audio_engine.py
+tests/test_qt_backend.py
+
+--------
+27/06/26
+--------
+Added SPL calibration meter weighting options for A-weighted, C-weighted and
+unweighted readings. The unweighted option supports calibration from an
+electrical input reference source, while A/C can be matched to the physical SPL
+meter weighting. The SPL help tooltip now includes the supplied weighting curve
+image and clearer calibration guidance.
+
+Files touched:
+src/harmonic_drive_qt/audio_setup_pane.py
+src/nfs/audio.py
+images/frequency_weighting.png
+tests/test_qt_audio_setup_pane.py
+
+--------
+24/06/26
+--------
+Added a default-on scanner setting to verify the GRBL controller when opening
+the serial port. It can be disabled temporarily to distinguish a reconnect
+probe/ACK failure from a scanner construction or configuration failure.
+
+Files touched:
+src/nfs/grbl_controller.py
+src/harmonic_drive/config_editor.py
+config.ini
+config_default.ini
+tests/test_grbl_controller.py
+
+--------
+23/06/26
+--------
+Small UI fixes and usability updates:
+
+Fixed the Home button sometimes remaining orange after successful homing due
+to a transient/stale GRBL alarm state.
+Disabled HPF inverse-correction controls now use a muted switch.
+Added and normalised units for motion and MockDRO settings.
+MockSimulatedDRO speed and update-rate fields now appear only when that GRBL
+backend is selected.
+Replaced advanced-settings switches with standard disclosure
+arrows and gave Grid Generator the same expandable heading style as Audio
+Setup.
+
+Files touched:
+src/harmonic_drive/config_editor.py
+src/harmonic_drive/control.py
+src/harmonic_drive_qt/control_pane.py
+src/harmonic_drive_qt/grid_pane.py
+src/harmonic_drive_qt/settings_dialog.py
+src/harmonic_drive_qt/styles.py
+src/harmonic_drive_qt/icons/disclosure-closed.svg
+src/harmonic_drive_qt/icons/disclosure-open.svg
+src/harmonic_drive_qt/icons/toggle-disabled-on.svg
+tests/test_qt_audio_setup_pane.py
+tests/test_qt_grid_pane.py
+tests/test_qt_settings_dialog.py
+
+--------
+17/06/26
+--------
+Bug Fix: Changing the GRBL streamer backend in Settings now takes effect on
+config reload. Switching Mock/Arduino no longer requires restarting the app.
+
+Files touched:
+src/nfs/grbl_controller.py
+tests/test_grbl_controller.py
+
+--------
+16/06/26
+--------
+Bug Fix: Sweep settings not saved correctly to _project.json. A shared file was
+incorrectly reverted during previous git commit. File re-patched and commited.
+
+Files touched:
+src/harmonic_drive/project.py
+src/harmonic_drive/audio_setup.py
+src/harmonic_drive_qt/main.py
+src/harmonic_drive_qt/main_window.py
+tests/test_project.py
+tests/test_qt_main_window_project.py
+
+--------
+15/06/26
+--------
+
+Bug fix: selecting a project/session folder no longer creates a default
+<ProjectName>_project.json immediately. The project save file is only written
+when the user saves, generates grid data, takes measurements, or explicitly
+saves SPL calibration.
+
+Tightened project persistence rules. Audio interface settings, channels, sample
+rate and output level are global app settings that persist on reload. Sweep
+setup is project-tied and saved to project JSON. Sine tone settings always
+return to their startup defaults of 1 kHz indefinite duration.
+
+Bug fix: Grid Generator waypoints now start blank for new projects and only
+reload values that were actually saved in project JSON. The grid preview no
+longer auto-loads a default-named grid CSV unless the saved project references
+that grid file.
+
+Bug fix: Audio Setup FS selector now shows the full text, including the
+"(recommended)" suffix.
+
+Files touched:
+src/harmonic_drive_qt/audio_setup_pane.py
+src/harmonic_drive_qt/grid_pane.py
+src/harmonic_drive_qt/main.py
+src/harmonic_drive_qt/main_window.py
+tests/test_project.py
+tests/test_qt_audio_setup_pane.py
+tests/test_qt_grid_pane.py
+tests/test_qt_main_window_project.py
+
+--------
+14/06/26
+--------
+
+Styled scrollbars with visible blue handles and widened the main
+splitter divider so the center pane boundary is easier to grab.
+
+Added SPL Calibration help tooltip to Audio Setup pane.
+
+Moved the FR smoothing selector into the Frequency Response plot header.
+
+Fixed plot lines drawing over the axis boundaries.
+
+Changed the Impulse Response plot to show the linear waveform and use mirrored
+dBFS labels.
+
+Added a debug serial comms toggle for GRBL startup diagnostics. When enabled,
+startup raises logging verbosity and records GRBL serial open/probe/ACK events.
+
+--------
+14/06/26
+--------
+Added 3D viewer resilience for machines where PyVista/VTK cannot start or render.
+Grid Generator and Live Capture 3D views now fall back to the Matplotlib 3D
+viewer and show a popup explaining that PyVista visualisation failed.
+
+Moved the native Qt Audio Setup output level and FS controls onto the same top
+line as the Audio API selector.
+
+
+Files touched:
+src/harmonic_drive_qt/grid_pane.py
+src/harmonic_drive_qt/live_capture.py
+src/grid/coord_viewer_core.py
+src/harmonic_drive_qt/audio_setup_pane.py
+src/harmonic_drive_qt/styles.py
+src/harmonic_drive_qt/main_window.py
+src/harmonic_drive_qt/widgets.py
+src/harmonic_drive_qt/settings_dialog.py
+src/harmonic_drive/config_editor.py
+src/nfs/grbl_controller.py
+src/nfs/logging_config.py
+config_default.ini
+
+--------
+13/06/26
+--------
+Expanded the native Qt Settings pane motion-manager tab. The tab now exposes
+ the motion-manager type and dynamic type-specific fields such as safe_radius.
+
+Fixed native Qt Audio Setup combo styling. The Audio API and FS dropdowns now
+render as normal framed fields sized to their contents, while the tinted
+device/channel controls remain visually distinct. Dropdown popup font warnings
+were resolved by using point-sized fonts for the shared Qt stylesheet.
+
+Files touched:
+src/harmonic_drive_qt/settings_dialog.py
+src/harmonic_drive_qt/audio_setup_pane.py
+src/harmonic_drive_qt/styles.py
+tests/test_qt_settings_dialog.py
+tests/test_qt_audio_setup_pane.py
+
+--------
+12/06/26
+--------
+Added a native Qt UI under src/harmonic_drive_qt built with PySide6. The new UI
+reuses the existing scanner, audio, project, grid generation, and measurement
+backend code while providing native Machine Control, Audio Setup, Live Capture,
+Grid Generator, and Settings panes.
+
+Added a PyVista 3D coordinate viewer for the native UI. Grid preview and
+live measurement progress can use the PyVista viewer for interactive 3D
+visualisation.
+
+Files touched:
+src/harmonic_drive_qt/
+src/grid/coord_viewer_core_pyvista.py
+pyproject.toml
+
+--------
+07/06/26
+--------
+Prepared a lower-pressure Tom test build. Measurement progress remains on the
+backend-polled path, the in-app browser System Log viewer is disabled by
+default, and scanner/DRO UI updates are coalesced onto the NiceGUI UI loop so
+rapid hardware callbacks redraw the latest state at a controlled rate instead
+of queuing one UI update per callback.
+
+Kept lightweight reconnect diagnostics enabled for page/reload investigation,
+with deeper scanner/progress UI pressure counters available behind the
+[debug] deep_ui_diagnostics toggle. The plain Mock GRBL controller is quiet
+again; active DRO/status callback simulation remains isolated to
+MockSimulatedDRO.
+
+Files touched:
+src/harmonic_drive/control.py
+src/harmonic_drive/reconnect_debug.py
+src/harmonic_drive/config_editor.py
+src/nfs/grbl_controller.py
+config.ini
+
+--------
+06/06/26
+--------
+Made long-running measurement/audio notifications robust against browser
+refreshes and reconnects. Completion toasts now use the client captured when
+the action starts; if that client has gone away, the toast is skipped and the
+backend work continues without raising a deleted parent-slot error.
+
+Added small guards around post-await UI updates for measurement buttons, sine
+icons, and safe-move button re-enabling so stale UI elements do not interrupt
+measurement, audio, or motion completion paths.
+
+Project change callbacks that belong to deleted browser clients are now removed
+from the global callback list after their first stale-client failure, preventing
+old rebuilt pages from repeatedly producing deleted-client warnings.
+
+Audio meters now expire stale active readings if audio callbacks stop arriving,
+so the SPL and Live Capture meters do not remain active after a sine stream is
+stopped unexpectedly or the browser reconnects during tone generation.
+
+Added temporary reconnect diagnostics for random splash/page rebuilds during
+measurement runs. The logs now report app run ID, NiceGUI client connect and
+disconnect events, page creation, browser lifecycle events, UI event-loop lag,
+audio worker start/finish, scanner callback activity, and measurement progress
+activity so browser reloads can be separated from server restarts and blocked UI
+loops.
+
+Added a separate MockSimulatedDRO GRBL controller option for local debugging.
+Unlike the existing instant Mock controller, it simulates movement over time and
+emits regular DRO/status callbacks from a background thread so real-hardware UI
+update pressure can be reproduced without a physical controller.
+
+Added a temporary [debug] direct_progress_ui config toggle to route measurement
+progress updates through the old direct worker-callback UI path. The default
+remains the safer backend-polling progress path.
+
+Removed the temporary NiceGUI timer identity hook from normal app startup.
+
+Added a measurement progress counter in the Machine Control pane. The bar
+shows percent complete, measured points versus total points, and a backend
+estimated time remaining that starts after the first two completed points and
+updates on each point after that. Progress state is stored by the measurement
+backend so the display can recover after a browser refresh.
+
+Files touched:
+src/harmonic_drive/control.py
+src/harmonic_drive/gui.py
+src/harmonic_drive/reconnect_debug.py
+src/harmonic_drive/config_editor.py
+src/harmonic_drive/live_capture.py
+src/harmonic_drive/project.py
+src/nfs/nfs.py
+src/nfs/audio.py
+src/nfs/grbl_controller.py
+tests/test_grbl_controller.py
+tests/test_near_field_scanner.py
+config.ini
+
+--------
+05/06/26
+--------
+Fixed GRBL timeout handling. The short timeout is now only used for the initial
+controller-present probe, rather than being applied to all transmitted GRBL
+requests. Normal commands now wait indefinitely for their ack again, preserving
+move and homing synchronization behavior.
+
+Files touched:
+src/nfs/grbl_controller.py
+tests/test_grbl_controller.py
+
+--------
+04/06/26
+--------
+Added temporary NiceGUI timer identity logging so deleted-parent-slot errors
+report the timer callback, interval, and creation stack.
+
+Fixed the Generate Grid timer failure. Generate Grid can activate the
+project folder, which rebuilds the Audio Setup panel and recreates the SPL
+calibration meter timer. That timer now uses a module-owned background timer,
+avoiding the deleted parent slot error.
+
+Simplified the startup splash to remove the dot animation timer. The app loader
+now uses an optional status callback instead of requiring a splash label object.
+
+Files touched:
+src/harmonic_drive/gui.py
+src/harmonic_drive/control.py
+src/harmonic_drive/audio_setup.py
+src/harmonic_drive/timer_debug.py
+
+--------
+02/06/26
+--------
+Added scanner calibration tool height. The WCS zero command can now account for
+a fixed calibration tool height so the true Z zero is below the current machine
+position by the configured calibration tool height.
+
+Updated tests.
+
+Files touched:
+src/nfs/scanner.py
+src/harmonic_drive/config_editor.py
+tests/test_scanner.py
+tests/test_config_editor.py
+tests/test_control.py
+config.ini
+
+
+--------
+02/06/26
+--------
+Swapped Phi + and - symbols for CCW and CW labels.
+
+--------
+02/06/26
+--------
+Updated  Machine Control and Audio Setup.
+
+Machine Control:
+
+Now uses a single DRO frame above the motion controls.
+An optional MCS row can be shown alongside the normal WCS row, with a toggle
+to enable / dissable in app settings.
+
+Updated the machine motion and command controls. Two motion-control layouts can
+be toggled in Settings: the default layout gives direct per-axis step-size
+access for Phi, Radius, and Height, while the alternative layout uses simpler
+direction buttons with a global step-size selection.
+
+Measurement-set controls now use one button for Start, Pause,
+and Resume, plus a separate Stop button. Pause waits at clean measurement point
+boundaries before the next position or sweep, while Stop cancels further points
+and returns through the existing safe scanner return sequence.
+
+The control pane layout is configurable from Settings without restarting the
+app. ReHome and hight offset controls are hidden by default. Shutdown Program
+now lives in the left menu under Settings.
+
+Scanner connection failures no longer prevent unrelated app features from
+loading. Missing or invalid COM ports now produce a clear warning
+but let the app run. A short GRBL response timeout avoids
+hanging on incorrect but valid COM ports.
+
+Audio Setup now has an explicit microphone SPL calibration workflow: it shows a
+held A-weighted mic reading, accepts a physical SPL meter reading, calculates and
+saves the SPL offset only when Calibrate is pressed, and also allows manually
+entering a known offset.
+
+Live Capture audio meters are labelled from -60 dB to
+0 dB, use RMS for the main bar, and show a slow-decay red peak marker. The
+sine generator play button switches to a stop icon while the tone is playing.
+
+Files touched:
+src/harmonic_drive/control.py
+src/harmonic_drive/gui.py
+src/harmonic_drive/config_editor.py
+src/harmonic_drive/audio_setup.py
+src/harmonic_drive/live_capture.py
+src/harmonic_drive/project.py
+src/nfs/audio.py
+src/nfs/grbl_controller.py
+src/nfs/nfs.py
+src/nfs/scanner.py
+tests/test_grbl_controller.py
+tests/test_near_field_scanner.py
+tests/test_project.py
+config.ini
+default_config.ini
+
+--------
+30/05/26
+--------
+Added optional Grid Generator visualisation waypoints for post-processing:
+Ref Origin plus the baffle bottom-left, top-left, and top-right corners. The
+three baffle corner waypoints support visualisation of a sloped baffle plane.
+The waypoint UI is now split into required measurement points and optional
+visualisation points, with additional user markers still supported.
+
+Generated grid CSV metadata now includes the reference-origin and baffle-corner
+positions alongside the existing top, bottom, tweeter, and user-position
+metadata. Added regression coverage for preserving dynamic user_position_*
+entries in planned CSV output.
+
+Files touched:
+HALS_Projects/HALS_Test_Session/HALS_Test_Session_grid.csv
+HALS_Projects/HALS_Test_Session/HALS_Test_Session_project.json
+src/grid_generator/config_grid.py
+src/grid_generator/grid_gen.py
+src/grid_generator/grid_gen_gui.py
+tests/test_grid_gen_metadata.py
+
+--------
+30/05/26
+--------
+Aligned the previously disparate names for extra user markers between the
+project JSON and generated grid CSV. Project JSON now stores these entries as
+user_positions to match the CSV user_position_* metadata naming. No backward
+compatibility is provided for the old additional_positions key.
+
+To make an older project JSON compatible, manually rename
+"additional_positions" to "user_positions" in a text editor.
+
+Files touched:
+src/grid_generator/grid_gen_gui.py
+tests/test_project.py
+
+--------
+30/05/26
+--------
+Bug fix: the Grid Generator 3D viewer now reloads an existing saved grid file
+view after the active Session Folder has been resolved.
+
+Files touched:
+src/grid_generator/grid_gen_gui.py
+
+--------
+27/05/26
+--------
+Bug fix: removed the ambiguous no-session-selected state. On startup the Session
+Folder field now shows "No session folder selected" and the default project
+directory is only used as the file picker starting location. Save, grid
+generation, single measurements, and full measurements now require the user to
+choose or create a Session Folder first via a Browse/Cancel prompt. Test Sweep
+remains in-memory and does not require a Session Folder.
+
+Added tests for no-session/session-selected folder resolution and single
+measurement output routing to the active Session Folder.
+
+Files touched:
+src/harmonic_drive/control.py
+src/harmonic_drive/gui.py
+src/harmonic_drive/project.py
+src/grid_generator/grid_gen_gui.py
+tests/test_project.py
+
+--------
+26/05/26
+--------
+Added controls in the config editor for GRBL streamer type,
+baudrate, and COM port. COM ports are now listed from detected serial devices,
+while preserving the configured port if it is not currently connected.
+
+Added config editor tests for GRBL connection saving and serial port option
+generation.
+
+Files touched:
+src/harmonic_drive/config_editor.py
+tests/test_config_editor.py
+
+--------
+24/05/26
+--------
+Moved output level control from 'Sine Tone' section to the main audio settings
+setion to make it clear this is a global control.
+
+Files touched:
+src/harmonic_drive/audio_setup.py
+
+
+--------
+24/05/26
+--------
+Bug fix: SPL calibration now stores the calculated offset from the measured mic
+input RMS to the entered SPL value, instead of only saving the entered value.
+
+Files touched:
+src/harmonic_drive/audio_setup.py
+src/harmonic_drive/project.py
+tests/test_project.py
+
+--------
+24/05/26
+--------
+Added session-folder workflow to the HarmonicDrive UI. The top bar now lets the
+user choose a Session Folder with the native folder picker, set a Save Name, and
+save session state to <SaveName>_project.json. If no folder has been chosen, the
+UI defaults to <default_project_dir>\HALS_Project, but only creates that folder
+when the user saves, generates a grid, or starts a session.
+
+Session files now store sweep setup data, SPL calibration if present, plus the
+Grid Generator settings and waypoints needed to reopen or regenerate a grid.
+
+Generated grids are saved into the active Session Folder as <SaveName>_grid.csv.
+
+Full measurement output is routed to Session Folder\measurement_set,
+Single measurements are routed separately to Session Folder\single_measurements.
+The measurement position log stays at Session Folder\measurement_positions.csv,
+and Scanner.log is saved under Session Folder\logs.
+
+The Settings button now lives in the left sidebar and opens the
+config editor. The config editor includes a default project directory and a
+Restore Defaults action that restores default_config.ini
+
+Added a dedicated Audio Setup pane and moved user-facing audio/sweep controls out
+of the general config editor. The config editor remains the backend responsible
+for validating, writing, and reloading config.ini, while its visible Audio tab now
+only exposes the debug/test audio mode.
+
+Audio Setup now includes:
+- API-filtered device selectors
+- sine tone generator for level setting
+- SPL calibration field
+- Test Sweep button
+- All audio settings and sweep settings
+
+Audio device selection is now more robust when device IDs change.
+Config saves selected input/output device names as well as their device
+IDs, uses the saved names to detect changes, and prompts the
+user before updating the device IDs.
+
+Test Sweep uses the active audio/sweep settings, including protection HPF and
+sweep level, but returns the processed IR to Live Capture in memory rather than
+writing permanent WAV, IR, or debug files.
+
+Added real-time audio meters to Live Capture. Live Capture opens by default when
+Audio Setup is opened so levels and Test Sweep results can be viewed while
+adjusting the setup.
+
+Files touched:
+src/harmonic_drive/gui.py
+src/harmonic_drive/audio_setup.py
+src/harmonic_drive/project.py
+src/harmonic_drive/control.py
+src/harmonic_drive/config_editor.py
+src/harmonic_drive/live_capture.py
+src/grid_generator/grid_gen_gui.py
+src/nfs/audio.py
+src/nfs/nfs.py
+changelog.txt
 
 --------
 23/05/26

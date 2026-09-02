@@ -27,6 +27,10 @@ azimuth_density_ratio     = 1.0     # Front-to-back point density ratio. 1.0 = u
 azimuth_weight_center_deg = 0.0     # Angle (deg) for the center of the high-density zone.
 
 tweeter_pos               = None    # Optional tweeter coordinate for downstream processing. Cylindrical tuple: (r_mm, phi_deg, z_mm) e.g., (150.0, 180.0, 300.0)
+ref_origin_pos            = None    # Optional reference origin coordinate for response-data visualisation.
+baffle_bot_l_pos          = None    # Optional baffle bottom-left corner coordinate for response-data visualisation.
+baffle_top_l_pos          = None    # Optional baffle top-left corner coordinate for response-data visualisation.
+baffle_top_r_pos          = None    # Optional baffle top-right corner coordinate for response-data visualisation.
 additional_positions      = []      # Optional user-named marker positions. List of ("name", (r_mm, phi_deg, z_mm)); saved as user_position_name metadata.
 
 # Optional: Define grid using physical waypoints instead of radius/height directly.
@@ -38,7 +42,7 @@ bot_crit_pos              = None
 generate_reverse_spiral = True    # Make second (reverse) spiral
 z_rotation_deg          = 90   # Rotate second spiral around Z (deg)
 flip_poles              = False   # Flip Z sign of second spiral
-z_midpoint_zero         = True    # True = Z axis centred at 0 mm (equal negative and positive values). False = Z axis all positive like physical robot axis.
+z_midpoint_zero         = False   # True = Z axis centred at 0 mm (equal negative and positive values). False = Z axis all positive like physical robot axis.
 cap_fraction            = None    # Fraction of points on both end‐caps combined. None = Auto (end cap to side wall area based). 0-1 = Manually enter a fraction.
 
 """ Path Planner """

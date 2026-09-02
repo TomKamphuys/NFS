@@ -33,6 +33,7 @@ Key Features:
 import configparser
 import os
 import threading
+import time
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Optional, Dict, Any, List, Tuple
@@ -54,6 +55,417 @@ os.environ["SD_ENABLE_ASIO"] = "1"
 import sounddevice as sd  # noqa: E402
 
 
+_METER_EPS = 1e-12
+_METER_STALE_TIMEOUT_S = 1.5
+SINE_RMS_FROM_PEAK = 1.0 / np.sqrt(2.0)
+_METER_LOCK = threading.Lock()
+_METER_STATE = {
+    "active": False,
+    "updated_at": 0.0,
+    "outputs": [
+        {"rms_dbfs": -120.0, "peak_dbfs": -120.0, "clip": False},
+        {"rms_dbfs": -120.0, "peak_dbfs": -120.0, "clip": False},
+    ],
+    "inputs": [
+        {"rms_dbfs": -120.0, "peak_dbfs": -120.0, "clip": False},
+        {"rms_dbfs": -120.0, "peak_dbfs": -120.0, "clip": False},
+    ],
+    "a_weighted_inputs": [
+        {"rms_dbfs": -120.0, "peak_dbfs": -120.0, "clip": False},
+        {"rms_dbfs": -120.0, "peak_dbfs": -120.0, "clip": False},
+    ],
+    "c_weighted_inputs": [
+        {"rms_dbfs": -120.0, "peak_dbfs": -120.0, "clip": False},
+        {"rms_dbfs": -120.0, "peak_dbfs": -120.0, "clip": False},
+    ],
+}
+_A_WEIGHTING_FILTERS: Dict[int, Tuple[np.ndarray, np.ndarray]] = {}
+_C_WEIGHTING_FILTERS: Dict[int, Tuple[np.ndarray, np.ndarray]] = {}
+
+
+def _channel_meter(samples: np.ndarray) -> Dict[str, Any]:
+    if samples.size == 0:
+        return {"rms_dbfs": -120.0, "peak_dbfs": -120.0, "clip": False}
+    abs_samples = np.abs(samples.astype(np.float64, copy=False))
+    peak = float(np.max(abs_samples))
+    rms = float(np.sqrt(np.mean(np.square(abs_samples))))
+    return {
+        "rms_dbfs": max(-120.0, 20.0 * np.log10(rms + _METER_EPS)),
+        "peak_dbfs": max(-120.0, 20.0 * np.log10(peak + _METER_EPS)),
+        "clip": peak >= 0.999,
+    }
+
+
+def _two_channel_meters(frames: np.ndarray) -> List[Dict[str, Any]]:
+    if frames.ndim == 1:
+        frames = frames[:, None]
+    meters = []
+    for channel_index in range(2):
+        if channel_index < frames.shape[1]:
+            meters.append(_channel_meter(frames[:, channel_index]))
+        else:
+            meters.append(_channel_meter(np.array([], dtype=np.float32)))
+    return meters
+
+
+def _a_weighting_filter(sample_rate: int) -> Tuple[np.ndarray, np.ndarray]:
+    cached = _A_WEIGHTING_FILTERS.get(sample_rate)
+    if cached is not None:
+        return cached
+
+    f1 = 20.598997
+    f2 = 107.65265
+    f3 = 737.86223
+    f4 = 12194.217
+    a1000 = 1.9997
+    nums = [
+        (2 * np.pi * f4) ** 2 * (10 ** (a1000 / 20)),
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+    ]
+    dens = np.polymul(
+        [1.0, 4 * np.pi * f4, (2 * np.pi * f4) ** 2],
+        [1.0, 4 * np.pi * f1, (2 * np.pi * f1) ** 2],
+    )
+    dens = np.polymul(np.polymul(dens, [1.0, 2 * np.pi * f3]), [1.0, 2 * np.pi * f2])
+    filt = scipy.signal.bilinear(nums, dens, sample_rate)
+    _A_WEIGHTING_FILTERS[sample_rate] = filt
+    return filt
+
+
+def _c_weighting_filter(sample_rate: int) -> Tuple[np.ndarray, np.ndarray]:
+    cached = _C_WEIGHTING_FILTERS.get(sample_rate)
+    if cached is not None:
+        return cached
+
+    f1 = 20.598997
+    f4 = 12194.217
+    c1000 = 0.0619
+    nums = [
+        (2 * np.pi * f4) ** 2 * (10 ** (c1000 / 20)),
+        0.0,
+        0.0,
+    ]
+    dens = np.polymul(
+        [1.0, 4 * np.pi * f4, (2 * np.pi * f4) ** 2],
+        [1.0, 4 * np.pi * f1, (2 * np.pi * f1) ** 2],
+    )
+    filt = scipy.signal.bilinear(nums, dens, sample_rate)
+    _C_WEIGHTING_FILTERS[sample_rate] = filt
+    return filt
+
+
+def _two_channel_weighted_meters(
+    frames: np.ndarray,
+    sample_rate: int,
+    filter_factory,
+) -> List[Dict[str, Any]]:
+    b, a = filter_factory(int(sample_rate))
+    if frames.ndim == 1:
+        frames = frames[:, None]
+    weighted = np.zeros((frames.shape[0], 2), dtype=np.float32)
+    for channel_index in range(2):
+        if channel_index < frames.shape[1]:
+            weighted[:, channel_index] = scipy.signal.lfilter(
+                b,
+                a,
+                frames[:, channel_index],
+            ).astype(np.float32)
+    return _two_channel_meters(weighted)
+
+
+def _two_channel_a_weighted_meters(frames: np.ndarray, sample_rate: int) -> List[Dict[str, Any]]:
+    return _two_channel_weighted_meters(frames, sample_rate, _a_weighting_filter)
+
+
+def _two_channel_c_weighted_meters(frames: np.ndarray, sample_rate: int) -> List[Dict[str, Any]]:
+    return _two_channel_weighted_meters(frames, sample_rate, _c_weighting_filter)
+
+
+def _role_frames(
+    frames: np.ndarray,
+    first_index: int,
+    second_index: int,
+) -> np.ndarray:
+    if frames.ndim == 1:
+        frames = frames[:, None]
+    role_data = np.zeros((frames.shape[0], 2), dtype=np.float32)
+    if 0 <= first_index < frames.shape[1]:
+        role_data[:, 0] = frames[:, first_index]
+    if 0 <= second_index < frames.shape[1]:
+        role_data[:, 1] = frames[:, second_index]
+    return role_data
+
+
+class _AudioMeterWorker:
+    """Moves metering and callback-status reporting off the audio callback."""
+
+    _STATUS_NAMES = (
+        "input_underflow",
+        "input_overflow",
+        "output_underflow",
+        "output_overflow",
+    )
+
+    def __init__(self, sample_rate: int, blocksize: int = 0) -> None:
+        self.sample_rate = int(sample_rate)
+        # Capacity absorbs brief scheduling stalls; it is not a delay target.
+        # Processing is capped to the newest 100 ms so meters remain responsive.
+        self._capacity = max(8192, self.sample_rate, int(blocksize))
+        self._max_meter_frames = max(1, int(round(self.sample_rate * 0.1)))
+        self._outputs = np.zeros((self._capacity, 2), dtype=np.float32)
+        self._inputs = np.zeros((self._capacity, 2), dtype=np.float32)
+        self._write_index = 0
+        self._read_index = 0
+        self._dropped_meter_blocks = 0
+        self._skipped_meter_frames = 0
+        self._status_counts = {name: 0 for name in self._STATUS_NAMES}
+        self._status_counts["other"] = 0
+        self._last_reported_counts = dict(self._status_counts)
+        self._last_reported_drops = 0
+        self._last_reported_skipped_frames = 0
+        self._stop_event = threading.Event()
+        self._thread = threading.Thread(
+            target=self._run,
+            daemon=True,
+            name="audio-meter-worker",
+        )
+        a_b, a_a = _a_weighting_filter(self.sample_rate)
+        c_b, c_a = _c_weighting_filter(self.sample_rate)
+        self._a_filter = (a_b, a_a)
+        self._c_filter = (c_b, c_a)
+        self._a_zi = np.zeros((2, max(len(a_a), len(a_b)) - 1), dtype=np.float64)
+        self._c_zi = np.zeros((2, max(len(c_a), len(c_b)) - 1), dtype=np.float64)
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def submit(
+        self,
+        outputs: np.ndarray,
+        output_roles: Tuple[int, int],
+        inputs: np.ndarray,
+        input_roles: Tuple[int, int],
+        status,
+    ) -> None:
+        """Copy one callback block into the preallocated meter ring."""
+        self._record_status(status)
+        frames = min(len(outputs), len(inputs))
+        if frames <= 0:
+            return
+        available = self._capacity - (self._write_index - self._read_index)
+        if frames > available:
+            self._dropped_meter_blocks += 1
+            return
+
+        start = self._write_index % self._capacity
+        first_count = min(frames, self._capacity - start)
+        self._copy_roles(self._outputs, start, outputs, output_roles, first_count, 0)
+        self._copy_roles(self._inputs, start, inputs, input_roles, first_count, 0)
+        remaining = frames - first_count
+        if remaining:
+            self._copy_roles(self._outputs, 0, outputs, output_roles, remaining, first_count)
+            self._copy_roles(self._inputs, 0, inputs, input_roles, remaining, first_count)
+        # Publish only after both channel pairs have been copied completely.
+        self._write_index += frames
+
+    @staticmethod
+    def _copy_roles(
+        destination: np.ndarray,
+        destination_start: int,
+        source: np.ndarray,
+        roles: Tuple[int, int],
+        count: int,
+        source_start: int,
+    ) -> None:
+        destination_end = destination_start + count
+        source_end = source_start + count
+        for destination_channel, source_channel in enumerate(roles):
+            if 0 <= source_channel < source.shape[1]:
+                destination[destination_start:destination_end, destination_channel] = source[
+                    source_start:source_end,
+                    source_channel,
+                ]
+            else:
+                destination[destination_start:destination_end, destination_channel] = 0.0
+
+    def _record_status(self, status) -> None:
+        if not status:
+            return
+        matched = False
+        for name in self._STATUS_NAMES:
+            if bool(getattr(status, name, False)):
+                self._status_counts[name] += 1
+                matched = True
+        # Priming is a normal stream-start condition, not an xrun.
+        if bool(getattr(status, "priming_output", False)):
+            matched = True
+        if not matched:
+            self._status_counts["other"] += 1
+
+    def stop(self) -> None:
+        self._stop_event.set()
+        self._thread.join(timeout=2.0)
+        if self._thread.is_alive():
+            logger.warning("Audio meter worker did not stop within 2 seconds")
+        self._report_callback_status(force=True)
+
+    def _run(self) -> None:
+        next_status_report = time.monotonic() + 1.0
+        while not self._stop_event.is_set():
+            write_index = self._write_index
+            if self._read_index >= write_index:
+                self._stop_event.wait(0.02)
+            else:
+                self._process_available(write_index)
+            now = time.monotonic()
+            if now >= next_status_report:
+                self._report_callback_status()
+                next_status_report = now + 1.0
+
+    def _process_available(self, write_index: int) -> None:
+        available = write_index - self._read_index
+        if available > self._max_meter_frames:
+            skipped = available - self._max_meter_frames
+            self._read_index += skipped
+            self._skipped_meter_frames += skipped
+            # The weighting filters cannot preserve continuity across skipped
+            # display-only samples, so restart their state at the newest window.
+            self._a_zi.fill(0.0)
+            self._c_zi.fill(0.0)
+        frames = min(write_index - self._read_index, self._max_meter_frames)
+        start = self._read_index % self._capacity
+        first_count = min(frames, self._capacity - start)
+        if first_count == frames:
+            outputs = self._outputs[start:start + frames].copy()
+            inputs = self._inputs[start:start + frames].copy()
+        else:
+            remaining = frames - first_count
+            outputs = np.concatenate((self._outputs[start:], self._outputs[:remaining]))
+            inputs = np.concatenate((self._inputs[start:], self._inputs[:remaining]))
+        self._read_index += frames
+
+        a_weighted = self._apply_weighting(inputs, self._a_filter, self._a_zi)
+        c_weighted = self._apply_weighting(inputs, self._c_filter, self._c_zi)
+        update_audio_meter_state(
+            outputs,
+            inputs,
+            active=True,
+            a_weighted_inputs=a_weighted,
+            c_weighted_inputs=c_weighted,
+        )
+
+    @staticmethod
+    def _apply_weighting(
+        inputs: np.ndarray,
+        coefficients: Tuple[np.ndarray, np.ndarray],
+        zi: np.ndarray,
+    ) -> np.ndarray:
+        b, a = coefficients
+        weighted = np.zeros_like(inputs, dtype=np.float32)
+        for channel_index in range(min(2, inputs.shape[1])):
+            filtered, zi[channel_index] = scipy.signal.lfilter(
+                b,
+                a,
+                inputs[:, channel_index],
+                zi=zi[channel_index],
+            )
+            weighted[:, channel_index] = filtered.astype(np.float32)
+        return weighted
+
+    def _report_callback_status(self, force: bool = False) -> None:
+        changes = {
+            name: count - self._last_reported_counts[name]
+            for name, count in self._status_counts.items()
+            if count != self._last_reported_counts[name]
+        }
+        dropped = self._dropped_meter_blocks - self._last_reported_drops
+        skipped = self._skipped_meter_frames - self._last_reported_skipped_frames
+        if changes:
+            logger.warning("Audio callback status counts: {}", changes)
+            self._last_reported_counts = dict(self._status_counts)
+        if dropped:
+            logger.warning(
+                "Audio meter worker dropped {} display block(s); audio capture was unaffected",
+                dropped,
+            )
+            self._last_reported_drops = self._dropped_meter_blocks
+        elif force:
+            self._last_reported_drops = self._dropped_meter_blocks
+        if skipped:
+            logger.warning(
+                "Audio meter worker skipped {} stale display sample frame(s) to remain current",
+                skipped,
+            )
+            self._last_reported_skipped_frames = self._skipped_meter_frames
+        elif force:
+            self._last_reported_skipped_frames = self._skipped_meter_frames
+
+
+def update_audio_meter_state(
+    outputs: Optional[np.ndarray] = None,
+    inputs: Optional[np.ndarray] = None,
+    *,
+    active: bool = True,
+    sample_rate: Optional[int] = None,
+    a_weighted_inputs: Optional[np.ndarray] = None,
+    c_weighted_inputs: Optional[np.ndarray] = None,
+) -> None:
+    with _METER_LOCK:
+        _METER_STATE["active"] = active
+        _METER_STATE["updated_at"] = time.time()
+        if outputs is not None:
+            _METER_STATE["outputs"] = _two_channel_meters(outputs)
+        if inputs is not None:
+            _METER_STATE["inputs"] = _two_channel_meters(inputs)
+            if a_weighted_inputs is not None:
+                _METER_STATE["a_weighted_inputs"] = _two_channel_meters(a_weighted_inputs)
+            elif sample_rate is not None:
+                _METER_STATE["a_weighted_inputs"] = _two_channel_a_weighted_meters(
+                    inputs,
+                    int(sample_rate),
+                )
+            if c_weighted_inputs is not None:
+                _METER_STATE["c_weighted_inputs"] = _two_channel_meters(c_weighted_inputs)
+            elif sample_rate is not None:
+                _METER_STATE["c_weighted_inputs"] = _two_channel_c_weighted_meters(
+                    inputs,
+                    int(sample_rate),
+                )
+
+
+def reset_audio_meter_state(active: bool = False) -> None:
+    update_audio_meter_state(
+        np.zeros((1, 2), dtype=np.float32),
+        np.zeros((1, 2), dtype=np.float32),
+        active=active,
+    )
+
+
+def get_audio_meter_state() -> Dict[str, Any]:
+    with _METER_LOCK:
+        if (
+            _METER_STATE["active"]
+            and _METER_STATE["updated_at"]
+            and time.time() - float(_METER_STATE["updated_at"]) > _METER_STALE_TIMEOUT_S
+        ):
+            _METER_STATE["active"] = False
+            _METER_STATE["outputs"] = _two_channel_meters(np.zeros((1, 2), dtype=np.float32))
+            _METER_STATE["inputs"] = _two_channel_meters(np.zeros((1, 2), dtype=np.float32))
+            _METER_STATE["a_weighted_inputs"] = _two_channel_meters(np.zeros((1, 2), dtype=np.float32))
+            _METER_STATE["c_weighted_inputs"] = _two_channel_meters(np.zeros((1, 2), dtype=np.float32))
+        return {
+            "active": bool(_METER_STATE["active"]),
+            "updated_at": float(_METER_STATE["updated_at"]),
+            "outputs": [dict(item) for item in _METER_STATE["outputs"]],
+            "inputs": [dict(item) for item in _METER_STATE["inputs"]],
+            "a_weighted_inputs": [dict(item) for item in _METER_STATE["a_weighted_inputs"]],
+            "c_weighted_inputs": [dict(item) for item in _METER_STATE["c_weighted_inputs"]],
+        }
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 #  UTILITIES
 # ─────────────────────────────────────────────────────────────────────────────
@@ -72,7 +484,8 @@ def clean_device_name(name: str) -> str:
 def get_devices_and_channels() -> dict:
     """
     Queries audio devices and returns a dict indexed by Device ID.
-    ASIO uses 0-based channel indices; others use 1-based channel indices.
+    Channel indices are 0-based because they are used directly as sounddevice
+    stream buffer indices.
     """
     # Hard refresh PortAudio state to catch any recent device changes
     sd._terminate()
@@ -85,16 +498,14 @@ def get_devices_and_channels() -> dict:
 
     for api_idx, a in enumerate(apis):
         api_name = a['name']
-        is_asio = "ASIO" in api_name.upper()
-        base_idx = 0 if is_asio else 1
 
         for dev_idx, d in enumerate(devs):
             if d['hostapi'] == api_idx:
                 max_in = d['max_input_channels']
                 max_out = d['max_output_channels']
 
-                in_ch_indices = list(range(base_idx, max_in + base_idx)) if max_in > 0 else []
-                out_ch_indices = list(range(base_idx, max_out + base_idx)) if max_out > 0 else []
+                in_ch_indices = list(range(max_in)) if max_in > 0 else []
+                out_ch_indices = list(range(max_out)) if max_out > 0 else []
 
                 display_name = clean_device_name(d['name'])
 
@@ -106,6 +517,123 @@ def get_devices_and_channels() -> dict:
                 }
 
     return device_catalog
+
+
+def get_supported_sample_rates(input_device_id: Optional[int], output_device_id: Optional[int]) -> List[int]:
+    """
+    Return common sample rates supported by the selected input/output devices.
+
+    PortAudio does not expose a guaranteed exhaustive list for every host API, so
+    probe standard audio rates and keep those accepted by all selected devices.
+    """
+    common_rates = [44100, 48000, 88200, 96000, 176400, 192000]
+    supported = []
+
+    for rate in common_rates:
+        try:
+            if input_device_id is not None:
+                sd.check_input_settings(device=input_device_id, samplerate=rate)
+            if output_device_id is not None:
+                sd.check_output_settings(device=output_device_id, samplerate=rate)
+        except Exception:
+            continue
+        supported.append(rate)
+
+    return supported
+
+
+def find_device_id_by_name(
+    device_name: str,
+    hostapi: Optional[str] = None,
+    *,
+    require_input: bool = False,
+    require_output: bool = False,
+) -> Optional[int]:
+    """
+    Find the current PortAudio device ID for a previously saved device name.
+
+    Device IDs can change when hardware is connected or removed. Saving the
+    cleaned display name and host API lets us resolve the current ID at startup.
+    """
+    target_name = (device_name or "").strip().casefold()
+    target_api = (hostapi or "").strip().casefold()
+    if not target_name:
+        return None
+
+    catalog = get_devices_and_channels()
+    fallback_match = None
+    for dev_id, info in catalog.items():
+        if info.get("name", "").strip().casefold() != target_name:
+            continue
+        if require_input and not info.get("input_channels"):
+            continue
+        if require_output and not info.get("output_channels"):
+            continue
+        if target_api and info.get("hostapi", "").strip().casefold() == target_api:
+            return dev_id
+        if fallback_match is None:
+            fallback_match = dev_id
+
+    if target_api:
+        return None
+
+    return fallback_match
+
+
+def resolve_device_id_by_saved_identity(
+    device_name: str,
+    hostapi: str,
+    *,
+    role_label: str,
+    require_input: bool = False,
+    require_output: bool = False,
+) -> int:
+    """Resolve the current PortAudio ID for the saved user-facing selection."""
+    target_name = (device_name or "").strip()
+    target_api = (hostapi or "").strip()
+    if not target_name or not target_api:
+        raise ValueError(
+            f"Audio {role_label} device selection is incomplete. "
+            "Open Audio Setup and select the audio API and device again."
+        )
+
+    name_key = target_name.casefold()
+    api_key = target_api.casefold()
+    catalog = get_devices_and_channels()
+    name_matches = []
+    api_matches = []
+    for dev_id, info in catalog.items():
+        if require_input and not info.get("input_channels"):
+            continue
+        if require_output and not info.get("output_channels"):
+            continue
+        info_name = str(info.get("name", "")).strip()
+        info_api = str(info.get("hostapi", "")).strip()
+        if info_name.casefold() == name_key:
+            name_matches.append(info_api)
+        if info_api.casefold() == api_key:
+            api_matches.append(info_name)
+        if info_name.casefold() == name_key and info_api.casefold() == api_key:
+            return int(dev_id)
+
+    if name_matches:
+        available = ", ".join(sorted(set(name_matches)))
+        raise ValueError(
+            f"No {role_label} audio device matches saved selection "
+            f"'{target_name}' on '{target_api}'. The device name exists under: {available}. "
+            "Open Audio Setup and select the intended API/device pair."
+        )
+    if api_matches:
+        available = ", ".join(sorted(set(api_matches))[:5])
+        raise ValueError(
+            f"No {role_label} audio device matches saved selection "
+            f"'{target_name}' on '{target_api}'. The host API exists, but with different devices "
+            f"such as: {available}. Open Audio Setup and select the intended API/device pair."
+        )
+    raise ValueError(
+        f"No {role_label} audio device matches saved selection "
+        f"'{target_name}' on '{target_api}'. Open Audio Setup and select the audio API and device again."
+    )
 
 
 class DSPVerificationTool:
@@ -652,6 +1180,10 @@ class DeconvolutionEngine:
         I_filtered = I * H_min_phase
         H_complex = Y * I_filtered
         h_full = np.fft.irfft(H_complex, n=Nfft).astype(np.float32)
+        # Playback sweep level remains a peak dBFS safety limit. Calibration and
+        # downstream SPL interpretation are RMS-based, so returned IRs use a
+        # sine-RMS amplitude convention.
+        h_full *= SINE_RMS_FROM_PEAK
 
         # --- WINDOWING & SEPARATION of Linear and Distortion IRs ---
 
@@ -664,7 +1196,9 @@ class DeconvolutionEngine:
         h_full = DSPUtils.hann_fade(h_full, fade_ms, self.fs, side="out")
 
         # Slice the Linear IR from the full IR
-        split_idx = len(inv_data) - 5
+        # 50 is the number of samples before the exact middle split point between distortion and linear IR to avoid
+        # the peak of the linear IR being pushed exactly to the fist sample if there is zero acoustic delay.
+        split_idx = len(inv_data) - 50  # -50 samples split point.
         h_linear = h_full[split_idx: split_idx + len(inv_data)]
 
         return h_full, h_linear
@@ -676,7 +1210,7 @@ class DeconvolutionEngine:
 
 class IAudio(ABC):
     @abstractmethod
-    def measure_ir(self, position: CylindricalPosition, order_id: str = "NA") -> None:
+    def measure_ir(self, position: CylindricalPosition, order_id: str = "NA", save: bool = True):
         pass
 
     @abstractmethod
@@ -718,6 +1252,9 @@ class Audio(IAudio):
         self.hw = hw_config
         self.cap = capture_config
         self._sine_stream = None
+        self._sine_meter_worker: _AudioMeterWorker | None = None
+        self._sine_level_lock = threading.Lock()
+        self._sine_level_dbfs: float | None = None
 
         self.sweep_gen = sweep_gen
         self.marker_gen = marker_gen
@@ -732,7 +1269,6 @@ class Audio(IAudio):
         self.dist_dir = self.rec_dir / "Distortion"
         self.debug_dir = None
 
-        self._ensure_directories()
         self._log_config()
 
     def _ensure_directories(self):
@@ -746,8 +1282,8 @@ class Audio(IAudio):
             self.debug_dir = None
 
     def set_session_directory(self, session_path: Path):
-        """Updates internal recording and debug directories to a timestamped session path."""
-        self.rec_dir = session_path / "Recordings"
+        """Updates internal recording and debug directories to a measurement session path."""
+        self.rec_dir = Path(session_path)
         self.dist_dir = self.rec_dir / "Distortion"
         self._ensure_directories()
         logger.debug(f"Audio session directory updated to: {session_path}")
@@ -869,12 +1405,20 @@ class Audio(IAudio):
 
         idx_play, idx_rec = 0, 0
         done_evt = threading.Event()
+        meter_worker = _AudioMeterWorker(self.hw['fs'], self.hw['blocksize'])
+        meter_worker.start()
+        output_meter_roles = (0, 1) if use_asio_out else (
+            self.hw['ch_out_spkr'],
+            self.hw['ch_out_ref'],
+        )
+        input_meter_roles = (0, 1) if use_asio_in else (
+            self.hw['ch_in_loop'],
+            self.hw['ch_in_mic'],
+        )
 
         # Real-time Callback
         def callback(indata, outdata, frames, time_info, status):
             nonlocal idx_play, idx_rec
-            if status:
-                logger.warning(f"Audio Status: {status}")
 
             # Output
             n_out = min(frames, total_len - idx_play)
@@ -898,17 +1442,29 @@ class Audio(IAudio):
                     rec_loop[idx_rec:idx_rec + n_in] = indata[:n_in, self.hw['ch_in_loop']]
                     rec_mic[idx_rec:idx_rec + n_in] = indata[:n_in, self.hw['ch_in_mic']]
 
+            meter_worker.submit(
+                outdata,
+                output_meter_roles,
+                indata,
+                input_meter_roles,
+                status,
+            )
+
             idx_play += n_out
             idx_rec += n_in
             if idx_play >= total_len and idx_rec >= total_len:
                 done_evt.set()
 
         # 7. Start Stream
-        with sd.Stream(device=(self.hw['dev_in'], self.hw['dev_out']), samplerate=self.hw['fs'],
-                       blocksize=self.hw['blocksize'],
-                       dtype="float32", channels=(in_args[0], out_args[0]), dither_off=True,
-                       extra_settings=(in_args[1], out_args[1]), callback=callback):
-            done_evt.wait()
+        try:
+            with sd.Stream(device=(self.hw['dev_in'], self.hw['dev_out']), samplerate=self.hw['fs'],
+                           blocksize=self.hw['blocksize'],
+                           dtype="float32", channels=(in_args[0], out_args[0]), dither_off=True,
+                           extra_settings=(in_args[1], out_args[1]), callback=callback):
+                done_evt.wait()
+        finally:
+            meter_worker.stop()
+            reset_audio_meter_state(active=False)
 
         avg_mic, avg_loop, mic_slices, psr = self.alignment_engine.sync_and_average(
             rec_mic, rec_loop, marker_single, pre_samps_settle, slot_len, sweep_len
@@ -923,11 +1479,13 @@ class Audio(IAudio):
             "psr": psr
         }
 
-    def measure_ir(self, position: CylindricalPosition, order_id: str = "NA") -> None:
+    def measure_ir(self, position: CylindricalPosition, order_id: str = "NA", save: bool = True):
         """
         Public entry point. Coordinates capture, processing, and file saving.
         """
         logger.info(f"Measuring IR at {position} (ID: {order_id})")
+        if save:
+            self._ensure_directories()
 
         # 1. Capture Raw Data (Run Sweeps)
         result = self._run_sweep()
@@ -950,7 +1508,7 @@ class Audio(IAudio):
             dist_file_name = f"{base_name}_ir_dist.wav"
 
         # 3. Debug Saves (Optional - write intermediate files)
-        if self.cap['debug_saves']:
+        if save and self.cap['debug_saves']:
             logger.info("Saving debug artifacts...")
             self._save_wav_with_metadata(self.debug_dir / f"{base_name}_mic_conditioned.wav",
                                          result["rx_mic_conditioned"], f"{base_name}_mic_conditioned.wav")
@@ -976,25 +1534,36 @@ class Audio(IAudio):
         for w in warnings:
             logger.warning(f"VERIFICATION FAILURE: {w}")
 
-        # 6. Save Final Files
-        # Main (Linear)
-        linear_path = self.rec_dir / main_file_name
-        self._save_wav_with_metadata(linear_path, ir_linear, main_file_name, subtype='FLOAT')
-        logger.info(f"Saved Linear IR: {linear_path.name}")
+        if save:
+            # 6. Save Final Files
+            # Main (Linear)
+            linear_path = self.rec_dir / main_file_name
+            self._save_wav_with_metadata(linear_path, ir_linear, main_file_name, subtype='FLOAT')
+            logger.info(f"Saved Linear IR: {linear_path.name}")
 
-        # Secondary (Distortion)
-        dist_path = self.dist_dir / dist_file_name
-        self._save_wav_with_metadata(dist_path, ir_full, dist_file_name, subtype='FLOAT')
-        logger.info(f"Saved Distortion IR: {dist_path.name}")
+            # Secondary (Distortion)
+            dist_path = self.dist_dir / dist_file_name
+            self._save_wav_with_metadata(dist_path, ir_full, dist_file_name, subtype='FLOAT')
+            logger.info(f"Saved Distortion IR: {dist_path.name}")
 
         # Save metrics to debug if enabled
-        if self.cap['debug_saves']:
+        if save and self.cap['debug_saves']:
             try:
                 import json
                 with open(self.debug_dir / f"{base_name}_metrics.json", "w") as f:
                     json.dump(metrics, f, indent=4)
             except Exception as e:
                 logger.warning(f"Failed to save metrics JSON: {e}")
+
+        return {
+            "name": main_file_name,
+            "position": position,
+            "fs": self.hw["fs"],
+            "ir_linear": ir_linear,
+            "ir_full": ir_full,
+            "metrics": metrics,
+            "saved": save,
+        }
 
     def play_sine(self, frequency: float, level_dbfs: float, duration_s: Optional[float] = 1.0) -> None:
         """
@@ -1005,6 +1574,7 @@ class Audio(IAudio):
         :param duration_s: Duration in seconds. If None, plays until stop_sine() is called.
         """
         self.stop_sine()
+        self.update_sine_level(level_dbfs)
 
         logger.info(
             f"Playing sine: {frequency} Hz, {level_dbfs} dBFS, {'until stopped' if duration_s is None else f'for {duration_s} s'}")
@@ -1013,8 +1583,23 @@ class Audio(IAudio):
         target_amp = DSPUtils.db_to_lin(level_dbfs)
 
         out_dev = self.hw['dev_out']
+        in_dev = self.hw['dev_in']
         out_api = self._get_api_name(out_dev)
+        in_api = self._get_api_name(in_dev)
         use_asio_out = "ASIO" in out_api
+        use_asio_in = "ASIO" in in_api
+
+        in_ch_count = max(self.hw['ch_in_mic'], self.hw['ch_in_loop']) + 1
+        if use_asio_in:
+            in_args = (
+                2,
+                sd.AsioSettings(channel_selectors=[self.hw['ch_in_loop'], self.hw['ch_in_mic']]),
+            )
+        else:
+            in_args = (
+                in_ch_count,
+                sd.WasapiSettings(exclusive=self.hw['wasapi_exclusive']) if "WASAPI" in in_api else None,
+            )
 
         if duration_s is not None:
             n = int(round(duration_s * fs))
@@ -1031,39 +1616,98 @@ class Audio(IAudio):
                 out_args_extra = sd.AsioSettings(channel_selectors=[self.hw['ch_out_spkr'], self.hw['ch_out_ref']])
                 out_data = np.zeros((n, 2), dtype=np.float32)
                 out_data[:, 0] = sine
+                out_data[:, 1] = sine
                 out_ch_count = 2
             else:
                 out_ch_count = max(self.hw['ch_out_spkr'], self.hw['ch_out_ref']) + 1
                 out_args_extra = sd.WasapiSettings(exclusive=self.hw['wasapi_exclusive']) if "WASAPI" in out_api else None
                 out_data = np.zeros((n, out_ch_count), dtype=np.float32)
                 out_data[:, self.hw['ch_out_spkr']] = sine
+                out_data[:, self.hw['ch_out_ref']] = sine
 
-            sd.play(out_data, samplerate=fs, device=out_dev, extra_settings=out_args_extra)
-            sd.wait()
+            idx_play = 0
+            done_evt = threading.Event()
+            meter_worker = _AudioMeterWorker(fs, self.hw['blocksize'])
+            meter_worker.start()
+            output_meter_roles = (0, 1) if use_asio_out else (
+                self.hw['ch_out_spkr'],
+                self.hw['ch_out_ref'],
+            )
+            input_meter_roles = (0, 1) if use_asio_in else (
+                self.hw['ch_in_loop'],
+                self.hw['ch_in_mic'],
+            )
+
+            def callback(indata, outdata, frames, time_info, status):
+                nonlocal idx_play
+                n_out = min(frames, n - idx_play)
+                if n_out > 0:
+                    outdata[:n_out, :out_ch_count] = out_data[idx_play:idx_play + n_out, :out_ch_count]
+                if frames > n_out:
+                    outdata[n_out:] = 0
+                meter_worker.submit(
+                    outdata,
+                    output_meter_roles,
+                    indata,
+                    input_meter_roles,
+                    status,
+                )
+                idx_play += n_out
+                if idx_play >= n:
+                    done_evt.set()
+
+            try:
+                with sd.Stream(
+                    device=(in_dev, out_dev),
+                    samplerate=fs,
+                    blocksize=self.hw['blocksize'],
+                    dtype='float32',
+                    channels=(in_args[0], out_ch_count),
+                    dither_off=True,
+                    extra_settings=(in_args[1], out_args_extra),
+                    callback=callback,
+                ):
+                    done_evt.wait()
+            finally:
+                meter_worker.stop()
+                reset_audio_meter_state(active=False)
         else:
             # Indefinite playback
             phase = 0.0
             phase_inc = 2 * np.pi * frequency / fs
+            self._sine_meter_worker = _AudioMeterWorker(fs, self.hw['blocksize'])
+            self._sine_meter_worker.start()
+            output_meter_roles = (0, 1) if use_asio_out else (
+                self.hw['ch_out_spkr'],
+                self.hw['ch_out_ref'],
+            )
+            input_meter_roles = (0, 1) if use_asio_in else (
+                self.hw['ch_in_loop'],
+                self.hw['ch_in_mic'],
+            )
 
-            # For indefinite sine, we use the target_amp directly.
-            # (Filtering and re-normalizing a steady-state sine wave with a linear filter
-            # results in the same sine wave with a possible phase shift, which we ignore here).
-            effective_amp = target_amp
-
-            def callback(outdata, frames, time, status):
+            def callback(indata, outdata, frames, time_info, status):
                 nonlocal phase
-                if status:
-                    logger.warning(f"Sine Callback Status: {status}")
                 t = np.arange(frames)
-                s = (np.sin(phase + phase_inc * t) * effective_amp).astype(np.float32)
+                with self._sine_level_lock:
+                    level = level_dbfs if self._sine_level_dbfs is None else self._sine_level_dbfs
+                s = (np.sin(phase + phase_inc * t) * DSPUtils.db_to_lin(level)).astype(np.float32)
                 phase = (phase + phase_inc * frames) % (2 * np.pi)
 
                 if use_asio_out:
                     outdata[:, 0] = s
-                    outdata[:, 1] = 0
+                    outdata[:, 1] = s
                 else:
                     outdata.fill(0)
                     outdata[:, self.hw['ch_out_spkr']] = s
+                    outdata[:, self.hw['ch_out_ref']] = s
+                self._sine_meter_worker.submit(
+                    outdata,
+                    output_meter_roles,
+                    indata,
+                    input_meter_roles,
+                    status,
+                )
 
             if use_asio_out:
                 out_args_extra = sd.AsioSettings(channel_selectors=[self.hw['ch_out_spkr'], self.hw['ch_out_ref']])
@@ -1072,11 +1716,29 @@ class Audio(IAudio):
                 out_ch_count = max(self.hw['ch_out_spkr'], self.hw['ch_out_ref']) + 1
                 out_args_extra = sd.WasapiSettings(exclusive=self.hw['wasapi_exclusive']) if "WASAPI" in out_api else None
 
-            self._sine_stream = sd.OutputStream(
-                device=out_dev, samplerate=fs, channels=out_ch_count,
-                extra_settings=out_args_extra, callback=callback, dtype='float32'
-            )
-            self._sine_stream.start()
+            try:
+                self._sine_stream = sd.Stream(
+                    device=(in_dev, out_dev),
+                    samplerate=fs,
+                    blocksize=self.hw['blocksize'],
+                    channels=(in_args[0], out_ch_count),
+                    extra_settings=(in_args[1], out_args_extra),
+                    callback=callback,
+                    dtype='float32',
+                    dither_off=True,
+                )
+                self._sine_stream.start()
+            except Exception:
+                self._sine_stream = None
+                self._sine_meter_worker.stop()
+                self._sine_meter_worker = None
+                reset_audio_meter_state(active=False)
+                raise
+
+    def update_sine_level(self, level_dbfs: float) -> None:
+        """Updates the level used by active continuous sine playback."""
+        with self._sine_level_lock:
+            self._sine_level_dbfs = float(level_dbfs)
 
     def stop_sine(self) -> None:
         """Stops any active sine wave playback."""
@@ -1088,7 +1750,13 @@ class Audio(IAudio):
             except Exception as e:
                 logger.debug(f"Error closing sine stream: {e}")
             self._sine_stream = None
+        if self._sine_meter_worker is not None:
+            self._sine_meter_worker.stop()
+            self._sine_meter_worker = None
+        with self._sine_level_lock:
+            self._sine_level_dbfs = None
         sd.stop()
+        reset_audio_meter_state(active=False)
 
 
 class MockInterfaceAudio(Audio):
@@ -1208,10 +1876,15 @@ class MockInterfaceAudio(Audio):
         """
         logger.info(
             f"[MOCK-INTERFACE] Playing sine: {frequency} Hz, {level_dbfs} dBFS, {'until stopped' if duration_s is None else f'for {duration_s} s'}")
+        self.update_sine_level(level_dbfs)
+
+    def update_sine_level(self, level_dbfs: float) -> None:
+        logger.info(f"[MOCK-INTERFACE] Updated sine level: {level_dbfs} dBFS")
 
     def stop_sine(self) -> None:
         """Stops sine playback."""
         logger.info("[MOCK-INTERFACE] Stopped sine playback")
+        reset_audio_meter_state(active=False)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1221,7 +1894,7 @@ class MockInterfaceAudio(Audio):
 class AudioMock(IAudio):
     """Simulation class for when hardware is unavailable."""
 
-    def measure_ir(self, position: CylindricalPosition, order_id: str = "NA") -> None:
+    def measure_ir(self, position: CylindricalPosition, order_id: str = "NA", save: bool = True) -> None:
         """
         Measure the impulse response at a given position.
 
@@ -1241,20 +1914,31 @@ class AudioMock(IAudio):
         """
         logger.info(
             f"[MOCK] Playing sine: {frequency} Hz, {level_dbfs} dBFS, {'until stopped' if duration_s is None else f'for {duration_s} s'}")
+        self.update_sine_level(level_dbfs)
+
+    def update_sine_level(self, level_dbfs: float) -> None:
+        logger.info(f"[MOCK] Updated sine level: {level_dbfs} dBFS")
 
     def stop_sine(self) -> None:
         """Stops sine playback."""
         logger.info("[MOCK] Stopped sine playback")
+        reset_audio_meter_state(active=False)
 
 
 class AudioFactory:
     """Parses config and performs Dependency Injection assembling."""
 
     @staticmethod
+    def _normalize_decimal_text(value: str) -> str:
+        return value.replace(",", ".")
+
+    @staticmethod
     def _get_required_config(config: configparser.ConfigParser, section: str, key: str, type_func):
         if not config.has_option(section, key):
             raise KeyError(f"Missing required config: [{section}] {key}")
         val = config.get(section, key).split('#')[0].split(';')[0].strip()
+        if type_func in (float, int):
+            val = AudioFactory._normalize_decimal_text(val)
         return type_func(val)
 
     @staticmethod
@@ -1288,15 +1972,55 @@ class AudioFactory:
             raise KeyError(f"Config file missing [{sweep_section}] section")
 
         def parse_optional_float(s):
-            return None if s.lower() == "none" else float(s)
+            return None if s.lower() == "none" else float(AudioFactory._normalize_decimal_text(s))
+
+        def optional_config_int(key: str, fallback: int = -1) -> int:
+            raw = config.get(audio_section, key, fallback=str(fallback)).split('#')[0].split(';')[0].strip()
+            try:
+                return int(float(AudioFactory._normalize_decimal_text(raw)))
+            except ValueError:
+                return fallback
 
         fs = AudioFactory._get_required_config(config, audio_section, 'fs', int)
         sweep_dur_s = AudioFactory._get_required_config(config, sweep_section, 'sweep_dur_s', float)
         sweep_level_dbfs = AudioFactory._get_required_config(config, sweep_section, 'sweep_level_dbfs', float)
 
+        configured_in = optional_config_int('in_dev')
+        configured_out = optional_config_int('out_dev')
+
+        saved_in_name = config.get(audio_section, 'in_dev_name', fallback='').strip()
+        saved_in_api = config.get(audio_section, 'in_dev_hostapi', fallback='').strip()
+        saved_out_name = config.get(audio_section, 'out_dev_name', fallback='').strip()
+        saved_out_api = config.get(audio_section, 'out_dev_hostapi', fallback='').strip()
+
+        if mode == 'mock_interface':
+            dev_in = configured_in
+            dev_out = configured_out
+        else:
+            dev_in = resolve_device_id_by_saved_identity(
+                saved_in_name,
+                saved_in_api,
+                role_label="input",
+                require_input=True,
+            )
+            dev_out = resolve_device_id_by_saved_identity(
+                saved_out_name,
+                saved_out_api,
+                role_label="output",
+                require_output=True,
+            )
+        if configured_in >= 0 and dev_in != configured_in:
+            logger.info(
+                f"Input device '{saved_in_name}' is saved as ID {configured_in}; resolved current ID {dev_in}."
+            )
+        if configured_out >= 0 and dev_out != configured_out:
+            logger.info(
+                f"Output device '{saved_out_name}' is saved as ID {configured_out}; resolved current ID {dev_out}."
+            )
+
         hw_config = {
-            'dev_in': AudioFactory._get_required_config(config, audio_section, 'in_dev', int),
-            'dev_out': AudioFactory._get_required_config(config, audio_section, 'out_dev', int),
+            'dev_in': dev_in,
+            'dev_out': dev_out,
             'ch_in_mic': AudioFactory._get_required_config(config, audio_section, 'in_ch_mic', int),
             'ch_in_loop': AudioFactory._get_required_config(config, audio_section, 'in_ch_loop', int),
             'ch_out_spkr': AudioFactory._get_required_config(config, audio_section, 'out_ch_spkr', int),
@@ -1339,7 +2063,9 @@ class AudioFactory:
         if protect_hz is not None and protect_hz > 0:
             order = AudioFactory._get_required_config(config, sweep_section, 'PROTECT_HPF_ORDER', int)
             hpf_correction = config.getboolean(sweep_section, 'PROTECT_HPF_CORRECTION', fallback=False)
-            hpf_corr_db_cap = config.getfloat(sweep_section, 'PROTECT_HPF_CORR_DB_CAP', fallback=12.0)
+            hpf_corr_raw = config.get(sweep_section, 'PROTECT_HPF_CORR_DB_CAP', fallback='12.0')
+            hpf_corr_raw = hpf_corr_raw.split('#')[0].split(';')[0].strip()
+            hpf_corr_db_cap = float(AudioFactory._normalize_decimal_text(hpf_corr_raw))
             filter_engine = ProtectionFilter(fs, protect_hz, order, hpf_correction, hpf_corr_db_cap)
         else:
             filter_engine = None

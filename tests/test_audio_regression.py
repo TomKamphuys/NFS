@@ -74,13 +74,10 @@ def test_measure_ir_regression(mock_config, tmp_path):
         # r100.0 -> r100p0, ph0.0 -> ph0p0, z10.0 -> z10p0
         base_name = "REGRESSION_r100p0_ph0p0_z10p0"
 
-        # Audio class uses self.rec_dir for recordings and self.rec_dir / "debug" for metrics
-        # If set_session_directory(tmp_path) is called:
-        # self.rec_dir = tmp_path / "Recordings"
-        # self.debug_dir = tmp_path / "Recordings" / "debug"
+        # Audio class uses the session directory directly for IR files and debug output.
 
-        metrics_file = tmp_path / "Recordings" / "debug" / f"{base_name}_metrics.json"
-        ir_file = tmp_path / "Recordings" / f"{base_name}_ir.wav"
+        metrics_file = tmp_path / "debug" / f"{base_name}_metrics.json"
+        ir_file = tmp_path / f"{base_name}_ir.wav"
 
         assert metrics_file.exists(), f"Metrics file not found at {metrics_file}. Root files: {list(tmp_path.glob('**/*'))}"
         assert ir_file.exists(), f"IR file not found at {ir_file}."
@@ -88,7 +85,9 @@ def test_measure_ir_regression(mock_config, tmp_path):
         with open(metrics_file, "r") as f:
             metrics = json.load(f)
 
-        # These reference values are based on the state as of 2026-04-04 23:16
+        # These reference values are based on the state as of 2026-04-04 23:16,
+        # updated 2026-06-27 for the IR sine-RMS amplitude convention
+        # (h_full *= SINE_RMS_FROM_PEAK = 1/sqrt(2) in DeconvolutionEngine.process_ir).
         # If they change, it means the processing pipeline or hardware simulation has changed.
         # np.random.seed(42) is used for reproducibility.
 
@@ -105,11 +104,11 @@ def test_measure_ir_regression(mock_config, tmp_path):
         # --- FUNCTIONAL VALIDATION (Robust across platforms) ---
         # 1. Peak Amplitude Check
         peak_amp = np.max(np.abs(data))
-        assert np.isclose(peak_amp, 0.2491, atol=1e-3), f"Peak amplitude mismatch: {peak_amp}"
+        assert np.isclose(peak_amp, 0.1762, atol=1e-3), f"Peak amplitude mismatch: {peak_amp}"
 
         # 2. RMS Level Check
         rms_level = np.sqrt(np.mean(data**2))
-        assert np.isclose(rms_level, 0.00187, atol=1e-4), f"RMS level mismatch: {rms_level}"
+        assert np.isclose(rms_level, 0.00132, atol=1e-4), f"RMS level mismatch: {rms_level}"
 
         # 3. Frequency Response Check (Flatness in passband)
         # We expect it to be flat between 100Hz and 15kHz within +/- 0.5dB
@@ -137,11 +136,14 @@ def test_measure_ir_regression(mock_config, tmp_path):
         # 4. Temporal Alignment (Peak position)
         # MockInterfaceAudio has 20ms fixed latency + FIR group delay (12 samples)
         # BUT the DeconvolutionEngine trims the IR so the peak is near the beginning.
+        # The linear IR is sliced starting 50 samples before the split point
+        # (split_idx = len(inv_data) - 50), so for ~zero acoustic delay the peak
+        # sits around index 50.
         peak_idx = np.argmax(np.abs(data))
-        assert 0 <= peak_idx <= 20, f"Peak alignment mismatch: found at index {peak_idx}"
+        assert 40 <= peak_idx <= 60, f"Peak alignment mismatch: found at index {peak_idx}"
 
         # 5. Statistical Check
-        assert np.isclose(np.std(data), 0.00187, atol=1e-4)
+        assert np.isclose(np.std(data), 0.00132, atol=1e-4)
 
     finally:
         os.chdir(old_cwd)

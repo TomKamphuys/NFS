@@ -209,7 +209,7 @@ class CoordViewerEngine:
                 z_offset_str = settings_dict.get("z_offset_mm", "None")
                 if z_offset_str != "None":
                     z_center = float(z_offset_str) / 1000.0
-                elif settings_dict.get("z_midpoint_zero", "True") == "True":
+                elif settings_dict.get("z_midpoint_zero", "False") == "True":
                     z_center = 0.0
                 else:
                     z_center = float(settings_dict.get("cyl_height_external", h_int)) / 2.0

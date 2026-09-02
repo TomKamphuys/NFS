@@ -163,13 +163,17 @@ def generate_measurement_grid(
     generate_reverse_spiral=True,
     z_rotation_deg=90.0,
     flip_poles=False,
-    z_midpoint_zero=True,
+    z_midpoint_zero=False,
     phi_min_deg=-180.0,
     phi_max_deg=180.0,
     azimuth_density_ratio=1.0,
     azimuth_weight_center_deg=0.0,
     tweeter_pos=None,
     additional_positions=None,
+    ref_origin_pos=None,
+    baffle_bot_l_pos=None,
+    baffle_top_l_pos=None,
+    baffle_top_r_pos=None,
     top_crit_pos=None,
     bot_crit_pos=None
 ):
@@ -320,6 +324,10 @@ def generate_measurement_grid(
         f"azimuth_density_ratio={azimuth_density_ratio}",
         f"azimuth_weight_center_deg={azimuth_weight_center_deg}",
         f"tweeter_pos={tweeter_pos}",
+        f"ref_origin_pos={ref_origin_pos}",
+        f"baffle_bot_l_pos={baffle_bot_l_pos}",
+        f"baffle_top_l_pos={baffle_top_l_pos}",
+        f"baffle_top_r_pos={baffle_top_r_pos}",
         *[
             f"user_position_{safe_position_name(name, index)}={pos}"
             for index, (name, pos) in enumerate(additional_positions, start=1)
@@ -364,6 +372,10 @@ if __name__ == "__main__":
         azimuth_weight_center_deg,
         tweeter_pos,
         additional_positions,
+        ref_origin_pos,
+        baffle_bot_l_pos,
+        baffle_top_l_pos,
+        baffle_top_r_pos,
         top_crit_pos,
         bot_crit_pos
     )
@@ -387,6 +399,10 @@ if __name__ == "__main__":
         azimuth_weight_center_deg=azimuth_weight_center_deg,
         tweeter_pos=tweeter_pos,
         additional_positions=additional_positions,
+        ref_origin_pos=ref_origin_pos,
+        baffle_bot_l_pos=baffle_bot_l_pos,
+        baffle_top_l_pos=baffle_top_l_pos,
+        baffle_top_r_pos=baffle_top_r_pos,
         top_crit_pos=top_crit_pos,
         bot_crit_pos=bot_crit_pos
     )
