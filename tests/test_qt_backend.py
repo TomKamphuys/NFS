@@ -1,3 +1,7 @@
+import pytest
+
+pytest.importorskip("PySide6.QtWidgets")
+
 import harmonic_drive_qt.backend as qt_backend
 from harmonic_drive_qt.backend import BackendManager, format_nfs_error, format_scanner_error
 

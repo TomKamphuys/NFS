@@ -3,7 +3,7 @@ import os
 import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-pytest.importorskip("PySide6")
+pytest.importorskip("PySide6.QtWidgets")
 
 from harmonic_drive_qt.qt_compat import QApplication, QComboBox, QLineEdit, QMessageBox
 from harmonic_drive_qt.settings_dialog import SettingsDialog

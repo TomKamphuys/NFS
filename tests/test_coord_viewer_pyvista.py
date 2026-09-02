@@ -6,7 +6,7 @@ import pytest
 
 pytest.importorskip("pyvista")
 pytest.importorskip("pyvistaqt")
-pytest.importorskip("PySide6")
+pytest.importorskip("PySide6.QtWidgets")
 
 from grid_generator import coord_viewer_core_pyvista
 

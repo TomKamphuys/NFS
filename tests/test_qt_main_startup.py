@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-pytest.importorskip("PySide6")
+pytest.importorskip("PySide6.QtWidgets")
 
 from harmonic_drive_qt import main as qt_main
 

@@ -4,7 +4,7 @@ from unittest.mock import Mock
 import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-pytest.importorskip("PySide6")
+pytest.importorskip("PySide6.QtWidgets")
 
 from harmonic_drive_qt import project
 from harmonic_drive_qt.grid_pane import GridGeneratorPane
