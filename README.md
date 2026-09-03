@@ -15,6 +15,24 @@ Everything is driven from a bundled native desktop application, which is now inc
 
 ---
 
+## ⚠️ Safety Warning — Moving Parts
+
+**This software controls physical machinery that can move without warning and cause serious injury.**
+
+The scanner drives a motorized 3-axis CNC rig. Moving axes, lead screws, belts, and the microphone carriage can crush, pinch, or trap fingers, hands, hair, clothing, and cables. Read and follow these precautions before running any command that moves the hardware:
+
+- **Keep clear of the machine while it is powered and moving.** Never place hands or body inside the travel envelope during homing, jogging, or an automated scan.
+- **Always have a working emergency stop.** Make sure the controller's hardware E-stop (and/or power cut-off) is within reach and tested before starting a measurement.
+- **Homing and jogging move the axes immediately.** Commands issued from the GUI or CLI can start motion right away, including at startup. Confirm the machine is clear first.
+- **Verify limits and workspace.** Ensure limit switches, soft limits, and the configured travel ranges are correct so the machine cannot drive into itself, the loudspeaker, or a person.
+- **Secure loose items.** Keep cables, tools, hair, and clothing away from moving parts.
+- **Do not leave running scans fully unattended** unless you are confident the machine is safely enclosed and cannot harm anyone.
+- **Use in a safe, enclosed, or supervised area.** This is experimental research/hobby software, not a certified safety system.
+
+> **No warranty / no liability.** This software is provided "as is" under the MIT License, **without any warranty** and **without any liability** for damage or injury. You are solely responsible for operating your hardware safely. See the [LICENSE](LICENSE) file for details.
+
+---
+
 ## ✨ Features
 
 - **Automated scanning** — define a set of measurement positions and let the scanner work through them unattended.
@@ -103,6 +121,57 @@ You can optionally point the app at a specific configuration file:
 ```bash
 uv run harmonic-drive-qt --config path\to\config.ini
 ```
+
+### Installing a released build (wheel)
+
+Tagged releases publish a ready-built **wheel** (`.whl`) and **source archive** (`.tar.gz`) on the
+project's [GitHub Releases](https://github.com/TomKamphuys/NFS/releases) page. If you just want to
+*use* the software (rather than develop it) and are on **Python 3.13.5**, you can install a release
+without cloning the repository:
+
+1. Go to the [Releases](https://github.com/TomKamphuys/NFS/releases) page and download the
+   `nfs-<version>-py3-none-any.whl` file from the latest release.
+2. Install it into a Python 3.13.5 environment:
+   ```bash
+   pip install nfs-<version>-py3-none-any.whl
+   ```
+   This installs the CLI commands `harmonic-drive-qt`, `harmonic-drive`, and `nfs-app`, which you can
+   then run directly:
+   ```bash
+   harmonic-drive-qt
+   ```
+
+You can also install straight from Git without downloading anything:
+```bash
+pip install git+https://github.com/TomKamphuys/NFS.git
+```
+
+> **Note:** This project is a GUI/hardware tool and is **not published to PyPI**, so
+> `pip install nfs` will *not* work. Use a GitHub Release wheel, a Git install, or clone the
+> repository (recommended for development — see above).
+
+### What happens when you push / merge to `master`
+
+The repository ships three GitHub Actions workflows in `.github/workflows/` that run automatically:
+
+| Workflow | Trigger | What it produces |
+|---|---|---|
+| **Python package** (`python-package.yml`) | push / PR to `master` | Installs dependencies and runs the `pytest` test suite. No downloadable artifact — it just verifies the code. |
+| **Documentation** (`docs.yml`) | push / PR to `master` | Builds the Sphinx HTML docs; on push to `master` it deploys them to **GitHub Pages**. |
+| **Release** (`release.yml`) | pushing a `v*` tag (or manual run) | Runs `uv build` to create the wheel + source distribution and attaches them to a **GitHub Release**. |
+
+So simply **merging to `master` does not create a downloadable package** — it only runs the tests and
+publishes the documentation. To generate an installable artifact for users you must **cut a release**:
+
+1. Bump `version` in `pyproject.toml` (e.g. `0.2.1`).
+2. Commit, then create and push a matching tag:
+   ```bash
+   git tag v0.2.1
+   git push origin v0.2.1
+   ```
+3. The **Release** workflow then builds `nfs-<version>-py3-none-any.whl` and `nfs-<version>.tar.gz`
+   and publishes them on the Releases page, where users can download and install them as described in
+   [Installing a released build](#installing-a-released-build-wheel).
 
 
 ## Use PyCharm (currently mostly used as development is still causing rapid changes)
@@ -254,8 +323,9 @@ Contributions are welcome! Please feel free to submit a Pull Request. For major 
 
 ## 📄 License
 
-Proprietary — see `pyproject.toml` for details.
-All rights reserved.
+Released under the [MIT License](LICENSE) — see the `LICENSE` file for the full text.
+
+The software is provided "as is", **without warranty of any kind and without any liability**. Because it controls machinery with moving parts, please also read the [Safety Warning](#️-safety-warning--moving-parts) above: you are solely responsible for operating your hardware safely.
 
 
 
