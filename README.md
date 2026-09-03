@@ -4,29 +4,31 @@
   <img src="images/splash.png" alt="Holographic Acoustic Loudspeaker Scanner" width="600"/>
 </p>
 
-A Python-based **Near Field Scanner** for automated acoustic impulse response measurements. The system orchestrates a 3-axis CNC rig (typically GRBL or FluidNC based) 
+A Python-based **Near Field Scanner** for automated acoustic impulse response measurements. The system orchestrates a 3-axis CNC rig (GRBLHAL based) 
 to position a microphone around an acoustic source (e.g., a loudspeaker) while precisely synchronizing audio playback and capture.
 
 The scanner supports multiple coordinate systems and scanning patterns through a flexible plugin architecture, making it suitable for both cylindrical and spherical near-field measurements.
 
-For a detailed walkthrough of the system and the graphical interface, please refer to the [HarmonicDrive User Guide](#harmonicdrive-user-guide) section below.
+Everything is driven from a bundled native desktop application, which is now included directly in this repository. All hardware, audio, and motion parameters are configured through the graphical interface; there is no need to edit files by hand. See the [HarmonicDrive User Guide](#harmonicdrive-user-guide) section below for a detailed walkthrough.
 
-> **History:** The initial implementation was written in Octave. Although it worked well as a proof-of-concept, Python proved to be a more versatile platform for hardware control, signal processing, and extensibility.
+> **History:** The initial implementation was written in Octave. Although it worked well as a proof-of-concept, Python proved to be a more versatile platform for hardware control, signal processing, and extensibility. The GUI was previously maintained in a separate HarmonicDrive repository; it has since been rewritten as a native Qt (PySide6) desktop application and merged into this project. The old HarmonicDrive repository is no longer used.
 
 ---
 
 ## ✨ Features
 
 - **Automated scanning** — define a set of measurement positions and let the scanner work through them unattended.
-- **Real-time Progress Monitoring** — stay informed with point-by-point updates (e.g., "Measuring point 10 of 200... 5% complete") logged during long-running scans.
+- **Native desktop GUI** — a bundled PySide6 (Qt) application for machine control, audio setup, grid generation, live capture, and configuration.
+- **GUI-based configuration** — all hardware, audio, and motion parameters are edited through the in-app **Settings** dialog and **Audio Setup** pane. Settings are stored per project, so no manual file editing is required.
+- **Project workspaces** — organize each measurement session in its own project folder holding configuration, grids, and recordings.
+- **Real-time progress monitoring** — stay informed with point-by-point updates logged and displayed during long-running scans.
 - **Cylindrical & spherical grids** — built-in plugins for cylindrical, spherical, arc-based, and file-based measurement point generation.
 - **Impulse response capture** — uses an in-project exponential sine sweep engine with loopback-marker alignment and FFT deconvolution for high-quality IR measurements.
 - **GRBL / FluidNC motion control** — communicates with Arduino or ESP32-based CNC controllers over serial.
-- **DSP Backend** — Includes custom sweep generation, Barker-code loopback alignment, multi-sweep averaging, FFT deconvolution, driver-protection filtering, linear/distortion IR separation, and windowing.
-- **DSP Verification Tooling** — Automated real-time verification of measurement quality, including SNR estimation, THD calculation, and alignment Peak Sharpness Ratio (PSR) monitoring.
+- **DSP backend** — custom sweep generation, Barker-code loopback alignment, multi-sweep averaging, FFT deconvolution, driver-protection filtering, linear/distortion IR separation, and windowing.
+- **DSP verification tooling** — automated real-time verification of measurement quality, including SNR estimation, THD calculation, and alignment Peak Sharpness Ratio (PSR) monitoring.
 - **Pluggable architecture** — measurement-point generators are loaded as plugins; easy to add your own.
-- **Configurable via INI file** — all hardware, audio, and motion parameters live in a single `config.ini`.
-- **Mock Mode** — test your measurement sequences without hardware using the built-in mock interfaces for both motion and audio.
+- **Mock mode** — test your measurement sequences without hardware using the built-in mock interfaces for both motion and audio.
 
 ---
 
@@ -34,22 +36,30 @@ For a detailed walkthrough of the system and the graphical interface, please ref
 
 ```text
 NFS/
-├── config.ini          # Main application configuration
-├── images/             # Documentation images
+├── config.ini              # Default configuration (managed through the GUI)
+├── images/                 # Documentation images
 ├── src/
-│   ├── harmonic_drive/ # GUI Application (HarmonicDrive)
-│   │   ├── gui.py             # Main GUI entry point
-│   └── nfs/            # Core Library
-│       ├── audio.py           # Audio capture and DSP
-│       ├── datatypes.py       # Shared data structures
-│       ├── factory.py         # Plugin and component factories
-│       ├── grbl_controller.py # Interface to GRBL hardware
-│       ├── loader.py          # Dynamic plugin loader
-│       ├── motion_manager.py  # High-level motion orchestration
-│       ├── nfs.py             # Main NearFieldScanner logic
-│       ├── scanner.py         # Low-level CNC axis control
-│       └── plugins/           # Measurement point generator plugins
-└── tests/              # Comprehensive test suite
+│   ├── harmonic_drive_qt/  # Native Qt (PySide6) desktop GUI — HarmonicDrive
+│   │   ├── main.py               # GUI entry point (harmonic-drive-qt)
+│   │   ├── main_window.py        # Main window and view navigation
+│   │   ├── control_pane.py       # Machine control (jog, home, measure)
+│   │   ├── audio_setup_pane.py   # Audio device / channel setup
+│   │   ├── grid_pane.py          # Grid generator
+│   │   ├── live_capture.py       # Live plots during measurement
+│   │   ├── settings_dialog.py    # Configuration editor
+│   │   └── backend.py            # Bridge to the core scanner library
+│   ├── grid_generator/     # Grid generation helpers and assets
+│   └── nfs/                # Core Library
+│       ├── audio.py              # Audio capture and DSP
+│       ├── datatypes.py          # Shared data structures
+│       ├── factory.py            # Plugin and component factories
+│       ├── grbl_controller.py    # Interface to GRBL hardware
+│       ├── loader.py             # Dynamic plugin loader
+│       ├── motion_manager.py     # High-level motion orchestration
+│       ├── nfs.py                # Main NearFieldScanner logic
+│       ├── scanner.py            # Low-level CNC axis control
+│       └── plugins/              # Measurement point generator plugins
+└── tests/                  # Comprehensive test suite
 ```
 
 
@@ -83,14 +93,19 @@ or without dev tools
 uv sync --no-dev
 ```
 
-### Launch the UI
+### Launch the application
 ```bash
-uv run harmonic-drive
+uv run harmonic-drive-qt
 ```
-The UI will be automatically opened. In case it isn't, it is accessible at `http://localhost:8080`.
+This opens the HarmonicDrive desktop window. On first launch you will be prompted to review the audio and scanner settings. All configuration is done from within the GUI — see the [HarmonicDrive User Guide](#harmonicdrive-user-guide) below.
+
+You can optionally point the app at a specific configuration file:
+```bash
+uv run harmonic-drive-qt --config path\to\config.ini
+```
 
 
-## Use Pycharm (currently mostly used as development is still causing rapid changes)
+## Use PyCharm (currently mostly used as development is still causing rapid changes)
 
 Welcome to PyCharm! Integrating `uv` into your workflow is a great choice for fast, reliable dependency management. Since you’ve already installed PyCharm, here is the most efficient, step-by-step path to cloning your repository and setting up your environment.
 
@@ -130,7 +145,7 @@ After `uv sync` finishes, you need to tell PyCharm to use that environment as th
 
 ### Pro-Tips for `uv` + PyCharm
 * **Automatic Detection:** Newer versions of PyCharm may automatically prompt you to "Create a uv environment" as soon as you open the project. If you see this notification in the bottom-right corner or at the top of the editor, click it! It will handle the syncing and interpreter configuration for you.
-* **Running Scripts:** Once the interpreter is set, you can run your code by right-clicking any `.py` file and selecting **Run 'filename'**. PyCharm will now correctly resolve all your dependencies.
+* **Running the app:** Once the interpreter is set, you can add a run configuration for the `harmonic-drive-qt` script, or simply run `uv run harmonic-drive-qt` from the terminal.
 * **Managing Dependencies:** If you need to add a new package later, don't just run `pip install`. Use the terminal to keep your lockfile updated:
     ```bash
     uv add <package_name>
@@ -148,20 +163,6 @@ To build the HTML documentation locally, run:
 uv run sphinx-build -b html docs docs/_build/html
 ```
 The output will be available in `docs/_build/html/index.html`.
-
-### Logging Configuration
-Logging is centralized and can be configured in `config.ini`:
-```ini
-[logging]
-level = INFO
-file = scanner.log
-rotation = 10 MB
-retention = 1 week
-```
-- `level`: DEBUG, INFO, WARNING, ERROR, CRITICAL
-- `file`: Path to the log file
-- `rotation`: When to rotate the log (e.g., size or time)
-- `retention`: How long to keep old logs
 
 ### Online Documentation
 Documentation is automatically built and deployed to GitHub Pages on every push to the `master` branch.
@@ -205,7 +206,7 @@ Measurement-point generators are loaded dynamically from `src/nfs/plugins/`. The
 | `file_measurement_points` | Load positions from a CSV file |
 
 To add a custom plugin, create a new module in `src/nfs/plugins/` that implements the `MeasurementPoints` protocol (see `src/nfs/measurement_points.py`) and 
-include a `register` function. Then, register it in `config.ini` under the `[plugins]` section.
+include a `register` function. The available generators and their parameters can then be selected and configured from the **Settings** dialog in the GUI.
 
 ### Example Plugin Structure
 ```python
@@ -234,7 +235,7 @@ def register(factory) -> None:
 
 ## 🏗️ Hardware 
 
-N.B. A new and improved setup has been designed and built. Please see DiyAudio thread for more details.
+N.B. A new and improved setup has been designed and built. Please see the DiyAudio thread for more details.
 
 
 ---
@@ -260,18 +261,19 @@ All rights reserved.
 
 # HarmonicDrive User Guide
 
-HarmonicDrive is a near-field acoustic scanner controller featuring a real-time web-based UI. It automates loudspeaker 
-measurements by moving a microphone along predefined grids (e.g. cylindrical or spherical) using a 3-axis CNC-style turntable/arm.
+HarmonicDrive is the bundled native desktop controller for the near-field acoustic scanner. It automates loudspeaker 
+measurements by moving a microphone along predefined grids (e.g. cylindrical or spherical) using a 3-axis CNC-style turntable/arm. 
+It is a Qt (PySide6) application that is now included directly in this repository — no separate installation is required.
 
 ---
 
 ## 1. Getting Started
 
+### Prerequisites
+1.  The GRBL settings have been set correctly using external tooling (e.g. IOSender).
+2.  An audio interface with at least one input and one output channel is connected.
 
-## Prerequisites
-1.  The grbl settings have been set correctly using external tooling (e.g. IOSender).
-
-### Installation
+### Installation & Launch
 1.  **Clone Repository**:
     ```bash
     git clone https://github.com/TomKamphuys/NFS.git
@@ -281,73 +283,61 @@ measurements by moving a microphone along predefined grids (e.g. cylindrical or 
     ```bash
     uv sync --all-groups
     ```
-3.  **Launch the UI**:
+3.  **Launch the application**:
     ```bash
-    uv run harmonic-drive
+    uv run harmonic-drive-qt
     ```
-    The UI will be automatically opened. In case it isn't, it is accessible at `http://localhost:8080`.
+    The HarmonicDrive desktop window opens. If any required audio or scanner settings are missing, the app will warn you and open the relevant configuration view automatically.
 
 ---
 
-## 2. Configuration (`config.ini`)
+## 2. Configuration (via the GUI)
 
-The `config.ini` file controls all hardware and software parameters.
+All configuration is performed inside the application; you do not need to edit any files manually. Settings are persisted automatically and stored with the active project.
 
-### `[scanner]`
-- `controller`: Type of motion controller (typically `grbl_streamer`).
-- `feed_rate`: Global movement speed limit in mm/min.
+### Settings dialog
+Open **Settings** from the left-hand menu to edit hardware, motion, and audio parameters, grouped into tabs:
 
-### `[motion_manager]`
-- `type`: The class name for motion logic (e.g., `CylindricalMeasurementMotionManager`).
-- `measurement_points`: Reference to the section defining the grid.
-- `safe_radius`: Minimum distance maintained to prevent collisions.
+- **Scanner** — motion controller type (e.g. `grbl_streamer`) and global feed rate (mm/min).
+- **Motion manager** — motion logic (e.g. cylindrical or spherical), the referenced measurement grid, and the safe radius used to prevent collisions.
+- **Measurement points** — choose the grid generator plugin and edit its parameters directly in the dialog.
+- **Audio & sweep** — sample rate, sweep duration and level, number of sweeps to average, silence padding, tail taper, driver-protection high-pass filter, marker alignment, and the recording naming convention.
+- **App / logging** — interface preferences and logging level.
 
-### `[audio]` & `[sweep]`
-- `mode`: Audio backend entry point, for example `mock_interface` for testing without hardware.
-- `in_dev` / `out_dev`: Audio interface device indices.
-- `in_ch_mic` / `in_ch_loop`: Input channels for the microphone and loopback marker.
-- `out_ch_spkr` / `out_ch_ref`: Output channels for the speaker sweep and reference marker.
-- `fs`: Sample rate in Hz.
-- `sweep_dur_s`: Length of the exponential sine sweep.
-- `sweep_level_dbfs`: Playback level for the sweep and marker.
-- `num_sweeps`: Number of captures to average per point to improve SNR.
-- `align_to_first_marker`: If true, aligns subsequent sweeps from the first marker; if false, re-syncs every sweep.
-- `pre_sil_ms` / `post_sil_ms`: Silence around the sweep for settling and decay capture.
-- `mic_tail_taper_ms`: Fade applied to the captured tail.
-- `protect_hpf_hz` / `protect_hpf_order`: Optional playback high-pass filter for driver protection.
-- `naming_convention`: File naming format for recordings (`tom` or `dimitri`).
+Use **Restore Defaults** in the dialog to reset a section to the shipped defaults. Click **Apply / Save** to persist changes; the affected views are rebuilt automatically.
+
+### Audio Setup pane
+The **Audio Setup** view provides a dedicated screen for selecting the audio API, input/output devices, and the microphone, loopback, speaker, and reference channels. This is the first place to visit if you see an audio-related startup warning.
+
+### Projects
+HarmonicDrive works with **projects** — each project is a folder that stores its own configuration, generated grids, and recordings. Use the project controls to browse to or create a session folder; the current project path is shown in the window. When no folder is selected the app uses a temporary working project.
 
 ---
 
-## 3. The GUI Interface
+## 3. The Interface
 
-The UI is divided into two main panels: **Controls (Left)** and **Plots (Right)**.
+The main window has a collapsible **Views** menu on the left with the following screens:
 
-### Jog Controls
-- **PHI (Rotation)**: Rotates the turntable. Buttons are labeled with step sizes (1, 10, 60, 120 degrees). `CW` (Clockwise) and `CCW` (Counter-Clockwise).
-- **R (Radius)**: Moves the arm in/out. `IN` moves towards the center, `OUT` moves away.
-- **Z (Height)**: Moves the microphone up/down.
-- **STOP (HOLD)**: Red button in the center of each jog row to immediately halt that axis.
+- **Audio Setup** — configure the audio interface and channels.
+- **Grid Generator** — create and preview measurement grids.
+- **Machine Control** — jog the axes, home the machine, and start measurements.
+- **Live Capture** — real-time plots of measurement progress, positions, frequency response, and impulse response.
+- **Settings** — the configuration dialog described above.
+- **Shutdown Program** — closes the application.
 
-### System Commands
-- **HOME**: Initiates the hardware homing sequence. Turns **Green** when successful, **Orange** if homing is required.
-- **Clear Alarm**: Resets the GRBL "Alarm" state (often triggered by hitting limit switches).
-- **Soft Reset**: Resets the GRBL controller firmware.
-- **REHOME**: Forces a re-homing sequence. This is useful if the GRBL firmware is stuck in an alarm state.
-- **HOLD**: Immediate pause for all motion.
-
-### Setup & Measurement
-- **Height Offset**: Enter the distance (mm) from the turntable stool to the speaker's acoustic center.
-- **Set height offset**: Applies the value to the current coordinate system.
-- **Zero NFS**: Critical step. Sets the current position as the "Zero" reference and applies the height offset.
-- **Start measurements**: Begins the automated scan through all grid points.
-- **Take single measurement**: Captures a single sweep at the current position.
+### Machine Control
+- **Jog controls** — move the **PHI** (rotation), **R** (radius), and **Z** (height) axes using the labelled step buttons.
+- **Home / Rehome** — run or force the hardware homing sequence.
+- **Clear Alarm / Soft Reset** — recover the GRBL controller from an alarm state.
+- **Hold / Stop** — immediately pause or halt motion.
+- **Height offset / Zero NFS** — set the reference point of the coordinate system on the speaker's acoustic center.
+- **Start measurements / Take single measurement** — begin the automated scan or capture a single sweep at the current position.
 
 ### Live Displays
-- **Position Dials**: Real-time readout of Radius (R), Phi (P), and Height (Z).
-- **Status**: Current machine state (Idle, Run, Alarm, etc.).
-- **Live Capture**: Plotly panels for measurement progress, measured positions, frequency response, and impulse response. Panels can be reordered, shown/hidden, and saved as defaults.
-- **Log View**: Accessible via **Show Logs**. Displays real-time system events and errors.
+- **Position dials** — real-time readout of Radius (R), Phi (P), and Height (Z).
+- **Status** — current machine state (Idle, Run, Alarm, etc.).
+- **Live capture plots** — measurement progress, measured positions, frequency response, and impulse response.
+- **Log view** — real-time system events and errors.
 
 ---
 
@@ -355,23 +345,24 @@ The UI is divided into two main panels: **Controls (Left)** and **Plots (Right)*
 
 Follow these steps for a successful measurement session:
 
-1.  **Hardware Prep**: Mount the speaker on the turntable and the microphone on the arm. Make sure everything is properly aligned. Etc, etc.
-2.  **Home the System**: Click **HOME** and wait for the button to turn green and the status to show `IDLE`.
-3.  **Manual Alignment**:
-    - Use the Jog buttons to move the microphone until it is perfectly aligned with the zero-triangle.
-4.  **Set Reference**:
-    - Enter the **Height Offset** (distance from the stool surface to the reference point).
-    - Click **Zero NFS**. The coordinate system will now center on your speaker.
-5.  **Run Scan**:
-    - Click **Start measurements**. 
-    - Monitor the **Live Plot** and **Log View** to ensure measurements are proceeding as expected.
-    - WAV files will be saved to the `measurements/` folder automatically with the time and date encoded in the directory.
+1.  **Hardware Prep**: Mount the speaker on the turntable and the microphone on the arm, and make sure everything is properly aligned.
+2.  **Select / Create a Project**: Choose a session folder so configuration, grids, and recordings are kept together.
+3.  **Configure Audio**: Open **Audio Setup** and select the interface, devices, and channels. Verify the settings in **Settings → Audio & sweep**.
+4.  **Generate a Grid**: Use the **Grid Generator** to define your measurement points, or select an existing grid in **Settings**.
+5.  **Home the System**: In **Machine Control**, click **HOME** and wait for the machine to reach the `IDLE` state.
+6.  **Set Reference**:
+    - Use the jog buttons to align the microphone with the zero-triangle.
+    - Enter the **Height Offset** and click **Zero NFS**. The coordinate system now centers on your speaker.
+7.  **Run Scan**:
+    - Click **Start measurements**.
+    - Monitor **Live Capture** and the **Log View** to ensure measurements are proceeding as expected.
+    - WAV files are saved to the project's recordings folder automatically, with the time and date encoded in the directory.
 
 ---
 
 ## 5. Troubleshooting
 
 - **Machine in ALARM**: Usually caused by hitting a limit switch or a hard stop. Click **Clear Alarm**. If it persists, use **Soft Reset**.
-- **Audio Errors**: Check the `[audio]` section in `config.ini`. Ensure the `in_dev` and `out_dev` match the indices found by running `uv run harmonic-drive --list-devices` (or similar utility).
-- **Unexpected Movement**: Verify `steps_per_millimeter` in the configuration. Check if the axes are reversed in the GRBL settings.
-- **UI Unresponsive**: Refresh the browser page. The backend `main.py` should remain running.
+- **Audio Errors**: Open the **Audio Setup** view and confirm the API, devices, and channels are correct for your interface.
+- **Unexpected Movement**: Verify the steps-per-millimeter and feed rate in **Settings**, and check whether the axes are reversed in the GRBL settings.
+- **Startup warnings**: On launch the app may open **Audio Setup** or **Settings** if required parameters are missing — review and save the highlighted section.
