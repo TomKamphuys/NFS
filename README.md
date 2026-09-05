@@ -135,7 +135,7 @@ without cloning the repository:
    ```bash
    pip install nfs-<version>-py3-none-any.whl
    ```
-   This installs the CLI commands `harmonic-drive-qt`, `harmonic-drive`, and `nfs-app`, which you can
+   This installs the CLI command `harmonic-drive-qt`, which you can
    then run directly:
    ```bash
    harmonic-drive-qt
