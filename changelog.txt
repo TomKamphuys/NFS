@@ -1,4 +1,36 @@
 --------
+05/09/26
+--------
+Removed the dead "nfs-app" console entry point, which pointed at a
+non-existent nfs.nfs_app module and would fail on launch. Updated the README
+so the released-wheel install instructions only advertise the working
+"harmonic-drive-qt" command.
+
+Files touched:
+pyproject.toml
+README.md
+
+--------
+05/09/26
+--------
+Removed the legacy NiceGUI/browser UI. The native PySide (Qt) UI is now the
+only interface, so the web-based frontend and its dependency have been dropped.
+
+Deleted the NiceGUI-based grid generator UI and its Plotly viewer engine, and
+removed the stale NiceGUI Harmonic Drive package along with the
+"harmonic-drive" console entry point. The nicegui[highcharts] dependency has
+been removed from pyproject.toml. The Qt UI, matplotlib and pyvista viewer
+engines are unaffected.
+
+Files touched:
+pyproject.toml
+src/grid_generator/coord_viewer_core.py (deleted)
+src/grid_generator/grid_gen_gui.py (deleted)
+src/harmonic_drive/ (deleted)
+src/harmonic_drive_qt/backend.py
+src/harmonic_drive_qt/config_support.py
+
+--------
 31/08/26
 --------
 Fixed: Grid Generator project json so waypoints take priority over manual

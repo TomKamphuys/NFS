@@ -1,7 +1,7 @@
 """Backend adapter for the native Qt prototype.
 
-The goal is to keep the Qt UI away from NiceGUI while reusing the existing
-scanner, NFS, project, and audio code.
+The goal is to keep the Qt UI decoupled from any web UI framework while reusing
+the existing scanner, NFS, project, and audio code.
 """
 
 from __future__ import annotations

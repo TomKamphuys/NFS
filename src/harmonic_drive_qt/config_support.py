@@ -1,7 +1,7 @@
 ﻿"""Qt-local config schema and persistence helpers.
 
-This module contains the non-NiceGUI parts that the native Qt UI needs from
-the legacy Harmonic Drive config editor.
+This module contains the framework-agnostic parts that the native Qt UI needs
+from the legacy Harmonic Drive config editor.
 """
 from __future__ import annotations
 
@@ -224,7 +224,7 @@ EDITABLE_SCHEMA: Dict[str, List[SchemaEntry]] = {
         ("serial_comms", "bool",
          "Log GRBL serial connection/probe traffic during startup. Enable temporarily when diagnosing intermittent controller detection.", None),
         ("deep_ui_diagnostics", "bool",
-         "NiceGUI/browser UI diagnostics for scanner/progress update diagnosis. Not used by the native PySide UI.", None),
+         "Verbose UI diagnostics for scanner/progress update diagnosis. Not used by the native PySide UI.", None),
     ],
 }
 
