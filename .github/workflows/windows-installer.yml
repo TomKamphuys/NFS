@@ -1,0 +1,83 @@
+# Builds a standalone Windows installer for the HALS Near Field Scanner.
+#
+# The result is a single "HALS-Near-Field-Scanner-Setup-<version>.exe" that an
+# end user (an audio enthusiast, not a developer) can download and run. It
+# bundles Python and every dependency, so users never have to install Python,
+# uv, or manage virtual environments.
+#
+# Pipeline:
+#   1. Install the project with uv on a Windows runner.
+#   2. Freeze the Qt application into a self-contained folder with PyInstaller.
+#   3. Wrap that folder into a friendly installer with Inno Setup.
+#   4. Publish the installer as a build artifact, and attach it to the GitHub
+#      Release when the workflow is triggered by a version tag (e.g. v0.2.1).
+#
+# Run it manually from the Actions tab (workflow_dispatch) to produce a test
+# installer, or push a tag like "v0.2.1" to attach it to a release.
+
+name: Windows Installer
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-installer:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Install the project and PyInstaller
+        run: uv sync --locked --all-extras --dev
+
+      - name: Add PyInstaller
+        run: uv pip install pyinstaller
+
+      - name: Determine version
+        id: version
+        shell: pwsh
+        run: |
+          $ref = "${{ github.ref }}"
+          if ($ref -like "refs/tags/v*") {
+            $version = $ref -replace "refs/tags/v", ""
+          } else {
+            $content = Get-Content pyproject.toml -Raw
+            $match = [regex]::Match($content, '(?m)^\s*version\s*=\s*"([^"]+)"')
+            $version = $match.Groups[1].Value
+          }
+          if (-not $version) { $version = "0.0.0" }
+          Write-Host "Resolved version: $version"
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Build executable with PyInstaller
+        run: uv run pyinstaller packaging/hals.spec --noconfirm --clean
+
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress --yes
+
+      - name: Build installer with Inno Setup
+        run: iscc /DMyAppVersion=${{ steps.version.outputs.version }} packaging\installer.iss
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: HALS-Near-Field-Scanner-Setup
+          path: dist/installer/*.exe
+
+      - name: Publish to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/installer/*.exe
+          generate_release_notes: true
