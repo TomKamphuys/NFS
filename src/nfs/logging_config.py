@@ -116,14 +116,20 @@ def setup_logging(
             serial_comms_debug = config.getboolean("debug", "serial_comms", fallback=False)
     except Exception as e:
         # If we can't read config, we'll use defaults and log the error once stderr logger is up
-        print(f"Warning: Could not read logging config from {config_file}: {e}", file=sys.stderr)
+        if sys.stderr is not None:
+            print(f"Warning: Could not read logging config from {config_file}: {e}", file=sys.stderr)
 
     if serial_comms_debug and level not in {"TRACE", "DEBUG"}:
         level = "DEBUG"
 
-    # Add stderr handler
-    logger.add(sys.stderr, level=level,
-               format="<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>")
+    # Add stderr handler. In a windowed (no-console) build - e.g. a PyInstaller
+    # ``console=False`` executable - ``sys.stderr`` is ``None``. Passing ``None``
+    # to ``logger.add`` makes loguru raise ``Cannot log to objects of type
+    # 'NoneType'``, which previously bubbled up and aborted the scanner backend
+    # start-up. Only register the stream sink when a real stream is available.
+    if sys.stderr is not None:
+        logger.add(sys.stderr, level=level,
+                   format="<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>")
 
     # Add file handler
     if log_file:
