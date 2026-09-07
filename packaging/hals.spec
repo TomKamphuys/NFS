@@ -15,6 +15,7 @@ import sys
 from pathlib import Path
 
 from PyInstaller.utils.hooks import (
+    collect_all,
     collect_data_files,
     collect_submodules,
     copy_metadata,
@@ -34,6 +35,12 @@ for config_name in ("config.ini", "config_default.ini"):
     config_path = PROJECT_ROOT / config_name
     if config_path.exists():
         datas.append((str(config_path), "."))
+
+# Native binaries (C-extensions, .pyd/.dll files). PyVista and VTK load a lot
+# of their functionality from dynamically imported compiled extensions that
+# PyInstaller cannot discover on its own, hence they are collected explicitly
+# below via ``collect_all``.
+binaries = []
 
 # Application images (window icon, splash, etc.).
 images_dir = PROJECT_ROOT / "images"
@@ -66,14 +73,69 @@ hiddenimports += collect_submodules("nfs.plugins")
 datas += copy_metadata("nfs")
 
 # Heavy scientific/visualisation dependencies with runtime data or many
-# dynamically imported submodules.
-for package in ("pyvista", "pyvistaqt", "matplotlib", "scipy", "soundfile", "sounddevice"):
+# dynamically imported submodules. ``collect_all`` also gathers the compiled
+# C-extensions (binaries) that PyVista/VTK load dynamically at runtime, which
+# ``collect_data_files``/``collect_submodules`` alone would miss.
+for package in (
+    "pyvista",
+    "pyvistaqt",
+    "vtk",
+    "vtkmodules",
+    "matplotlib",
+    "scipy",
+    "soundfile",
+    "sounddevice",
+    # ``soundfile`` and ``sounddevice`` are single-file modules, so
+    # ``collect_all`` cannot see them as packages and skips their native
+    # libraries with a warning. The actual C libraries (libsndfile, portaudio)
+    # live in the companion *data* packages below, which must be collected so
+    # audio playback/recording keeps working inside the frozen application.
+    "_soundfile_data",
+    "_sounddevice_data",
+):
     try:
-        datas += collect_data_files(package)
-        hiddenimports += collect_submodules(package)
+        pkg_datas, pkg_binaries, pkg_hiddenimports = collect_all(package)
+        datas += pkg_datas
+        binaries += pkg_binaries
+        hiddenimports += pkg_hiddenimports
     except Exception:
         # A missing optional dependency should not break the whole build.
         pass
+
+# ``charset_normalizer`` (pulled in transitively via ``requests``) ships an
+# optional mypyc-compiled speed-up. Its shared runtime lives in a top-level,
+# hash-named extension module (e.g. ``4c842c94...__mypyc.cp313-win_amd64.pyd``)
+# that is *not* part of any package, so PyInstaller does not discover it and the
+# application crashes at runtime with ``No module named '...._mypyc'``. Collect
+# the package normally and additionally bundle every top-level ``*__mypyc*``
+# extension found next to it.
+try:
+    cn_datas, cn_binaries, cn_hiddenimports = collect_all("charset_normalizer")
+    datas += cn_datas
+    binaries += cn_binaries
+    hiddenimports += cn_hiddenimports
+except Exception:
+    pass
+
+try:
+    import charset_normalizer as _cn
+
+    site_packages_dir = Path(_cn.__file__).resolve().parent.parent
+    for mypyc_pyd in site_packages_dir.glob("*__mypyc*.pyd"):
+        # Keep the file at the top level of the bundle so the compiled modules
+        # can import their shared runtime by its bare module name.
+        binaries.append((str(mypyc_pyd), "."))
+        module_name = mypyc_pyd.name.split(".")[0]
+        if module_name not in hiddenimports:
+            hiddenimports.append(module_name)
+except Exception:
+    pass
+
+# Ensure the top-level dynamic import names are always present even if the
+# ``collect_all`` calls above skipped something.
+for _name in ("pyvista", "pyvistaqt", "vtk", "vtkmodules"):
+    if _name not in hiddenimports:
+        hiddenimports.append(_name)
 
 icon_path = PROJECT_ROOT / "images" / "icon.ico"
 
@@ -83,7 +145,7 @@ block_cipher = None
 a = Analysis(
     [str(PROJECT_ROOT / "packaging" / "hals_launcher.py")],
     pathex=[str(SRC_DIR)],
-    binaries=[],
+    binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],

@@ -11,6 +11,10 @@ The scanner supports multiple coordinate systems and scanning patterns through a
 
 Everything is driven from a bundled native desktop application, which is now included directly in this repository. All hardware, audio, and motion parameters are configured through the graphical interface; there is no need to edit files by hand. See the [HarmonicDrive User Guide](#harmonicdrive-user-guide) section below for a detailed walkthrough.
 
+> **New here?** The easiest way to get started on Windows is the ready-to-run
+> installer — **no Python, uv, or Git required**. See
+> [Windows installer (recommended for most users)](#-windows-installer-recommended-for-most-users) below.
+
 > **History:** The initial implementation was written in Octave. Although it worked well as a proof-of-concept, Python proved to be a more versatile platform for hardware control, signal processing, and extensibility. The GUI was previously maintained in a separate HarmonicDrive repository; it has since been rewritten as a native Qt (PySide6) desktop application and merged into this project. The old HarmonicDrive repository is no longer used.
 
 ---
@@ -85,7 +89,35 @@ NFS/
 
 ## 🚀 Getting Started
 
-### Prerequisites
+### 🪟 Windows installer (recommended for most users)
+
+**Just want to run the scanner? Start here — no Python, uv, or Git required.**
+
+1. Go to the [GitHub Releases](https://github.com/TomKamphuys/NFS/releases) page.
+2. Download the latest **`HALS-Near-Field-Scanner-Setup-<version>.exe`** installer.
+3. Run the installer and follow the wizard. It bundles Python and every dependency,
+   so there is nothing else to install.
+4. Launch **HALS Near Field Scanner** from the Start menu (or the desktop shortcut,
+   if you enabled it during setup).
+
+That's it — the graphical application opens and all configuration is done from within
+the GUI. See the [HarmonicDrive User Guide](#harmonicdrive-user-guide) below for a
+walkthrough.
+
+> **Only the installer is needed.** You do **not** have to clone the repository or set
+> up a development environment to use the scanner. The developer setup below
+> (Python, uv, Git, PyCharm) is only relevant if you want to modify the code or run
+> it from source.
+
+---
+
+### 🛠️ Developer setup (run from source)
+
+The steps below are for developers and contributors who want to run the project from
+source or modify it. End users should use the [Windows installer](#-windows-installer-recommended-for-most-users)
+above instead.
+
+#### Prerequisites
 
 | Requirement | Details |
 |---|---|
@@ -93,7 +125,7 @@ NFS/
 | **uv** | Package manager ([install guide](https://docs.astral.sh/uv/getting-started/installation/)) |
 | **Hardware** | A GRBL/FluidNC-controlled CNC frame with at least two linear axes and one rotational axis, plus an audio interface |
 
-### Installation
+#### Installation
 
 Clone the repository
 ```
@@ -111,7 +143,7 @@ or without dev tools
 uv sync --no-dev
 ```
 
-### Launch the application
+#### Launch the application
 ```bash
 uv run harmonic-drive-qt
 ```
@@ -122,7 +154,7 @@ You can optionally point the app at a specific configuration file:
 uv run harmonic-drive-qt --config path\to\config.ini
 ```
 
-### Installing a released build (wheel)
+#### Installing a released build (wheel)
 
 Tagged releases publish a ready-built **wheel** (`.whl`) and **source archive** (`.tar.gz`) on the
 project's [GitHub Releases](https://github.com/TomKamphuys/NFS/releases) page. If you just want to
@@ -150,15 +182,16 @@ pip install git+https://github.com/TomKamphuys/NFS.git
 > `pip install nfs` will *not* work. Use a GitHub Release wheel, a Git install, or clone the
 > repository (recommended for development — see above).
 
-### What happens when you push / merge to `master`
+#### What happens when you push / merge to `master`
 
-The repository ships three GitHub Actions workflows in `.github/workflows/` that run automatically:
+The repository ships four GitHub Actions workflows in `.github/workflows/` that run automatically:
 
 | Workflow | Trigger | What it produces |
 |---|---|---|
 | **Python package** (`python-package.yml`) | push / PR to `master` | Installs dependencies and runs the `pytest` test suite. No downloadable artifact — it just verifies the code. |
 | **Documentation** (`docs.yml`) | push / PR to `master` | Builds the Sphinx HTML docs; on push to `master` it deploys them to **GitHub Pages**. |
 | **Release** (`release.yml`) | pushing a `v*` tag (or manual run) | Runs `uv build` to create the wheel + source distribution and attaches them to a **GitHub Release**. |
+| **Windows Installer** (`windows-installer.yml`) | pushing a `v*` tag (or manual run) | Freezes the app with PyInstaller and wraps it into the standalone **`HALS-Near-Field-Scanner-Setup-<version>.exe`** installer, attached to the **GitHub Release**. |
 
 So simply **merging to `master` does not create a downloadable package** — it only runs the tests and
 publishes the documentation. To generate an installable artifact for users you must **cut a release**:
@@ -169,9 +202,11 @@ publishes the documentation. To generate an installable artifact for users you m
    git tag v0.2.1
    git push origin v0.2.1
    ```
-3. The **Release** workflow then builds `nfs-<version>-py3-none-any.whl` and `nfs-<version>.tar.gz`
-   and publishes them on the Releases page, where users can download and install them as described in
-   [Installing a released build](#installing-a-released-build-wheel).
+3. The **Release** and **Windows Installer** workflows then build `nfs-<version>-py3-none-any.whl`,
+   `nfs-<version>.tar.gz`, and the standalone `HALS-Near-Field-Scanner-Setup-<version>.exe`, and
+   publish them on the Releases page. End users grab the installer (see
+   [Windows installer](#-windows-installer-recommended-for-most-users)); developers can also install
+   the wheel as described in [Installing a released build](#installing-a-released-build-wheel).
 
 
 ## Use PyCharm (currently mostly used as development is still causing rapid changes)
