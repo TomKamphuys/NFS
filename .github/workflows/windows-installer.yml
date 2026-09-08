@@ -12,15 +12,26 @@
 #   4. Publish the installer as a build artifact, and attach it to the GitHub
 #      Release when the workflow is triggered by a version tag (e.g. v0.2.1).
 #
-# Run it manually from the Actions tab (workflow_dispatch) to produce a test
-# installer, or push a tag like "v0.2.1" to attach it to a release.
+# It runs in three situations:
+#   * on every push to "master" (and on pull requests targeting it) so we
+#     always know the installer still builds; the result is kept as a
+#     downloadable build artifact (not attached to any release).
+#   * when a version tag like "v0.2.1" is pushed, in which case the installer
+#     is additionally attached to the matching GitHub Release.
+#   * manually from the Actions tab (workflow_dispatch) to produce a test
+#     installer on demand.
 
 name: Windows Installer
 
 on:
   push:
+    branches:
+      - master
     tags:
       - "v*"
+  pull_request:
+    branches:
+      - master
   workflow_dispatch:
 
 permissions:
