@@ -58,6 +58,12 @@ MOTION_MANAGER_TYPES: Dict[str, List[SchemaEntry]] = {
          "Optional extra-safe radius (mm) the motion manager retracts to before slewing. "
          "Leave empty to default to 0 and avoid extra safe-radius intervention.", None),
     ],
+    "FastCylindricalMeasurementMotionManager": [
+        ("safe_radius", "optional_float",
+         "Optional extra-safe radius (mm) the motion manager retracts to before "
+         "interior-crossing transitions. Should be >= the grid radius. "
+         "Leave empty to default to 0.", None),
+    ],
     "SphericalMeasurementMotionManager": [
         # No extra parameters beyond the base ones.
     ],

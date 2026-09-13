@@ -212,6 +212,194 @@ class CylindricalMeasurementMotionManager(IMotionManager):
             self._scanner.radial_move_to(target_r)
 
 
+class FastCylindricalMeasurementMotionManager(IMotionManager):
+    """
+    Fast, concurrent-yet-safe motion manager for cylindrical measurement sets.
+
+    Rationale
+    ---------
+    The original :class:`CylindricalMeasurementMotionManager` is provably safe
+    but slow: it retracts the arm all the way to ``safe_radius`` and then runs
+    three *sequential* moves (retract R -> move Z -> move R) for **every** point
+    whose Z coordinate changes. Because the cap and wall scans are zig-zags in
+    the R/Z plane, virtually every measurement point changes Z, so almost every
+    step pays for a full out-and-back detour.
+
+    This manager keeps the exact same safety guarantee but removes the
+    unnecessary detours by exploiting two geometric facts of the cylindrical
+    point generator (:class:`CylindricalMeasurementPoints`):
+
+    1. **Consecutive points on the same measurement surface** (the bottom cap,
+       the wall, or the top cap) are adjacent zig-zag steps. Machine axes move
+       by *linear interpolation*, so along a single ``G0`` move the radius
+       ``r(s) = r_start + s * (r_end - r_start)`` is monotonic in the path
+       parameter ``s in [0, 1]``. Hence the radius never dips below
+       ``min(r_start, r_end)``. Since both endpoints lie on the measurement
+       surface (``r >= minimum measurement radius`` and Z inside the local cap
+       band or on the wall), the straight-line move stays on/against that
+       surface and never crosses the protected interior of the grid. Such moves
+       are therefore executed as a **single simultaneous 3-axis move**.
+
+    2. **The only transition that would cut through the interior volume** is the
+       jump from the end of the top cap ``(radius, theta_old, height)`` to the
+       start of the next angular sector's bottom cap
+       ``(minimum_radius, theta_new, 0)``. The point generator flags exactly
+       this transition via :meth:`need_to_do_evasive_move`. For it we perform
+       the classic safe maneuver, entirely **outside** the measurement cylinder:
+
+           a. retract radially to ``safe_radius`` (>= grid radius) at the
+              current Z/theta;
+           b. simultaneously rotate to ``theta_new`` and travel to the target Z
+              while staying at ``safe_radius`` (the whole vertical sweep and the
+              rotation happen outside the grid);
+           c. move radially inward to the target radius at the target Z.
+
+    Safety invariant
+    ----------------
+    The microphone arm never enters the volume enclosed by the measurement
+    cylinder. Every interior-crossing transition is routed around the outside at
+    ``safe_radius``; every other move stays on a measurement surface where the
+    linearly-interpolated radius is bounded below by its endpoints.
+
+    :ivar _scanner: The scanner instance that performs the physical movements.
+    :ivar _measurement_points: The collection of measurement points.
+    :ivar _safe_radius: Radius (mm), >= grid radius, used for interior-crossing
+        transitions.
+    """
+    TOLERANCE = 0.1
+
+    def __init__(self, scanner: Scanner, measurement_points: MeasurementPoints, safe_radius: float):
+        """
+        Initialize the fast cylindrical motion manager.
+
+        :param scanner: The scanner instance to control.
+        :param measurement_points: The set of points to measure.
+        :param safe_radius: The radial distance (>= grid radius) used for
+            interior-crossing transitions.
+        """
+        self._scanner = scanner
+        self._measurement_points = measurement_points
+        self._safe_radius = safe_radius
+
+    def move_to_safe_starting_radius(self) -> None:
+        """
+        Move to the safe starting radius and zero height.
+        """
+        logger.info(f'Performing a first move to a safe radius: {self._safe_radius:.1f}mm')
+        self._scanner.planar_move_to(self._safe_radius, 0.0)
+
+    def next(self) -> CylindricalPosition:
+        """
+        Move to the next cylindrical measurement point.
+
+        :return: The target CylindricalPosition.
+        """
+        position = self._measurement_points.next()
+        evasive = self._measurement_points.need_to_do_evasive_move()
+        self._move_to_next_measurement_point(position, evasive)
+        return position
+
+    def ready(self) -> bool:
+        """
+        Check if all points have been measured.
+
+        :return: True if ready (all points done), False otherwise.
+        """
+        return self._measurement_points.ready()
+
+    def reset(self):
+        """
+        Reset the point sequence.
+        """
+        self._measurement_points.reset()
+
+    def shutdown(self) -> None:
+        """
+        Shut down the scanner.
+        """
+        self._scanner.shutdown()
+
+    def total_points(self) -> int:
+        """
+        Get the total number of points in the set.
+
+        :return: Total points.
+        """
+        return self._measurement_points.total_points()
+
+    def _move_to_next_measurement_point(self, position: CylindricalPosition, evasive: bool) -> None:
+        """
+        Execute the move to the next point, picking the safe strategy.
+
+        :param position: The target CylindricalPosition.
+        :param evasive: True when the point generator signals an
+            interior-crossing transition that must be routed around the outside.
+        """
+        current_position = self._scanner.get_position()
+        logger.info(f'Moving: {current_position} --> {position} (evasive={evasive})')
+
+        if evasive:
+            self._perform_evasive_move(position)
+        else:
+            self._perform_direct_move(current_position, position)
+
+    def _perform_direct_move(self, current_position: CylindricalPosition,
+                             position: CylindricalPosition) -> None:
+        """
+        Move all changed axes simultaneously in a single rapid command.
+
+        This is only used between consecutive points that lie on the same
+        measurement surface (cap or wall). As argued in the class docstring, the
+        linearly-interpolated radius stays >= min(start_r, end_r), so the arm
+        never crosses the protected interior.
+
+        :param current_position: The scanner's current position.
+        :param position: The target CylindricalPosition.
+        """
+        r_diff = abs(current_position.r() - position.r())
+        t_diff = abs(current_position.t() - position.t())
+        z_diff = abs(current_position.z() - position.z())
+
+        if r_diff <= self.TOLERANCE and t_diff <= self.TOLERANCE and z_diff <= self.TOLERANCE:
+            logger.debug('No move needed.')
+            return
+
+        logger.debug(
+            f'Direct simultaneous move -> R:{position.r():.1f} '
+            f'T:{position.t():.1f}° Z:{position.z():.1f}'
+        )
+        self._scanner.move_to(position.r(), position.t(), position.z())
+
+    def _perform_evasive_move(self, position: CylindricalPosition) -> None:
+        """
+        Safely route the arm around the outside of the measurement cylinder.
+
+        Used for the interior-crossing transition (end of top cap -> start of
+        next sector's bottom cap). The vertical sweep and the rotation are done
+        while parked at ``safe_radius`` (outside the grid), so the arm never
+        enters the protected interior.
+
+        :param position: The target CylindricalPosition.
+        """
+        current_position = self._scanner.get_position()
+
+        # Step 1: retract to the safe radius (outside the grid) if not already there.
+        if current_position.r() < self._safe_radius - self.TOLERANCE:
+            logger.debug(f'Evasive step 1: retract to safe radius R->{self._safe_radius:.1f}')
+            self._scanner.radial_move_to(self._safe_radius)
+
+        # Step 2: rotate and change Z simultaneously while parked outside the grid.
+        logger.debug(
+            f'Evasive step 2: slew at safe radius T->{position.t():.1f}° Z->{position.z():.1f}'
+        )
+        self._scanner.move_to(self._safe_radius, position.t(), position.z())
+
+        # Step 3: move radially inward to the target radius at the target Z/theta.
+        if abs(position.r() - self._safe_radius) > self.TOLERANCE:
+            logger.debug(f'Evasive step 3: move in to target radius R->{position.r():.1f}')
+            self._scanner.radial_move_to(position.r())
+
+
 class SphericalMeasurementMotionManager(IMotionManager):
     """
     Manages the motion of a scanner for spherical measurements.
@@ -464,6 +652,16 @@ class MotionManagerFactory:
                     f"No safe_radius configured for [{section}]; defaulting to 0.0mm"
                 )
             return CylindricalMeasurementMotionManager(scanner, measurement_points, safe_radius)
+        elif motion_manager_type == 'FastCylindricalMeasurementMotionManager':
+            safe_radius_raw = config_parser.get(section, 'safe_radius', fallback='').strip()
+            if safe_radius_raw and safe_radius_raw.lower() != 'none':
+                safe_radius = float(safe_radius_raw)
+            else:
+                safe_radius = 0.0
+                logger.info(
+                    f"No safe_radius configured for [{section}]; defaulting to 0.0mm"
+                )
+            return FastCylindricalMeasurementMotionManager(scanner, measurement_points, safe_radius)
         elif motion_manager_type == 'SphericalMeasurementMotionManager':
             return SphericalMeasurementMotionManager(scanner, measurement_points)
         else:

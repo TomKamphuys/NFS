@@ -52,6 +52,7 @@ mock_interface = "nfs.audio:MockInterfaceAudio"
 
 [project.entry-points."nfs.motion_managers"]
 cylindrical = "nfs.motion_manager:CylindricalMeasurementMotionManager"
+fast_cylindrical = "nfs.motion_manager:FastCylindricalMeasurementMotionManager"
 spherical = "nfs.motion_manager:SphericalMeasurementMotionManager"
 
 [tool.setuptools.packages.find]
