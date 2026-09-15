@@ -339,6 +339,7 @@ class FastCylindricalMeasurementMotionManager(IMotionManager):
         logger.info(f'Moving: {current_position} --> {position} (evasive={evasive})')
 
         if evasive:
+            logger.info(f'Evasive move')
             self._perform_evasive_move(position)
         else:
             self._perform_direct_move(current_position, position)
