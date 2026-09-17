@@ -227,7 +227,8 @@ class FastCylindricalMeasurementMotionManager(IMotionManager):
 
     This manager keeps the exact same safety guarantee but removes the
     unnecessary detours by exploiting two geometric facts of the cylindrical
-    point generator (:class:`CylindricalMeasurementPoints`):
+    point generator (:class:`CylindricalMeasurementPoints`) and the grid generator
+    used in the GUI that injects points via the FileMeasurementPoints class:
 
     1. **Consecutive points on the same measurement surface** (the bottom cap,
        the wall, or the top cap) are adjacent zig-zag steps. Machine axes move
