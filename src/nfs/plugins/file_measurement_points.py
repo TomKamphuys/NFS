@@ -47,21 +47,21 @@ class FileMeasurementPoints:
     def _compute_keep_out_cylinder(self) -> None:
         """
         Deduce the largest cylinder that fits *inside* all measurement points,
-        i.e. the biggest cylinder such that **every** point lies on or outside
+        i.e., the biggest cylinder such that **every** point lies on or outside
         its surface. The protected interior (where the device under test sits) is
         bounded by a wall radius ``r_wall`` and two cap planes ``z_bottom`` and
         ``z_top``.
 
         The three bounds cannot be picked independently, because real grids are
         rarely a clean wall with two perfectly flat caps. On a curved shell (for
-        example a spherical/HALS grid) the points closest to the axis sit near
+        example, a spherical/HALS grid) the points closest to the axis sit near
         the poles, yet their Z is still strictly between the global Z extremes.
         Classifying points as "wall" purely by ``z_min < z < z_max`` therefore
         lumps those inner pole points into the wall and collapses ``r_wall`` to
         the innermost radius of the whole cloud, leaving both caps empty and
         producing a needle-thin cylinder that fails to protect the interior.
 
-        Instead we search for the genuinely *largest* empty cylinder. For every
+        Instead, we search for the genuinely *largest* empty cylinder. For every
         candidate wall radius (each distinct point radius) we treat the points
         strictly inside that radius as cap points: the highest such point below
         mid-height fixes ``z_bottom`` and the lowest such point above mid-height
@@ -108,7 +108,7 @@ class FileMeasurementPoints:
                 best = (r_wall, z_bottom, z_top)
 
         if best is None:
-            # Degenerate grid (e.g. all points at the same height): no interior.
+            # Degenerate grid (e.g., all points at the same height): no interior.
             self._r_wall = min(p.r() for p in self._points)
             self._z_bottom = z_min
             self._z_top = z_max
@@ -157,7 +157,7 @@ class FileMeasurementPoints:
         * both at or above the top cap (``z >= z_top``), or
         * both at or outside the wall radius (``r >= r_wall``).
 
-        In those cases the straight, linearly-interpolated path never enters the
+        In those cases the straight, linearly interpolated path never enters the
         protected interior. Any other transition may cut through the interior and
         is flagged as evasive.
 
@@ -172,7 +172,6 @@ class FileMeasurementPoints:
 
         prev = self._points[self._current_index - 2]
         curr = self._points[self._current_index - 1]
-        tol = self.TOLERANCE
 
         both_below = prev.z() <= self._z_bottom and curr.z() <= self._z_bottom
         both_above = prev.z() >= self._z_top and curr.z() >= self._z_top

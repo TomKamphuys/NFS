@@ -3,6 +3,7 @@ import math
 from abc import ABC, abstractmethod
 from loguru import logger
 from nfs import factory
+from nfs import registry
 
 from .datatypes import CylindricalPosition
 from .utils.geometry import cyl_to_cart
@@ -46,7 +47,7 @@ class IMotionManager(ABC):
         pass
 
     @abstractmethod
-    def reset(self):
+    def reset(self) -> None:
         """
         Reset the motion manager to the beginning of the measurement set.
         """
@@ -81,7 +82,7 @@ class CylindricalMeasurementMotionManager(IMotionManager):
 
         :param scanner: The scanner instance to control.
         :param measurement_points: The set of points to measure.
-        :param safe_radius: The radial distance considered safe for vertical moves.
+        :param safe_radius: The radial distance that is considered safe for vertical moves.
         """
         self._scanner = scanner
         self._measurement_points = measurement_points
@@ -101,7 +102,7 @@ class CylindricalMeasurementMotionManager(IMotionManager):
         :return: The target CylindricalPosition.
         """
         position = self._measurement_points.next()
-        self._move_to_next_measurement_point(position)  # TODO
+        self._move_to_next_measurement_point(position)
         return position
 
     def ready(self) -> bool:
@@ -112,7 +113,7 @@ class CylindricalMeasurementMotionManager(IMotionManager):
         """
         return self._measurement_points.ready()
 
-    def reset(self):
+    def reset(self) -> None:
         """
         Reset the point sequence.
         """
@@ -221,7 +222,7 @@ class FastCylindricalMeasurementMotionManager(IMotionManager):
     The original :class:`CylindricalMeasurementMotionManager` is provably safe
     but slow: it retracts the arm all the way to ``safe_radius`` and then runs
     three *sequential* moves (retract R -> move Z -> move R) for **every** point
-    whose Z coordinate changes. Because the cap and wall scans are zig-zags in
+    whose Z coordinate changes. Because the cap and wall scans are zigzags in
     the R/Z plane, virtually every measurement point changes Z, so almost every
     step pays for a full out-and-back detour.
 
@@ -231,10 +232,10 @@ class FastCylindricalMeasurementMotionManager(IMotionManager):
     used in the GUI that injects points via the FileMeasurementPoints class:
 
     1. **Consecutive points on the same measurement surface** (the bottom cap,
-       the wall, or the top cap) are adjacent zig-zag steps. Machine axes move
+       the wall, or the top cap) are adjacent zigzag steps. Machine axes move
        by *linear interpolation*, so along a single ``G0`` move the radius
        ``r(s) = r_start + s * (r_end - r_start)`` is monotonic in the path
-       parameter ``s in [0, 1]``. Hence the radius never dips below
+       parameter ``s in [0, 1]``. Hence, the radius never dips below
        ``min(r_start, r_end)``. Since both endpoints lie on the measurement
        surface (``r >= minimum measurement radius`` and Z inside the local cap
        band or on the wall), the straight-line move stays on/against that
@@ -245,22 +246,22 @@ class FastCylindricalMeasurementMotionManager(IMotionManager):
        jump from the end of the top cap ``(radius, theta_old, height)`` to the
        start of the next angular sector's bottom cap
        ``(minimum_radius, theta_new, 0)``. The point generator flags exactly
-       this transition via :meth:`need_to_do_evasive_move`. For it we perform
+       this transition via :meth:`need_to_do_evasive_move`. For those we perform
        the classic safe maneuver, entirely **outside** the measurement cylinder:
 
-           a. retract radially to ``safe_radius`` (>= grid radius) at the
+           a. Retract radially to ``safe_radius`` (>= grid radius) at the
               current Z/theta;
-           b. simultaneously rotate to ``theta_new`` and travel to the target Z
+           B. Simultaneously rotate to ``theta_new`` and travel to the target Z
               while staying at ``safe_radius`` (the whole vertical sweep and the
               rotation happen outside the grid);
-           c. move radially inward to the target radius at the target Z.
+           C. Move radially inward to the target radius at the target Z.
 
     Safety invariant
     ----------------
     The microphone arm never enters the volume enclosed by the measurement
     cylinder. Every interior-crossing transition is routed around the outside at
     ``safe_radius``; every other move stays on a measurement surface where the
-    linearly-interpolated radius is bounded below by its endpoints.
+    linearly interpolated radius is bounded below by its endpoints.
 
     :ivar _scanner: The scanner instance that performs the physical movements.
     :ivar _measurement_points: The collection of measurement points.
@@ -308,7 +309,7 @@ class FastCylindricalMeasurementMotionManager(IMotionManager):
         """
         return self._measurement_points.ready()
 
-    def reset(self):
+    def reset(self) -> None:
         """
         Reset the point sequence.
         """
@@ -352,7 +353,7 @@ class FastCylindricalMeasurementMotionManager(IMotionManager):
 
         This is only used between consecutive points that lie on the same
         measurement surface (cap or wall). As argued in the class docstring, the
-        linearly-interpolated radius stays >= min(start_r, end_r), so the arm
+        linearly interpolated radius stays >= min(start_r, end_r), so the arm
         never crosses the protected interior.
 
         :param current_position: The scanner's current position.
@@ -439,7 +440,7 @@ class SphericalMeasurementMotionManager(IMotionManager):
         Moves the scanner to a safe starting position at a specified radius.
 
         This method performs an initial movement of the scanner to a predefined
-        safe radius that allows subsequent operations to proceed without
+        safe radius that allows later operations to proceed without
         interference or collision risks. The radius value is retrieved from the
         scanner's measurement points configuration.
 
@@ -473,7 +474,7 @@ class SphericalMeasurementMotionManager(IMotionManager):
         """
         return self._measurement_points.ready()
 
-    def reset(self):
+    def reset(self) -> None:
         """
         Reset the point sequence.
         """
@@ -602,12 +603,11 @@ class SphericalMeasurementMotionManager(IMotionManager):
             logger.debug('No angular move needed.')
 
 
-from nfs import registry
-
 class MotionManagerFactory:
     """
     Factory for creating MotionManager instances.
     """
+
     @staticmethod
     def create(config_file: str, section: str, scanner: Scanner) -> IMotionManager:
         """
@@ -623,16 +623,16 @@ class MotionManagerFactory:
 
         # Try to get measurement points config from a referenced section OR directly from the current section
         measurement_points_section_name = config_parser.get(section, 'measurement_points', fallback=None)
-        
+
         if measurement_points_section_name and config_parser.has_section(measurement_points_section_name):
             item = dict(config_parser.items(measurement_points_section_name))
         else:
-            # If no reference or referenced section doesn't exist, use the current section
+            # If no reference or referenced section exists, use the current section
             item = dict(config_parser.items(section))
             # Remove keys that are specific to the motion manager itself to avoid passing them to measurement points
             item.pop('type', None)
             item.pop('safe_radius', None)
-        
+
         measurement_points = factory.create(item)
 
         motion_manager_type = config_parser.get(section, 'type')
