@@ -47,7 +47,7 @@ class PathRecordingScanner:
     A test double for :class:`nfs.scanner.Scanner`.
 
     It keeps track of the current cylindrical position, reconstructs the
-    straight-line machine path produced by each move command and records every
+    straight-line machine path produced by each move command, and records every
     segment so the tests can (a) verify safety by sampling the path and
     (b) estimate the motion time.
     """

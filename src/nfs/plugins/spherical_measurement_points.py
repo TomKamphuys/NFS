@@ -4,10 +4,26 @@ from nfs.datatypes import CylindricalPosition
 
 
 class SphericalMeasurementPoints:
+    """
+    Generates roughly evenly spread measurement points on a sphere.
+
+    Points are laid out circle by circle from pole to pole (the classic
+    "equal-area" spiral distribution) and yielded lazily in cylindrical
+    coordinates, with the origin shifted so that zero height sits at the bottom
+    of the sphere.
+    """
+
     def __init__(self,
                  nr_of_points,
                  wall_spacing,
                  radius):
+        """
+        Initialize the spherical measurement-point generator.
+
+        :param nr_of_points: Target number of points to distribute on the sphere.
+        :param wall_spacing: Radial wall spacing (mm) of the measurement shell.
+        :param radius: Radius (mm) of the measurement sphere.
+        """
         self._ready = False
         self._evasive_move_needed = False
         self._radius = float(radius)
@@ -41,6 +57,12 @@ class SphericalMeasurementPoints:
         self._go_to_next_circle()  # start with first circle
 
     def next(self) -> CylindricalPosition:
+        """
+        Advance to and return the next point on the sphere.
+
+        :return: The next measurement point in cylindrical coordinates.
+        :rtype: CylindricalPosition
+        """
         self._go_to_next_point()
 
         x = self._radius * np.sin(self._theta) * np.cos(self._phi)
@@ -53,6 +75,9 @@ class SphericalMeasurementPoints:
         return CylindricalPosition(r, theta/np.pi*180, z + self._radius)  # zero is at bottom of sphere
 
     def _go_to_next_circle(self):
+        """
+        Advance the internal state to the next latitude circle of the sphere.
+        """
         self._theta = np.pi * (self._m + 0.5) / self._m_theta  # theta of the circle
         self._m_phi = round(2 * np.pi * np.sin(self._theta) / self._d_phi)  # number of points on circle
 
@@ -61,6 +86,10 @@ class SphericalMeasurementPoints:
             self._last_circle = True
 
     def _go_to_next_point(self):
+        """
+        Advance to the next point on the current circle, wrapping to the next
+        circle when the current one is exhausted.
+        """
         if self._n == self._m_phi:
             if self._last_circle:
                 self._ready = True
@@ -79,17 +108,43 @@ class SphericalMeasurementPoints:
         return self._radius
 
     def reset(self) -> None:
+        """
+        Reset the generator (no-op for this generator).
+        """
         pass
 
     def ready(self) -> bool:
+        """
+        Report whether all points have been generated.
+
+        :return: True once the sequence is exhausted, False otherwise.
+        :rtype: bool
+        """
         return self._ready
 
     def total_points(self) -> int:
+        """
+        Return the actual number of points distributed on the sphere.
+
+        :return: The total number of measurement points.
+        :rtype: int
+        """
         return self._actual_nr_of_points
 
     def need_to_do_evasive_move(self) -> bool:
+        """
+        Report whether the last returned point needs an evasive transition.
+
+        :return: Always False for this generator.
+        :rtype: bool
+        """
         return self._evasive_move_needed
 
 
 def register(factory) -> None:
+    """
+    Register :class:`SphericalMeasurementPoints` with the given factory.
+
+    :param factory: The factory used to register the measurement-points type.
+    """
     factory.register("SphericalMeasurementPoints", SphericalMeasurementPoints)

@@ -197,6 +197,11 @@ uv run sphinx-build -b html docs docs/_build/html
 
 Docs are auto-deployed to GitHub Pages on every push to `master`.
 
+For a high-level tour of how the pieces fit together — component overview, class
+diagrams and sequence diagrams — see [`docs/architecture.md`](docs/architecture.md)
+(the Mermaid diagrams render directly here on GitHub and on the docs site next to
+the API reference).
+
 ### Plugins
 
 Measurement-point generators live in `src/nfs/plugins/` and are loaded dynamically via
