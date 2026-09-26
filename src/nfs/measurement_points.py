@@ -7,9 +7,9 @@ class MeasurementPoints(Protocol):
     """
     This class defines the protocol for measurement points in a system, ensuring a specific interface
     is followed. It provides functionality to retrieve measurement positions in cylindrical coordinates,
-    check the readiness state of the points, get a specified radius, reset internal states, and determine
-    if evasive maneuvers are necessary. It is typically used in applications involving positional
-    data collection or path planning.
+    check the readiness state of the points, reset internal state, and report the total number of
+    points. Collision avoidance (no-fly zones and evasive moves) is the responsibility of the motion
+    managers, not of the measurement points.
     """
     def next(self) -> CylindricalPosition:
         """
@@ -29,28 +29,9 @@ class MeasurementPoints(Protocol):
         """
         pass
 
-    def get_radius(self) -> float:
-        """
-        Return a nominal radius (mm) associated with the point set.
-
-        :return: The nominal radius in millimeters.
-        :rtype: float
-        """
-        pass
-
     def reset(self) -> None:
         """
         Rewind the sequence so iteration starts again from the first point.
-        """
-        pass
-
-    def need_to_do_evasive_move(self) -> bool:
-        """
-        Report whether reaching the point last returned by :meth:`next`
-        requires a safe evasive maneuver around the protected interior.
-
-        :return: True when an evasive move is required, False otherwise.
-        :rtype: bool
         """
         pass
 

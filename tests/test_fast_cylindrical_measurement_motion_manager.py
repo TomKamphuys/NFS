@@ -26,6 +26,7 @@ from nfs.datatypes import CylindricalPosition
 from nfs.motion_manager import (
     FastCylindricalMeasurementMotionManager,
     CylindricalMeasurementMotionManager,
+    CylindricalNoFlyZone,
 )
 from nfs.plugins.cylindrical_measurement_points import CylindricalMeasurementPoints
 
@@ -159,11 +160,22 @@ def assert_path_is_safe(scanner: PathRecordingScanner,
             )
 
 
-def run_manager(manager_cls, points, safe_radius: float) -> PathRecordingScanner:
+def make_no_fly_zone(points) -> CylindricalNoFlyZone:
+    """Build the cylindrical keep-out zone that matches the grid's interior."""
+    return CylindricalNoFlyZone(
+        r_wall=points._radius - points._delta_radius,
+        z_min=points._cap_spacing,
+        z_max=points._height - points._cap_spacing,
+    )
+
+
+def run_manager(manager_cls, points) -> PathRecordingScanner:
     """Drive a manager through the whole grid and return the scanner used."""
+    no_fly_zone = make_no_fly_zone(points)
     # Start parked outside the grid, as move_to_safe_starting_radius would leave us.
-    scanner = PathRecordingScanner(CylindricalPosition(safe_radius, -180.0, 0.0))
-    manager = manager_cls(scanner, points, safe_radius)
+    scanner = PathRecordingScanner(
+        CylindricalPosition(no_fly_zone.retract_radius, -180.0, 0.0))
+    manager = manager_cls(scanner, points, no_fly_zone)
     manager.move_to_safe_starting_radius()
 
     guard = 0
@@ -181,17 +193,13 @@ def run_manager(manager_cls, points, safe_radius: float) -> PathRecordingScanner
 # 1. Unit tests of the movement strategy.
 # =========================================================================== #
 class _StubPoints:
-    """Minimal MeasurementPoints stub returning scripted points/flags."""
+    """Minimal MeasurementPoints stub returning a scripted point."""
 
-    def __init__(self, point, evasive):
+    def __init__(self, point):
         self._point = point
-        self._evasive = evasive
 
     def next(self):
         return self._point
-
-    def need_to_do_evasive_move(self):
-        return self._evasive
 
     def ready(self):
         return False
@@ -206,8 +214,10 @@ class _StubPoints:
 def test_surface_move_is_single_combined_command():
     scanner = PathRecordingScanner(CylindricalPosition(100.0, 0.0, 10.0))
     target = CylindricalPosition(150.0, 0.0, 20.0)
+    # Both endpoints sit above the zone -> the move is executed directly.
     manager = FastCylindricalMeasurementMotionManager(
-        scanner, _StubPoints(target, evasive=False), safe_radius=350.0)
+        scanner, _StubPoints(target),
+        no_fly_zone=CylindricalNoFlyZone(r_wall=300.0, z_min=0.0, z_max=5.0))
 
     result = manager.next()
 
@@ -221,7 +231,8 @@ def test_no_move_when_already_at_target():
     start = CylindricalPosition(150.0, 0.0, 20.0)
     scanner = PathRecordingScanner(start)
     manager = FastCylindricalMeasurementMotionManager(
-        scanner, _StubPoints(start, evasive=False), safe_radius=350.0)
+        scanner, _StubPoints(start),
+        no_fly_zone=CylindricalNoFlyZone(r_wall=300.0, z_min=0.0, z_max=5.0))
 
     manager.next()
 
@@ -229,25 +240,27 @@ def test_no_move_when_already_at_target():
 
 
 def test_evasive_move_routes_around_the_outside():
-    # Simulate the top-cap -> next-sector-bottom transition.
-    start = CylindricalPosition(300.0, 0.0, 400.0)  # (radius, theta, height)
+    # A blocked move where the arm starts inside the wall radius and must first
+    # retract to the zone's wall radius (the retract radius).
+    start = CylindricalPosition(150.0, 0.0, 200.0)  # inside the keep-out band
     target = CylindricalPosition(50.0, 45.0, 0.0)   # (min_radius, new theta, 0)
     scanner = PathRecordingScanner(start)
     manager = FastCylindricalMeasurementMotionManager(
-        scanner, _StubPoints(target, evasive=True), safe_radius=350.0)
+        scanner, _StubPoints(target),
+        no_fly_zone=CylindricalNoFlyZone(r_wall=300.0, z_min=0.0, z_max=400.0))
 
     manager.next()
 
-    # 1) retract to safe radius, 2) combined slew at safe radius, 3) move in.
+    # 1) retract to the wall radius, 2) combined slew there, 3) move in.
     assert scanner.commands == ['radial', 'combined', 'radial']
 
     retract, slew, move_in = scanner.segments
-    # Step 1 goes out to the safe radius, angle/z unchanged.
-    assert retract[1].r() == pytest.approx(350.0)
-    assert retract[1].z() == pytest.approx(400.0)
-    # Step 2 rotates + drops Z while staying at safe radius.
-    assert slew[0].r() == pytest.approx(350.0)
-    assert slew[1].r() == pytest.approx(350.0)
+    # Step 1 goes out to the wall radius, angle/z unchanged.
+    assert retract[1].r() == pytest.approx(300.0)
+    assert retract[1].z() == pytest.approx(200.0)
+    # Step 2 rotates + drops Z while staying at the wall radius.
+    assert slew[0].r() == pytest.approx(300.0)
+    assert slew[1].r() == pytest.approx(300.0)
     assert slew[1].t() == pytest.approx(45.0)
     assert slew[1].z() == pytest.approx(0.0)
     # Step 3 comes back in to the target radius at the target z.
@@ -256,16 +269,18 @@ def test_evasive_move_routes_around_the_outside():
 
 
 def test_evasive_move_skips_retract_when_already_safe():
-    start = CylindricalPosition(350.0, 0.0, 400.0)
-    target = CylindricalPosition(350.0, 45.0, 0.0)  # target radius == safe radius
+    # Arm already at the wall radius (end of top cap) -> no retract needed.
+    start = CylindricalPosition(300.0, 0.0, 400.0)
+    target = CylindricalPosition(50.0, 45.0, 0.0)
     scanner = PathRecordingScanner(start)
     manager = FastCylindricalMeasurementMotionManager(
-        scanner, _StubPoints(target, evasive=True), safe_radius=350.0)
+        scanner, _StubPoints(target),
+        no_fly_zone=CylindricalNoFlyZone(r_wall=300.0, z_min=0.0, z_max=400.0))
 
     manager.next()
 
-    # Already at safe radius and target radius == safe radius: only the slew.
-    assert scanner.commands == ['combined']
+    # Already at the wall radius: only the slew and the move in.
+    assert scanner.commands == ['combined', 'radial']
 
 
 # =========================================================================== #
@@ -274,7 +289,7 @@ def test_evasive_move_skips_retract_when_already_safe():
 def test_fast_manager_full_scan_never_enters_grid():
     points = make_points()
     inside = keep_out_predicate(points)
-    scanner = run_manager(FastCylindricalMeasurementMotionManager, points, safe_radius=350.0)
+    scanner = run_manager(FastCylindricalMeasurementMotionManager, points)
     assert_path_is_safe(scanner, inside)
 
 
@@ -282,7 +297,7 @@ def test_original_manager_full_scan_never_enters_grid():
     # Sanity check: the original manager is safe too (baseline for the model).
     points = make_points()
     inside = keep_out_predicate(points)
-    scanner = run_manager(CylindricalMeasurementMotionManager, points, safe_radius=350.0)
+    scanner = run_manager(CylindricalMeasurementMotionManager, points)
     assert_path_is_safe(scanner, inside)
 
 
@@ -304,8 +319,10 @@ def test_direct_traverse_would_be_unsafe():
 def test_fast_manager_visits_every_point_in_order():
     """The fast manager must not change which points are measured."""
     points_fast = make_points()
-    scanner_fast = PathRecordingScanner(CylindricalPosition(350.0, -180.0, 0.0))
-    fast = FastCylindricalMeasurementMotionManager(scanner_fast, points_fast, safe_radius=350.0)
+    no_fly_zone = make_no_fly_zone(points_fast)
+    scanner_fast = PathRecordingScanner(
+        CylindricalPosition(no_fly_zone.retract_radius, -180.0, 0.0))
+    fast = FastCylindricalMeasurementMotionManager(scanner_fast, points_fast, no_fly_zone)
     fast.move_to_safe_starting_radius()
 
     points_ref = make_points()
@@ -328,9 +345,9 @@ def test_fast_manager_is_significantly_faster(capsys):
     points_slow = make_points()
 
     scanner_fast = run_manager(
-        FastCylindricalMeasurementMotionManager, points_fast, safe_radius=350.0)
+        FastCylindricalMeasurementMotionManager, points_fast)
     scanner_slow = run_manager(
-        CylindricalMeasurementMotionManager, points_slow, safe_radius=350.0)
+        CylindricalMeasurementMotionManager, points_slow)
 
     t_fast = scanner_fast.total_time()
     t_slow = scanner_slow.total_time()
@@ -356,7 +373,7 @@ def test_fast_manager_is_significantly_faster(capsys):
 
 def test_time_model_is_deterministic():
     points = make_points()
-    a = run_manager(FastCylindricalMeasurementMotionManager, points, safe_radius=350.0).total_time()
+    a = run_manager(FastCylindricalMeasurementMotionManager, points).total_time()
     points = make_points()
-    b = run_manager(FastCylindricalMeasurementMotionManager, points, safe_radius=350.0).total_time()
+    b = run_manager(FastCylindricalMeasurementMotionManager, points).total_time()
     assert math.isclose(a, b)

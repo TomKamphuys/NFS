@@ -15,7 +15,7 @@ def _app():
 
 
 def test_motion_setting_labels_include_normalized_units():
-    assert DISPLAY_LABELS["safe_radius"] == "Safe radius (mm)"
+    assert DISPLAY_LABELS["no_fly_radius"] == "No-fly radius (mm)"
     assert DISPLAY_LABELS["homing_gap"] == "Homing gap (degrees)"
     assert DISPLAY_LABELS["pole_gap"] == "Pole gap (mm)"
 
@@ -162,18 +162,18 @@ def test_settings_dialog_saves_cylindrical_motion_manager_fields(tmp_path):
 
     dialog = SettingsDialog(str(config_file), lambda: None)
     manager_type, _kind = dialog.inputs[("motion_manager", "type")]
-    safe_radius, _kind = dialog.inputs[("motion_manager", "safe_radius")]
+    no_fly_radius, _kind = dialog.inputs[("motion_manager", "no_fly_radius")]
 
     assert isinstance(manager_type, QComboBox)
-    assert isinstance(safe_radius, QLineEdit)
+    assert isinstance(no_fly_radius, QLineEdit)
 
     manager_type.setCurrentText("CylindricalMeasurementMotionManager")
-    safe_radius.setText("123.5")
+    no_fly_radius.setText("123.5")
     dialog.save()
 
     content = config_file.read_text(encoding="utf-8")
     assert "type = CylindricalMeasurementMotionManager" in content
-    assert "safe_radius = 123.5" in content
+    assert "no_fly_radius = 123.5" in content
 
 
 def test_settings_dialog_removes_stale_motion_manager_fields(tmp_path):
@@ -182,7 +182,9 @@ def test_settings_dialog_removes_stale_motion_manager_fields(tmp_path):
     config_file.write_text(
         "[motion_manager]\n"
         "type = CylindricalMeasurementMotionManager\n"
-        "safe_radius = 123.5\n",
+        "no_fly_radius = 123.5\n"
+        "no_fly_z_min = 0.0\n"
+        "no_fly_z_max = 400.0\n",
         encoding="utf-8",
     )
 
@@ -191,12 +193,14 @@ def test_settings_dialog_removes_stale_motion_manager_fields(tmp_path):
 
     assert isinstance(manager_type, QComboBox)
 
+    # The spherical manager has no z-bounds, so those keys become stale.
     manager_type.setCurrentText("SphericalMeasurementMotionManager")
     dialog.save()
 
     content = config_file.read_text(encoding="utf-8")
     assert "type = SphericalMeasurementMotionManager" in content
-    assert "safe_radius" not in content
+    assert "no_fly_z_min" not in content
+    assert "no_fly_z_max" not in content
 
 
 def test_settings_dialog_saves_referenced_measurement_points_fields(tmp_path):

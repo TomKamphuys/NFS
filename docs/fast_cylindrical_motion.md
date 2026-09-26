@@ -15,7 +15,7 @@ coordinate.
 
 The original manager treats *any* `Z` change conservatively:
 
-1. move radially **out** to `safe_radius`,
+1. move radially **out** to the no-fly zone's retract radius,
 2. move `Z`,
 3. move radially **in** to the target radius,
 
@@ -39,12 +39,14 @@ together.
 
 The only move that would cut through the grid is the jump from the end of the
 top cap `(radius, θ_old, height)` to the start of the next sector's bottom cap
-`(min_radius, θ_new, 0)`. The generator flags exactly this move via
-`need_to_do_evasive_move()`. For it the manager:
+`(min_radius, θ_new, 0)`. The manager owns a `CylindricalNoFlyZone` and flags
+exactly this move via `no_fly_zone.blocks_move(current, target)`. For it the
+manager:
 
-a. retracts radially to `safe_radius` (outside the grid),
+a. retracts radially to the no-fly zone's `retract_radius` (its wall radius,
+   just outside the protected interior),
 b. rotates to `θ_new` **and** travels to the target `Z` simultaneously, all
-   while parked at `safe_radius`,
+   while parked at the retract radius,
 c. moves radially inward to the target radius.
 
 ## Why it is still safe (the invariant)
@@ -69,9 +71,9 @@ drops below `min(r_start, r_end)`.
   - *Wall*: `r` stays `≥ radius − Δr` (the wall shell), i.e. it never moves inward
     into the bulk.
 - **Interior-crossing transition.** The entire vertical sweep and rotation happen
-  at `safe_radius ≥ radius`, i.e. completely outside the grid. Only after
-  reaching the target `Z` does the arm move radially inward, along the bottom cap
-  plane.
+  at the no-fly zone's retract radius (its wall radius), i.e. completely outside
+  the protected interior. Only after reaching the target `Z` does the arm move
+  radially inward, along the bottom cap plane.
 
 Pure angular moves are rotations at constant `r`, so they never change how deep
 the arm reaches; combined with the above, no motion ever enters the interior.
@@ -121,8 +123,11 @@ In `config.ini`, set the motion-manager type:
 ```ini
 [motion_manager]
 type = FastCylindricalMeasurementMotionManager
-safe_radius = 350.0   # >= grid radius
+no_fly_radius = 300.0   # wall radius (mm) of the protected interior
+no_fly_z_min = 0.0      # bottom cap plane (mm)
+no_fly_z_max = 400.0    # top cap plane (mm)
 ```
 
-`safe_radius` should be at least the grid radius (ideally with a small margin).
-Everything else (measurement-points configuration) is unchanged.
+The no-fly zone describes the keep-out volume around the device under test; the
+arm retracts to `no_fly_radius` (the wall radius) for evasive moves. Everything
+else (measurement-points configuration) is unchanged.

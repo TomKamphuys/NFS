@@ -1,7 +1,13 @@
 from unittest.mock import Mock, call
 import pytest
 from nfs.datatypes import CylindricalPosition
-from nfs.motion_manager import CylindricalMeasurementMotionManager
+from nfs.motion_manager import CylindricalMeasurementMotionManager, CylindricalNoFlyZone
+
+
+def _zone(retract_radius: float) -> CylindricalNoFlyZone:
+    # z bounds are irrelevant for the slow manager (it always retracts before a
+    # Z move); only the wall radius drives the retract radius.
+    return CylindricalNoFlyZone(r_wall=retract_radius, z_min=0.0, z_max=1000.0)
 
 
 @pytest.fixture
@@ -15,7 +21,7 @@ def measurement_points():
 
 
 def test_move_to_safe_starting_radius(scanner, measurement_points):
-    motion_manager = CylindricalMeasurementMotionManager(scanner, measurement_points, safe_radius=300.0)
+    motion_manager = CylindricalMeasurementMotionManager(scanner, measurement_points, _zone(300.0))
     motion_manager.move_to_safe_starting_radius()
     scanner.planar_move_to.assert_called_once_with(300.0, 0.0)
 
@@ -28,7 +34,7 @@ def test_next_simple_radial(scanner, measurement_points):
     scanner.get_position.return_value = current_pos
     measurement_points.next.return_value = next_pos
 
-    motion_manager = CylindricalMeasurementMotionManager(scanner, measurement_points, safe_radius=200.0)
+    motion_manager = CylindricalMeasurementMotionManager(scanner, measurement_points, _zone(200.0))
     result = motion_manager.next()
 
     assert result == next_pos
@@ -48,7 +54,7 @@ def test_next_complex_planar_move_out(scanner, measurement_points):
                                         CylindricalPosition(200.0, 0.0, 100.0)]  # after vertical
     measurement_points.next.return_value = next_pos
 
-    motion_manager = CylindricalMeasurementMotionManager(scanner, measurement_points, safe_radius=200.0)
+    motion_manager = CylindricalMeasurementMotionManager(scanner, measurement_points, _zone(200.0))
     motion_manager.next()
 
     # Planar move:
@@ -67,7 +73,7 @@ def test_next_angular_move(scanner, measurement_points):
     scanner.get_position.return_value = current_pos
     measurement_points.next.return_value = next_pos
 
-    motion_manager = CylindricalMeasurementMotionManager(scanner, measurement_points, safe_radius=200.0)
+    motion_manager = CylindricalMeasurementMotionManager(scanner, measurement_points, _zone(200.0))
     motion_manager.next()
 
     scanner.angular_move_to.assert_called_once_with(90.0)
@@ -78,17 +84,17 @@ def test_next_angular_move(scanner, measurement_points):
 
 def test_ready(scanner, measurement_points):
     measurement_points.ready.return_value = True
-    motion_manager = CylindricalMeasurementMotionManager(scanner, measurement_points, safe_radius=200.0)
+    motion_manager = CylindricalMeasurementMotionManager(scanner, measurement_points, _zone(200.0))
     assert motion_manager.ready() is True
 
 
 def test_reset(scanner, measurement_points):
-    motion_manager = CylindricalMeasurementMotionManager(scanner, measurement_points, safe_radius=200.0)
+    motion_manager = CylindricalMeasurementMotionManager(scanner, measurement_points, _zone(200.0))
     motion_manager.reset()
     measurement_points.reset.assert_called_once()
 
 
 def test_shutdown(scanner, measurement_points):
-    motion_manager = CylindricalMeasurementMotionManager(scanner, measurement_points, safe_radius=200.0)
+    motion_manager = CylindricalMeasurementMotionManager(scanner, measurement_points, _zone(200.0))
     motion_manager.shutdown()
     scanner.shutdown.assert_called_once()

@@ -25,7 +25,6 @@ class SphericalMeasurementPoints:
         :param radius: Radius (mm) of the measurement sphere.
         """
         self._ready = False
-        self._evasive_move_needed = False
         self._radius = float(radius)
         self._wall_spacing = float(wall_spacing)
         self._nr_of_points = int(nr_of_points)
@@ -99,14 +98,6 @@ class SphericalMeasurementPoints:
         self._phi = 2 * np.pi * self._n / self._m_phi  # phi for every point
         self._n += 1
 
-    def get_radius(self) -> float:
-        """
-        Returns the radius of the sphere.
-
-        :return: The sphere radius.
-        """
-        return self._radius
-
     def reset(self) -> None:
         """
         Reset the generator (no-op for this generator).
@@ -130,15 +121,6 @@ class SphericalMeasurementPoints:
         :rtype: int
         """
         return self._actual_nr_of_points
-
-    def need_to_do_evasive_move(self) -> bool:
-        """
-        Report whether the last returned point needs an evasive transition.
-
-        :return: Always False for this generator.
-        :rtype: bool
-        """
-        return self._evasive_move_needed
 
 
 def register(factory) -> None:

@@ -41,7 +41,6 @@ class CylindricalMeasurementPoints:
         self._radius = float(radius)
         self._height = float(height)
         self._minimum_radius = 50
-        self._evasive_move_needed = False
         self._ready = False
         self._current_angle = -180  # No stitching errors where it matters most (0 degrees)
         self._current_height = 0
@@ -67,7 +66,6 @@ class CylindricalMeasurementPoints:
         :raises Exception: If the internal surface state is inconsistent.
         """
         if self._bottom_cap:
-            self._evasive_move_needed = False
             new_position = self.outwards_cap()
 
             # if last points of cap, set stuff for wall
@@ -78,7 +76,6 @@ class CylindricalMeasurementPoints:
                 self._top_cap = False
             return new_position
         elif self._wall:
-            self._evasive_move_needed = False
             new_position = self.wall()
 
             # if last position of wall, set stuff for top cap
@@ -90,7 +87,6 @@ class CylindricalMeasurementPoints:
                 self._current_radius = self._minimum_radius - self._delta_radius  # so we start at minimum radius
             return new_position
         elif self._top_cap:
-            self._evasive_move_needed = False
             new_position = self.outwards_cap()
 
             # if last position of cap, get ready for new angle
@@ -99,7 +95,6 @@ class CylindricalMeasurementPoints:
                 self._bottom_cap = True
                 self._wall = False
                 self._top_cap = False
-                self._evasive_move_needed = True
                 self._current_radius = self._minimum_radius - self._delta_radius  # so we start at minimum radius
                 self._current_height = 0
                 self._current_angle += self._delta_angle
@@ -167,14 +162,6 @@ class CylindricalMeasurementPoints:
             self._current_angle,
             self._current_height)
 
-    def get_radius(self) -> float:
-        """
-        Returns the radius of the cylinder.
-
-        :return: The cylinder radius.
-        """
-        return self._radius
-
     def reset(self) -> None:
         """
         Reset the generator (no-op; state is not rewound for this generator).
@@ -189,18 +176,6 @@ class CylindricalMeasurementPoints:
         :rtype: bool
         """
         return self._ready
-
-    def need_to_do_evasive_move(self) -> bool:
-        """
-        Report whether the last returned point needs an evasive transition.
-
-        This is True only for the jump from the end of a top cap to the start of
-        the next sector's bottom cap, which would otherwise cross the interior.
-
-        :return: True when an evasive move is required, False otherwise.
-        :rtype: bool
-        """
-        return self._evasive_move_needed
 
     def total_points(self) -> int:
         """

@@ -11,6 +11,129 @@ from .measurement_points import MeasurementPoints
 from .scanner import Scanner
 
 
+class CylindricalNoFlyZone:
+    """
+    A cylindrical keep-out (no-fly) volume around the device under test.
+
+    The protected interior is the volume that is *radially inside* a wall radius
+    and *vertically between* a bottom and a top cap plane::
+
+        r < r_wall  and  z_min < z < z_max
+
+    All legitimate measurement points lie on or outside this volume (on the
+    caps or against the wall). A straight machine move between two points is
+    linearly interpolated in the ``r`` and ``z`` axes, so the radius and height
+    vary monotonically along the path. The move can therefore only enter the
+    interior when it does *not* stay entirely on one side of a single boundary.
+    It is guaranteed safe when the two endpoints are:
+
+    * both at or below the bottom cap (``z <= z_min``), or
+    * both at or above the top cap (``z >= z_max``), or
+    * both at or outside the wall radius (``r >= r_wall``).
+
+    :ivar _r_wall: Wall radius (mm) of the protected interior.
+    :ivar _z_min: Bottom cap plane (mm) of the protected interior.
+    :ivar _z_max: Top cap plane (mm) of the protected interior.
+    """
+
+    def __init__(self, r_wall: float, z_min: float, z_max: float):
+        """
+        Build a cylindrical no-fly zone.
+
+        :param r_wall: Wall radius (mm). Use ``0`` (or less) to disable.
+        :param z_min: Bottom cap plane (mm).
+        :param z_max: Top cap plane (mm).
+        """
+        self._r_wall = float(r_wall)
+        self._z_min = float(z_min)
+        self._z_max = float(z_max)
+
+    @property
+    def r_wall(self) -> float:
+        return self._r_wall
+
+    @property
+    def z_min(self) -> float:
+        return self._z_min
+
+    @property
+    def z_max(self) -> float:
+        return self._z_max
+
+    @property
+    def retract_radius(self) -> float:
+        """
+        Radius (mm) just outside the keep-out zone to which the arm retracts for
+        an evasive maneuver. At (or beyond) the wall radius every height is
+        outside the protected interior, so this equals the wall radius.
+        """
+        return self._r_wall
+
+    def blocks_move(self, start: CylindricalPosition, end: CylindricalPosition) -> bool:
+        """
+        Report whether a straight move from ``start`` to ``end`` could cross the
+        protected interior and therefore requires an evasive maneuver.
+
+        :param start: The move's start position.
+        :param end: The move's target position.
+        :return: True when the direct move is unsafe, False otherwise.
+        """
+        if self._r_wall <= 0.0 or self._z_max <= self._z_min:
+            # Degenerate/disabled zone: nothing to protect.
+            return False
+        both_below = start.z() <= self._z_min and end.z() <= self._z_min
+        both_above = start.z() >= self._z_max and end.z() >= self._z_max
+        both_outside = start.r() >= self._r_wall and end.r() >= self._r_wall
+        return not (both_below or both_above or both_outside)
+
+
+class SphericalNoFlyZone:
+    """
+    A spherical keep-out (no-fly) volume around the device under test.
+
+    The protected interior is the ball of radius ``radius`` centred on the
+    origin (in the machine's r/z plane, ``length = sqrt(r**2 + z**2)``). The
+    spherical motion manager travels along constant-radius arcs and monotonic
+    radial moves, so the smallest ``length`` reached along a move equals the
+    smaller of its two endpoints' lengths. A move is therefore only unsafe when
+    one of its endpoints lies inside the ball.
+
+    :ivar _radius: Radius (mm) of the protected sphere.
+    """
+
+    def __init__(self, radius: float):
+        """
+        Build a spherical no-fly zone.
+
+        :param radius: Sphere radius (mm). Use ``0`` (or less) to disable.
+        """
+        self._radius = float(radius)
+
+    @property
+    def radius(self) -> float:
+        return self._radius
+
+    @property
+    def retract_radius(self) -> float:
+        """
+        Radius (mm) just outside the keep-out sphere to which the arm retracts
+        for an evasive maneuver. This equals the sphere radius.
+        """
+        return self._radius
+
+    def blocks_move(self, start: CylindricalPosition, end: CylindricalPosition) -> bool:
+        """
+        Report whether a move from ``start`` to ``end`` could enter the sphere.
+
+        :param start: The move's start position.
+        :param end: The move's target position.
+        :return: True when the direct move is unsafe, False otherwise.
+        """
+        if self._radius <= 0.0:
+            return False
+        return min(start.length(), end.length()) < self._radius
+
+
 class IMotionManager(ABC):
     """
     Interface for implementing a motion manager.
@@ -76,24 +199,28 @@ class CylindricalMeasurementMotionManager(IMotionManager):
     """
     TOLERANCE = 0.1
 
-    def __init__(self, scanner: Scanner, measurement_points: MeasurementPoints, safe_radius: float):
+    def __init__(self, scanner: Scanner, measurement_points: MeasurementPoints,
+                 no_fly_zone: 'CylindricalNoFlyZone'):
         """
         Initialize the cylindrical motion manager.
 
         :param scanner: The scanner instance to control.
         :param measurement_points: The set of points to measure.
-        :param safe_radius: The radial distance that is considered safe for vertical moves.
+        :param no_fly_zone: The cylindrical keep-out volume around the device
+            under test. Vertical moves are performed at the zone's retract
+            radius, just outside the protected interior.
         """
         self._scanner = scanner
         self._measurement_points = measurement_points
-        self._safe_radius = safe_radius
+        self._no_fly_zone = no_fly_zone
 
     def move_to_safe_starting_radius(self) -> None:
         """
-        Move to the safe starting radius and zero height.
+        Move to the safe starting radius (just outside the no-fly zone) and zero height.
         """
-        logger.info(f'Performing a first move to a safe radius: {self._safe_radius:.1f}mm')
-        self._scanner.planar_move_to(self._safe_radius, 0.0)
+        retract_radius = self._no_fly_zone.retract_radius
+        logger.info(f'Performing a first move to a safe radius: {retract_radius:.1f}mm')
+        self._scanner.planar_move_to(retract_radius, 0.0)
 
     def next(self) -> CylindricalPosition:
         """
@@ -186,15 +313,17 @@ class CylindricalMeasurementMotionManager(IMotionManager):
             return
 
         # Strategy:
-        # 1. If Z needs to change, we MUST be at safe_radius first.
+        # 1. If Z needs to change, we MUST be at the retract radius first.
         # 2. Then change Z.
         # 3. Then move to target R.
 
         if z_diff > self.TOLERANCE:
-            # Step 1: Move to Safe Radius if not already there
-            if current_position.r() < self._safe_radius - self.TOLERANCE:
-                logger.debug(f'Moving out to safe radius: R->{self._safe_radius:.1f}')
-                self._scanner.radial_move_to(self._safe_radius)
+            # Step 1: Move to the retract radius (just outside the no-fly zone)
+            # if not already there.
+            retract_radius = self._no_fly_zone.retract_radius
+            if current_position.r() < retract_radius - self.TOLERANCE:
+                logger.debug(f'Moving out to safe radius: R->{retract_radius:.1f}')
+                self._scanner.radial_move_to(retract_radius)
 
             # Step 2: Move Z
             logger.debug(f'Moving Z at safe radius: Z->{target_z:.1f}')
@@ -220,8 +349,8 @@ class FastCylindricalMeasurementMotionManager(IMotionManager):
     Rationale
     ---------
     The original :class:`CylindricalMeasurementMotionManager` is provably safe
-    but slow: it retracts the arm all the way to ``safe_radius`` and then runs
-    three *sequential* moves (retract R -> move Z -> move R) for **every** point
+    but slow: it retracts the arm all the way to the no-fly zone's retract radius
+    and then runs three *sequential* moves (retract R -> move Z -> move R) for **every** point
     whose Z coordinate changes. Because the cap and wall scans are zigzags in
     the R/Z plane, virtually every measurement point changes Z, so almost every
     step pays for a full out-and-back detour.
@@ -245,50 +374,53 @@ class FastCylindricalMeasurementMotionManager(IMotionManager):
     2. **The only transition that would cut through the interior volume** is the
        jump from the end of the top cap ``(radius, theta_old, height)`` to the
        start of the next angular sector's bottom cap
-       ``(minimum_radius, theta_new, 0)``. The point generator flags exactly
-       this transition via :meth:`need_to_do_evasive_move`. For those we perform
-       the classic safe maneuver, entirely **outside** the measurement cylinder:
+       ``(minimum_radius, theta_new, 0)``. The manager's
+       :class:`CylindricalNoFlyZone` flags exactly this transition via
+       :meth:`CylindricalNoFlyZone.blocks_move`. For those we perform the classic
+       safe maneuver, entirely **outside** the protected interior:
 
-           a. Retract radially to ``safe_radius`` (>= grid radius) at the
+           a. Retract radially to the no-fly zone's ``retract_radius`` at the
               current Z/theta;
            B. Simultaneously rotate to ``theta_new`` and travel to the target Z
-              while staying at ``safe_radius`` (the whole vertical sweep and the
-              rotation happen outside the grid);
+              while staying at the retract radius (the whole vertical sweep and
+              the rotation happen outside the interior);
            C. Move radially inward to the target radius at the target Z.
 
     Safety invariant
     ----------------
-    The microphone arm never enters the volume enclosed by the measurement
-    cylinder. Every interior-crossing transition is routed around the outside at
-    ``safe_radius``; every other move stays on a measurement surface where the
+    The microphone arm never enters the protected interior of the no-fly zone.
+    Every interior-crossing transition is routed around the outside at the zone's
+    retract radius; every other move stays on a measurement surface where the
     linearly interpolated radius is bounded below by its endpoints.
 
     :ivar _scanner: The scanner instance that performs the physical movements.
     :ivar _measurement_points: The collection of measurement points.
-    :ivar _safe_radius: Radius (mm), >= grid radius, used for interior-crossing
-        transitions.
+    :ivar _no_fly_zone: The cylindrical keep-out volume around the device under test.
     """
     TOLERANCE = 0.1
 
-    def __init__(self, scanner: Scanner, measurement_points: MeasurementPoints, safe_radius: float):
+    def __init__(self, scanner: Scanner, measurement_points: MeasurementPoints,
+                 no_fly_zone: 'CylindricalNoFlyZone'):
         """
         Initialize the fast cylindrical motion manager.
 
         :param scanner: The scanner instance to control.
         :param measurement_points: The set of points to measure.
-        :param safe_radius: The radial distance (>= grid radius) used for
-            interior-crossing transitions.
+        :param no_fly_zone: The cylindrical keep-out volume around the device
+            under test. A move is routed around the outside (at the zone's
+            retract radius) whenever it would cross this zone.
         """
         self._scanner = scanner
         self._measurement_points = measurement_points
-        self._safe_radius = safe_radius
+        self._no_fly_zone = no_fly_zone
 
     def move_to_safe_starting_radius(self) -> None:
         """
-        Move to the safe starting radius and zero height.
+        Move to the safe starting radius (just outside the no-fly zone) and zero height.
         """
-        logger.info(f'Performing a first move to a safe radius: {self._safe_radius:.1f}mm')
-        self._scanner.planar_move_to(self._safe_radius, 0.0)
+        retract_radius = self._no_fly_zone.retract_radius
+        logger.info(f'Performing a first move to a safe radius: {retract_radius:.1f}mm')
+        self._scanner.planar_move_to(retract_radius, 0.0)
 
     def next(self) -> CylindricalPosition:
         """
@@ -297,7 +429,8 @@ class FastCylindricalMeasurementMotionManager(IMotionManager):
         :return: The target CylindricalPosition.
         """
         position = self._measurement_points.next()
-        evasive = self._measurement_points.need_to_do_evasive_move()
+        current_position = self._scanner.get_position()
+        evasive = self._no_fly_zone.blocks_move(current_position, position)
         self._move_to_next_measurement_point(position, evasive)
         return position
 
@@ -379,26 +512,27 @@ class FastCylindricalMeasurementMotionManager(IMotionManager):
 
         Used for the interior-crossing transition (end of top cap -> start of
         next sector's bottom cap). The vertical sweep and the rotation are done
-        while parked at ``safe_radius`` (outside the grid), so the arm never
-        enters the protected interior.
+        while parked at the no-fly zone's retract radius (outside the protected
+        interior), so the arm never enters it.
 
         :param position: The target CylindricalPosition.
         """
         current_position = self._scanner.get_position()
+        retract_radius = self._no_fly_zone.retract_radius
 
-        # Step 1: retract to the safe radius (outside the grid) if not already there.
-        if current_position.r() < self._safe_radius - self.TOLERANCE:
-            logger.debug(f'Evasive step 1: retract to safe radius R->{self._safe_radius:.1f}')
-            self._scanner.radial_move_to(self._safe_radius)
+        # Step 1: retract to the retract radius (just outside the zone) if not already there.
+        if current_position.r() < retract_radius - self.TOLERANCE:
+            logger.debug(f'Evasive step 1: retract to safe radius R->{retract_radius:.1f}')
+            self._scanner.radial_move_to(retract_radius)
 
-        # Step 2: rotate and change Z simultaneously while parked outside the grid.
+        # Step 2: rotate and change Z simultaneously while parked outside the zone.
         logger.debug(
             f'Evasive step 2: slew at safe radius T->{position.t():.1f}° Z->{position.z():.1f}'
         )
-        self._scanner.move_to(self._safe_radius, position.t(), position.z())
+        self._scanner.move_to(retract_radius, position.t(), position.z())
 
         # Step 3: move radially inward to the target radius at the target Z/theta.
-        if abs(position.r() - self._safe_radius) > self.TOLERANCE:
+        if abs(position.r() - retract_radius) > self.TOLERANCE:
             logger.debug(f'Evasive step 3: move in to target radius R->{position.r():.1f}')
             self._scanner.radial_move_to(position.r())
 
@@ -425,30 +559,34 @@ class SphericalMeasurementMotionManager(IMotionManager):
     DEGREE_CONVERSION_FACTOR = 180.0 / math.pi
     TOLERANCE = 0.1
 
-    def __init__(self, scanner: Scanner, measurement_points: MeasurementPoints):
+    def __init__(self, scanner: Scanner, measurement_points: MeasurementPoints,
+                 no_fly_zone: 'SphericalNoFlyZone'):
         """
         Initialize the spherical motion manager.
 
         :param scanner: The scanner instance to control.
         :param measurement_points: The set of points to measure.
+        :param no_fly_zone: The spherical keep-out volume around the device
+            under test. A move is routed around the outside (at the zone's
+            retract radius) whenever it would enter this zone.
         """
         self._scanner = scanner
         self._measurement_points = measurement_points
+        self._no_fly_zone = no_fly_zone
 
     def move_to_safe_starting_radius(self) -> None:
         """
-        Moves the scanner to a safe starting position at a specified radius.
+        Moves the scanner to a safe starting position just outside the no-fly zone.
 
-        This method performs an initial movement of the scanner to a predefined
-        safe radius that allows later operations to proceed without
-        interference or collision risks. The radius value is retrieved from the
-        scanner's measurement points configuration.
+        This method performs an initial movement of the scanner to the no-fly
+        zone's retract radius that allows later operations to proceed without
+        interference or collision risks.
 
         :return: None
         """
-        radius = self._measurement_points.get_radius()
-        logger.info(f'Performing a first move to a safe radius: {radius:.1f}mm')
-        self._scanner.planar_move_to(radius, 0.0)
+        retract_radius = self._no_fly_zone.retract_radius
+        logger.info(f'Performing a first move to a safe radius: {retract_radius:.1f}mm')
+        self._scanner.planar_move_to(retract_radius, 0.0)
 
     def next(self) -> CylindricalPosition:
         """
@@ -517,6 +655,41 @@ class SphericalMeasurementMotionManager(IMotionManager):
         """
         current_position = self._scanner.get_position()
         logger.info(f'Moving: {current_position} --> {position}')
+
+        if self._no_fly_zone.blocks_move(current_position, position):
+            logger.info('Evasive move')
+            self._perform_evasive_move(position)
+            return
+
+        self._perform_angular_move(position)
+        self._perform_radial_move(position)
+        self._perform_circular_arc_move(position)
+
+    def _perform_evasive_move(self, position: CylindricalPosition) -> None:
+        """
+        Safely route the arm around the outside of the protected sphere.
+
+        The arm is first retracted radially to the no-fly zone's retract radius
+        (outside the keep-out sphere) at the current direction, then the normal angular,
+        radial and arc moves are performed to reach the target. Because the
+        retract happens outside the sphere and the subsequent moves converge on
+        the (safe) target from the outside, the arm never enters the interior.
+
+        :param position: The target CylindricalPosition.
+        """
+        current_position = self._scanner.get_position()
+        retract_radius = self._no_fly_zone.retract_radius
+        current_length = current_position.length()
+        if current_length > self.TOLERANCE and current_length < retract_radius - self.TOLERANCE:
+            ratio = retract_radius / current_length
+            x, y, z = cyl_to_cart(current_position)
+            x *= ratio
+            y *= ratio
+            z *= ratio
+            x_plane = math.sqrt(x ** 2 + y ** 2)
+            logger.debug(f'Evasive: retract to safe radius {retract_radius:.1f}mm')
+            self._scanner.planar_move_to(x_plane, z)
+
         self._perform_angular_move(position)
         self._perform_radial_move(position)
         self._perform_circular_arc_move(position)
@@ -624,14 +797,21 @@ class MotionManagerFactory:
         # Try to get measurement points config from a referenced section OR directly from the current section
         measurement_points_section_name = config_parser.get(section, 'measurement_points', fallback=None)
 
+        # Keys that belong to the motion manager itself (not to the measurement
+        # points) and must never be forwarded to the measurement-points factory.
+        motion_manager_only_keys = (
+            'type',
+            'no_fly_radius', 'no_fly_z_min', 'no_fly_z_max',
+        )
+
         if measurement_points_section_name and config_parser.has_section(measurement_points_section_name):
             item = dict(config_parser.items(measurement_points_section_name))
         else:
             # If no reference or referenced section exists, use the current section
             item = dict(config_parser.items(section))
             # Remove keys that are specific to the motion manager itself to avoid passing them to measurement points
-            item.pop('type', None)
-            item.pop('safe_radius', None)
+            for key in motion_manager_only_keys:
+                item.pop(key, None)
 
         measurement_points = factory.create(item)
 
@@ -644,27 +824,41 @@ class MotionManagerFactory:
         except (ValueError, TypeError):
             pass
 
+        def _read_float(key: str) -> float | None:
+            raw = config_parser.get(section, key, fallback='').strip()
+            if raw and raw.lower() != 'none':
+                return float(raw)
+            return None
+
+        def _read_cylindrical_no_fly_zone() -> CylindricalNoFlyZone:
+            r_wall = _read_float('no_fly_radius')
+            z_min = _read_float('no_fly_z_min')
+            z_max = _read_float('no_fly_z_max')
+            if r_wall is None or z_min is None or z_max is None:
+                logger.warning(
+                    f"Incomplete cylindrical no-fly zone for [{section}] "
+                    f"(no_fly_radius/no_fly_z_min/no_fly_z_max); keep-out disabled."
+                )
+                return CylindricalNoFlyZone(0.0, 0.0, 0.0)
+            return CylindricalNoFlyZone(r_wall, z_min, z_max)
+
+        def _read_spherical_no_fly_zone() -> SphericalNoFlyZone:
+            radius = _read_float('no_fly_radius')
+            if radius is None:
+                logger.warning(
+                    f"No no_fly_radius configured for [{section}]; keep-out disabled."
+                )
+                return SphericalNoFlyZone(0.0)
+            return SphericalNoFlyZone(radius)
+
         if motion_manager_type == 'CylindricalMeasurementMotionManager':
-            safe_radius_raw = config_parser.get(section, 'safe_radius', fallback='').strip()
-            if safe_radius_raw and safe_radius_raw.lower() != 'none':
-                safe_radius = float(safe_radius_raw)
-            else:
-                safe_radius = 0.0
-                logger.info(
-                    f"No safe_radius configured for [{section}]; defaulting to 0.0mm"
-                )
-            return CylindricalMeasurementMotionManager(scanner, measurement_points, safe_radius)
+            return CylindricalMeasurementMotionManager(
+                scanner, measurement_points, _read_cylindrical_no_fly_zone())
         elif motion_manager_type == 'FastCylindricalMeasurementMotionManager':
-            safe_radius_raw = config_parser.get(section, 'safe_radius', fallback='').strip()
-            if safe_radius_raw and safe_radius_raw.lower() != 'none':
-                safe_radius = float(safe_radius_raw)
-            else:
-                safe_radius = 0.0
-                logger.info(
-                    f"No safe_radius configured for [{section}]; defaulting to 0.0mm"
-                )
-            return FastCylindricalMeasurementMotionManager(scanner, measurement_points, safe_radius)
+            return FastCylindricalMeasurementMotionManager(
+                scanner, measurement_points, _read_cylindrical_no_fly_zone())
         elif motion_manager_type == 'SphericalMeasurementMotionManager':
-            return SphericalMeasurementMotionManager(scanner, measurement_points)
+            return SphericalMeasurementMotionManager(
+                scanner, measurement_points, _read_spherical_no_fly_zone())
         else:
             raise ValueError(f'Unknown motion manager type: {motion_manager_type}')

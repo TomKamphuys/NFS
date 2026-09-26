@@ -26,7 +26,9 @@ DISPLAY_LABELS = {
     "default_project_dir": "Default session folder",
     "cal_tool_height": "Calibration tool height (mm)",
     "feed_rate": "Feed rate (mm/min)",
-    "safe_radius": "Safe radius (mm)",
+    "no_fly_radius": "No-fly radius (mm)",
+    "no_fly_z_min": "No-fly bottom Z (mm)",
+    "no_fly_z_max": "No-fly top Z (mm)",
     "homing_gap": "Homing gap (degrees)",
     "pole_gap": "Pole gap (mm)",
     "cap_spacing": "Cap spacing (mm)",
@@ -54,18 +56,27 @@ DISPLAY_LABELS = {
 # ---------------------------------------------------------------------------
 MOTION_MANAGER_TYPES: Dict[str, List[SchemaEntry]] = {
     "CylindricalMeasurementMotionManager": [
-        ("safe_radius", "optional_float",
-         "Optional extra-safe radius (mm) the motion manager retracts to before slewing. "
-         "Leave empty to default to 0 and avoid extra safe-radius intervention.", None),
+        ("no_fly_radius", "optional_float",
+         "Wall radius (mm) of the cylindrical no-fly (keep-out) zone around the "
+         "device under test. Leave empty to disable the keep-out zone.", None),
+        ("no_fly_z_min", "optional_float",
+         "Bottom cap plane (mm) of the cylindrical no-fly zone.", None),
+        ("no_fly_z_max", "optional_float",
+         "Top cap plane (mm) of the cylindrical no-fly zone.", None),
     ],
     "FastCylindricalMeasurementMotionManager": [
-        ("safe_radius", "optional_float",
-         "Optional extra-safe radius (mm) the motion manager retracts to before "
-         "interior-crossing transitions. Should be >= the grid radius. "
-         "Leave empty to default to 0.", None),
+        ("no_fly_radius", "optional_float",
+         "Wall radius (mm) of the cylindrical no-fly (keep-out) zone around the "
+         "device under test. Leave empty to disable the keep-out zone.", None),
+        ("no_fly_z_min", "optional_float",
+         "Bottom cap plane (mm) of the cylindrical no-fly zone.", None),
+        ("no_fly_z_max", "optional_float",
+         "Top cap plane (mm) of the cylindrical no-fly zone.", None),
     ],
     "SphericalMeasurementMotionManager": [
-        # No extra parameters beyond the base ones.
+        ("no_fly_radius", "optional_float",
+         "Radius (mm) of the spherical no-fly (keep-out) zone around the device "
+         "under test. Leave empty to disable the keep-out zone.", None),
     ],
 }
 

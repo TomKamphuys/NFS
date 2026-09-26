@@ -118,10 +118,17 @@ classDiagram
         <<protocol>>
         +next() CylindricalPosition
         +ready() bool
-        +get_radius() float
         +reset()
-        +need_to_do_evasive_move() bool
         +total_points() int
+    }
+
+    class CylindricalNoFlyZone {
+        +blocks_move(start, end) bool
+        +retract_radius float
+    }
+    class SphericalNoFlyZone {
+        +blocks_move(start, end) bool
+        +retract_radius float
     }
 
     class IAudio {
@@ -152,6 +159,9 @@ classDiagram
     Scanner o--> IGrblController
     IMotionManager o--> Scanner
     IMotionManager o--> MeasurementPoints
+    CylindricalMeasurementMotionManager o--> CylindricalNoFlyZone
+    FastCylindricalMeasurementMotionManager o--> CylindricalNoFlyZone
+    SphericalMeasurementMotionManager o--> SphericalNoFlyZone
 ```
 
 ### Building the object graph (factories & plugins)

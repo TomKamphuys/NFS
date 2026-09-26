@@ -120,19 +120,6 @@ class SphericalMeasurementPointsArcsRandom:
                 self._thetas = np.append(self._thetas, theta)
                 self._phis = np.append(self._phis, phi)
 
-    def get_radius(self) -> float:
-        """
-        Represents a function to retrieve the radius of a given object.
-
-        This method is designed to return the private attribute `_radius`, which stores
-        the radius value. It does not modify any attribute or take any parameters, and
-        it returns the radius as a float.
-
-        :return: The radius of the object.
-        :rtype: float
-        """
-        return self._radius
-
     def next(self) -> CylindricalPosition:
         """
         Retrieve the next cylindrical position from the internal lists of cylindrical
@@ -168,9 +155,6 @@ class SphericalMeasurementPointsArcsRandom:
 
     def total_points(self) -> int:
         return self._actual_nr_of_points
-
-    def need_to_do_evasive_move(self) -> bool:
-        return False
 
 
 def register(factory) -> None:

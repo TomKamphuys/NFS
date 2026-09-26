@@ -17,7 +17,9 @@ def test_motion_manager_factory_direct_config(tmp_path):
     }
     config['motion_manager'] = {
         'type': 'CylindricalMeasurementMotionManager',
-        'safe_radius': '101.0',
+        'no_fly_radius': '101.0',
+        'no_fly_z_min': '0.0',
+        'no_fly_z_max': '400.0',
         'measurement_points_type': 'FileMeasurementPoints',
         'filename': 'jan_cylinder_grid1.csv',
         'homing_gap': '0.0',
@@ -42,7 +44,7 @@ def test_motion_manager_factory_direct_config(tmp_path):
         
         assert mm.__class__.__name__ == 'CylindricalMeasurementMotionManager'
         assert isinstance(mm._measurement_points, FileMeasurementPoints)
-        assert mm._safe_radius == 101.0
+        assert mm._no_fly_zone.retract_radius == 101.0
         assert mm._measurement_points.total_points() == 1
     finally:
         os.chdir(old_cwd)
@@ -59,7 +61,9 @@ def test_motion_manager_factory_legacy_config(tmp_path):
     }
     config['motion_manager'] = {
         'type': 'CylindricalMeasurementMotionManager',
-        'safe_radius': '101.0',
+        'no_fly_radius': '101.0',
+        'no_fly_z_min': '0.0',
+        'no_fly_z_max': '400.0',
         'measurement_points': 'cylindrical_grid'
     }
     config['cylindrical_grid'] = {
@@ -85,7 +89,7 @@ def test_motion_manager_factory_legacy_config(tmp_path):
         
         assert mm.__class__.__name__ == 'CylindricalMeasurementMotionManager'
         assert isinstance(mm._measurement_points, FileMeasurementPoints)
-        assert mm._safe_radius == 101.0
+        assert mm._no_fly_zone.retract_radius == 101.0
         assert mm._measurement_points.total_points() == 1
     finally:
         os.chdir(old_cwd)
