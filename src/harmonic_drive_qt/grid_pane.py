@@ -17,6 +17,7 @@ from grid_generator.grid_gen import (
     calculate_geometry_from_cylindrical_waypoints,
     generate_measurement_grid,
 )
+from grid_generator.grid_optimizer_single import optimize_grid
 from grid_generator.path_plan import plan_path
 
 from .backend import BackendManager, Worker
@@ -96,6 +97,7 @@ class DiagramLabel(QLabel):
 class GridGeneratorPane(QWidget):
     grid_saved = Signal(str, dict)
     generated = Signal(object, str)
+    status_updated = Signal(str)
 
     def __init__(
         self,
@@ -121,6 +123,7 @@ class GridGeneratorPane(QWidget):
         self.viewer_more_popup: QFrame | None = None
         self.generated.connect(self._load_dataframe_on_ui)
         self._build_ui()
+        self.status_updated.connect(self.status_label.setText)
         if self._pyvista_error is not None:
             QTimer.singleShot(0, self._show_pyvista_fallback_message)
         self._load_existing_project_grid()
@@ -789,7 +792,8 @@ class GridGeneratorPane(QWidget):
         self.status_label.setText("Generating grid...")
         worker = Worker(self._generate_and_plan_blocking)
         worker.signals.failed.connect(lambda message: QMessageBox.warning(self, "Grid Generation Error", message))
-        worker.signals.finished.connect(lambda: self.status_label.setText("Generation finished"))
+        worker.signals.failed.connect(lambda _message: self.status_label.setText("Grid generation failed"))
+        worker.signals.finished.connect(lambda: self.status_label.setText("Ready"))
         self.pool.start(worker)
 
     def _generation_geometry_mode(self) -> str | None:
@@ -883,6 +887,33 @@ class GridGeneratorPane(QWidget):
             top_crit_pos=top,
             bot_crit_pos=bottom,
         )
+        self.status_updated.emit("Optimizing grid... 0%")
+
+        last_percent = -1
+
+        def report_optimization(progress: dict) -> None:
+            nonlocal last_percent
+            stage = progress.get("stage")
+            percent = int(float(progress.get("fraction", 0.0)) * 100)
+            if stage == "initializing":
+                message = "Optimizing grid... initializing"
+            elif stage == "finalizing":
+                message = "Optimizing grid... finalizing (100%)"
+            elif stage == "complete":
+                message = "Optimizing grid... complete"
+            else:
+                if percent == last_percent:
+                    return
+                last_percent = percent
+                message = f"Optimizing grid... {percent}%"
+            self.status_updated.emit(message)
+
+        generated, _optimization_report = optimize_grid(
+            generated,
+            progress=None,
+            progress_callback=report_optimization,
+        )
+        self.status_updated.emit("Planning grid path...")
         output_path = self._output_path()
         output_path.parent.mkdir(parents=True, exist_ok=True)
         planned = plan_path(

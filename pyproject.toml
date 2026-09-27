@@ -24,6 +24,7 @@ dependencies = [
   "matplotlib>=3.9",
   "plotly",
   "scipy",
+  "threadpoolctl",
   "loguru",
   "grbl-streamer>=2.0.2",
   "sounddevice>=0.5.3",
