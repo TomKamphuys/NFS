@@ -39,6 +39,8 @@ DISPLAY_LABELS = {
     "speaker_width": "Speaker width (mm)",
     "speaker_depth": "Speaker depth (mm)",
     "use_alternative_motion_controls": "Use alternative motion controls",
+    "show_motion_preview": "Show motion preview window",
+    "unsafe_point_policy": "Unsafe point handling",
 }
 
 # ---------------------------------------------------------------------------
@@ -63,6 +65,11 @@ MOTION_MANAGER_TYPES: Dict[str, List[SchemaEntry]] = {
          "Bottom cap plane (mm) of the cylindrical no-fly zone.", None),
         ("no_fly_z_max", "optional_float",
          "Top cap plane (mm) of the cylindrical no-fly zone.", None),
+        ("unsafe_point_policy", "choice",
+         "What to do if a measurement point lies inside the no-fly zone: "
+         "'abort' stops the scan (safest); 'skip' logs a warning and moves on "
+         "to the next point without going to the unsafe one.",
+         ["abort", "skip"]),
     ],
     "FastCylindricalMeasurementMotionManager": [
         ("no_fly_radius", "optional_float",
@@ -72,11 +79,21 @@ MOTION_MANAGER_TYPES: Dict[str, List[SchemaEntry]] = {
          "Bottom cap plane (mm) of the cylindrical no-fly zone.", None),
         ("no_fly_z_max", "optional_float",
          "Top cap plane (mm) of the cylindrical no-fly zone.", None),
+        ("unsafe_point_policy", "choice",
+         "What to do if a measurement point lies inside the no-fly zone: "
+         "'abort' stops the scan (safest); 'skip' logs a warning and moves on "
+         "to the next point without going to the unsafe one.",
+         ["abort", "skip"]),
     ],
     "SphericalMeasurementMotionManager": [
         ("no_fly_radius", "optional_float",
          "Radius (mm) of the spherical no-fly (keep-out) zone around the device "
          "under test. Leave empty to disable the keep-out zone.", None),
+        ("unsafe_point_policy", "choice",
+         "What to do if a measurement point lies inside the no-fly zone: "
+         "'abort' stops the scan (safest); 'skip' logs a warning and moves on "
+         "to the next point without going to the unsafe one.",
+         ["abort", "skip"]),
     ],
 }
 
@@ -232,6 +249,9 @@ EDITABLE_SCHEMA: Dict[str, List[SchemaEntry]] = {
          "Default parent folder used to create new session folders.", None),
         ("use_alternative_motion_controls", "bool",
          "Use a compact alternative layout for machine motion controls.", None),
+        ("show_motion_preview", "bool",
+         "Show a 'Motion Preview' view that animates the full planned arm motion "
+         "and the no-fly (keep-out) zone in the r/z plane for visual verification.", None),
     ],
     "debug": [
         ("direct_progress_ui", "bool",

@@ -5,9 +5,11 @@ from nfs.motion_manager import CylindricalMeasurementMotionManager, CylindricalN
 
 
 def _zone(retract_radius: float) -> CylindricalNoFlyZone:
-    # z bounds are irrelevant for the slow manager (it always retracts before a
-    # Z move); only the wall radius drives the retract radius.
-    return CylindricalNoFlyZone(r_wall=retract_radius, z_min=0.0, z_max=1000.0)
+    # The slow manager always retracts before a Z move, so only the wall radius
+    # drives the retract radius. The z-cap band is kept below the test points
+    # (which live at z >= 50) so those points are on/outside the keep-out zone
+    # and are therefore not rejected by the endpoint safety guard.
+    return CylindricalNoFlyZone(r_wall=retract_radius, z_min=0.0, z_max=40.0)
 
 
 @pytest.fixture
@@ -21,9 +23,19 @@ def measurement_points():
 
 
 def test_move_to_safe_starting_radius(scanner, measurement_points):
+    # Arm starts inside the no-fly zone radius, so it must move out to the safe radius.
+    scanner.get_position.return_value = CylindricalPosition(0.0, 0.0, 0.0)
     motion_manager = CylindricalMeasurementMotionManager(scanner, measurement_points, _zone(300.0))
     motion_manager.move_to_safe_starting_radius()
     scanner.planar_move_to.assert_called_once_with(300.0, 0.0)
+
+
+def test_move_to_safe_starting_radius_skipped_when_already_outside(scanner, measurement_points):
+    # Arm already rests outside the no-fly zone, so no initial radial move is needed.
+    scanner.get_position.return_value = CylindricalPosition(350.0, 0.0, 50.0)
+    motion_manager = CylindricalMeasurementMotionManager(scanner, measurement_points, _zone(300.0))
+    motion_manager.move_to_safe_starting_radius()
+    scanner.planar_move_to.assert_not_called()
 
 
 def test_next_simple_radial(scanner, measurement_points):

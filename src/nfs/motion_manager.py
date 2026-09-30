@@ -11,6 +11,42 @@ from .measurement_points import MeasurementPoints
 from .scanner import Scanner
 
 
+# Policy applied when a *target* measurement point lies inside the no-fly zone.
+UNSAFE_POINT_ABORT = 'abort'
+UNSAFE_POINT_SKIP = 'skip'
+_VALID_UNSAFE_POLICIES = (UNSAFE_POINT_ABORT, UNSAFE_POINT_SKIP)
+
+
+class UnsafeMeasurementPointError(RuntimeError):
+    """
+    Raised when a measurement point lies inside the configured no-fly zone and
+    the unsafe-point policy is ``abort``.
+
+    Aborting turns a would-be physical collision (the arm driving into the
+    device under test) into a loud, safe failure before any motion is issued.
+    """
+
+
+def normalize_unsafe_point_policy(value: str | None) -> str:
+    """
+    Normalize a configured unsafe-point policy string.
+
+    :param value: The raw configured value (``abort`` or ``skip``, any case).
+    :return: A validated lowercase policy; defaults to ``abort`` (fail-safe) when
+        the value is missing or unrecognized.
+    """
+    if value is None:
+        return UNSAFE_POINT_ABORT
+    normalized = value.strip().lower()
+    if normalized not in _VALID_UNSAFE_POLICIES:
+        logger.warning(
+            f"Unknown unsafe-point policy '{value}'; falling back to "
+            f"'{UNSAFE_POINT_ABORT}' (safest)."
+        )
+        return UNSAFE_POINT_ABORT
+    return normalized
+
+
 class CylindricalNoFlyZone:
     """
     A cylindrical keep-out (no-fly) volume around the device under test.
@@ -86,6 +122,24 @@ class CylindricalNoFlyZone:
         both_outside = start.r() >= self._r_wall and end.r() >= self._r_wall
         return not (both_below or both_above or both_outside)
 
+    def contains(self, position: CylindricalPosition, tolerance: float = 0.1) -> bool:
+        """
+        Report whether ``position`` lies strictly inside the protected interior.
+
+        A measurement point that satisfies this must never be driven to, as any
+        move ending there leaves the arm inside the keep-out volume (a crash).
+
+        :param position: The point to test.
+        :param tolerance: Margin (mm) so points resting exactly on the wall/caps
+            are treated as safe.
+        :return: True when the point is inside the protected interior.
+        """
+        if self._r_wall <= 0.0 or self._z_max <= self._z_min:
+            return False
+        inside_radius = position.r() < self._r_wall - tolerance
+        inside_height = (self._z_min + tolerance) < position.z() < (self._z_max - tolerance)
+        return inside_radius and inside_height
+
 
 class SphericalNoFlyZone:
     """
@@ -132,6 +186,22 @@ class SphericalNoFlyZone:
         if self._radius <= 0.0:
             return False
         return min(start.length(), end.length()) < self._radius
+
+    def contains(self, position: CylindricalPosition, tolerance: float = 0.1) -> bool:
+        """
+        Report whether ``position`` lies strictly inside the protected sphere.
+
+        A measurement point that satisfies this must never be driven to, as any
+        move ending there leaves the arm inside the keep-out volume (a crash).
+
+        :param position: The point to test.
+        :param tolerance: Margin (mm) so points resting exactly on the sphere
+            surface are treated as safe.
+        :return: True when the point is inside the protected sphere.
+        """
+        if self._radius <= 0.0:
+            return False
+        return position.length() < self._radius - tolerance
 
 
 class IMotionManager(ABC):
@@ -192,6 +262,43 @@ class IMotionManager(ABC):
         """
         pass
 
+    def _acquire_next_safe_position(self) -> CylindricalPosition | None:
+        """
+        Return the next measurement point that is safe to move to.
+
+        Every candidate is checked against the no-fly zone *before* any motion
+        is issued. When a point lies inside the zone the configured
+        ``unsafe_point_policy`` decides what happens:
+
+        * ``abort`` -> raise :class:`UnsafeMeasurementPointError` immediately, so
+          the scan stops before the arm can crash into the device under test; and
+        * ``skip`` -> log a warning and advance to the following point, repeating
+          until a safe point is found or the sequence is exhausted.
+
+        :return: The next safe :class:`CylindricalPosition`, or ``None`` when the
+            sequence was exhausted while skipping unsafe points.
+        :raises UnsafeMeasurementPointError: When an unsafe point is encountered
+            and the policy is ``abort``.
+        """
+        while True:
+            position = self._measurement_points.next()
+            if not self._no_fly_zone.contains(position):
+                return position
+
+            if self._unsafe_point_policy == UNSAFE_POINT_ABORT:
+                raise UnsafeMeasurementPointError(
+                    f'Measurement point {position} lies inside the no-fly zone; '
+                    f'aborting the scan to avoid a collision. Review the no-fly '
+                    f'zone settings and the measurement grid.'
+                )
+
+            logger.warning(
+                f'Skipping measurement point {position}: it lies inside the '
+                f'no-fly zone and would cause a collision.'
+            )
+            if self._measurement_points.ready():
+                return None
+
 
 class CylindricalMeasurementMotionManager(IMotionManager):
     """
@@ -200,7 +307,8 @@ class CylindricalMeasurementMotionManager(IMotionManager):
     TOLERANCE = 0.1
 
     def __init__(self, scanner: Scanner, measurement_points: MeasurementPoints,
-                 no_fly_zone: 'CylindricalNoFlyZone'):
+                 no_fly_zone: 'CylindricalNoFlyZone',
+                 unsafe_point_policy: str = UNSAFE_POINT_ABORT):
         """
         Initialize the cylindrical motion manager.
 
@@ -209,16 +317,30 @@ class CylindricalMeasurementMotionManager(IMotionManager):
         :param no_fly_zone: The cylindrical keep-out volume around the device
             under test. Vertical moves are performed at the zone's retract
             radius, just outside the protected interior.
+        :param unsafe_point_policy: What to do when a target point lies inside
+            the no-fly zone: ``abort`` the scan or ``skip`` the point.
         """
         self._scanner = scanner
         self._measurement_points = measurement_points
         self._no_fly_zone = no_fly_zone
+        self._unsafe_point_policy = normalize_unsafe_point_policy(unsafe_point_policy)
 
     def move_to_safe_starting_radius(self) -> None:
         """
         Move to the safe starting radius (just outside the no-fly zone) and zero height.
+
+        When the arm already rests outside the no-fly zone there is no risk of
+        crossing the protected interior, so this initial radial move is skipped
+        and the scan proceeds straight to the first measurement point.
         """
         retract_radius = self._no_fly_zone.retract_radius
+        current_position = self._scanner.get_position()
+        if current_position.r() >= retract_radius - self.TOLERANCE:
+            logger.info(
+                f'Already outside the no-fly zone (R={current_position.r():.1f}mm); '
+                f'skipping the move to the safe radius.'
+            )
+            return
         logger.info(f'Performing a first move to a safe radius: {retract_radius:.1f}mm')
         self._scanner.planar_move_to(retract_radius, 0.0)
 
@@ -228,7 +350,9 @@ class CylindricalMeasurementMotionManager(IMotionManager):
 
         :return: The target CylindricalPosition.
         """
-        position = self._measurement_points.next()
+        position = self._acquire_next_safe_position()
+        if position is None:
+            return self._scanner.get_position()
         self._move_to_next_measurement_point(position)
         return position
 
@@ -400,7 +524,8 @@ class FastCylindricalMeasurementMotionManager(IMotionManager):
     TOLERANCE = 0.1
 
     def __init__(self, scanner: Scanner, measurement_points: MeasurementPoints,
-                 no_fly_zone: 'CylindricalNoFlyZone'):
+                 no_fly_zone: 'CylindricalNoFlyZone',
+                 unsafe_point_policy: str = UNSAFE_POINT_ABORT):
         """
         Initialize the fast cylindrical motion manager.
 
@@ -409,17 +534,31 @@ class FastCylindricalMeasurementMotionManager(IMotionManager):
         :param no_fly_zone: The cylindrical keep-out volume around the device
             under test. A move is routed around the outside (at the zone's
             retract radius) whenever it would cross this zone.
+        :param unsafe_point_policy: What to do when a target point lies inside
+            the no-fly zone: ``abort`` the scan or ``skip`` the point.
         """
         self._scanner = scanner
         self._measurement_points = measurement_points
         self._no_fly_zone = no_fly_zone
+        self._unsafe_point_policy = normalize_unsafe_point_policy(unsafe_point_policy)
 
     def move_to_safe_starting_radius(self) -> None:
         """
         Move to the safe starting radius (just outside the no-fly zone) and zero height.
+
+        When the arm already rests outside the no-fly zone there is no risk of
+        crossing the protected interior, so this initial radial move is skipped
+        and the scan proceeds straight to the first measurement point.
         """
         retract_radius = self._no_fly_zone.retract_radius
-        logger.info(f'Performing a first move to a safe radius: {retract_radius:.1f}mm')
+        current_position = self._scanner.get_position()
+        if current_position.r() >= retract_radius - self.TOLERANCE:
+            logger.info(
+                f'Already outside the no-fly zone (R={current_position.r():.1f}mm); '
+                f'skipping the move to the safe radius.'
+            )
+            return
+        logger.info(f'Performing a move to a safe radius: {retract_radius:.1f}mm')
         self._scanner.planar_move_to(retract_radius, 0.0)
 
     def next(self) -> CylindricalPosition:
@@ -428,7 +567,9 @@ class FastCylindricalMeasurementMotionManager(IMotionManager):
 
         :return: The target CylindricalPosition.
         """
-        position = self._measurement_points.next()
+        position = self._acquire_next_safe_position()
+        if position is None:
+            return self._scanner.get_position()
         current_position = self._scanner.get_position()
         evasive = self._no_fly_zone.blocks_move(current_position, position)
         self._move_to_next_measurement_point(position, evasive)
@@ -560,7 +701,8 @@ class SphericalMeasurementMotionManager(IMotionManager):
     TOLERANCE = 0.1
 
     def __init__(self, scanner: Scanner, measurement_points: MeasurementPoints,
-                 no_fly_zone: 'SphericalNoFlyZone'):
+                 no_fly_zone: 'SphericalNoFlyZone',
+                 unsafe_point_policy: str = UNSAFE_POINT_ABORT):
         """
         Initialize the spherical motion manager.
 
@@ -569,10 +711,13 @@ class SphericalMeasurementMotionManager(IMotionManager):
         :param no_fly_zone: The spherical keep-out volume around the device
             under test. A move is routed around the outside (at the zone's
             retract radius) whenever it would enter this zone.
+        :param unsafe_point_policy: What to do when a target point lies inside
+            the no-fly zone: ``abort`` the scan or ``skip`` the point.
         """
         self._scanner = scanner
         self._measurement_points = measurement_points
         self._no_fly_zone = no_fly_zone
+        self._unsafe_point_policy = normalize_unsafe_point_policy(unsafe_point_policy)
 
     def move_to_safe_starting_radius(self) -> None:
         """
@@ -585,6 +730,13 @@ class SphericalMeasurementMotionManager(IMotionManager):
         :return: None
         """
         retract_radius = self._no_fly_zone.retract_radius
+        current_position = self._scanner.get_position()
+        if current_position.r() >= retract_radius - self.TOLERANCE:
+            logger.info(
+                f'Already outside the no-fly zone (R={current_position.r():.1f}mm); '
+                f'skipping the move to the safe radius.'
+            )
+            return
         logger.info(f'Performing a first move to a safe radius: {retract_radius:.1f}mm')
         self._scanner.planar_move_to(retract_radius, 0.0)
 
@@ -600,7 +752,9 @@ class SphericalMeasurementMotionManager(IMotionManager):
             sequence.
         :rtype: CylindricalPosition
         """
-        position = self._measurement_points.next()
+        position = self._acquire_next_safe_position()
+        if position is None:
+            return self._scanner.get_position()
         self._move_to_next_measurement_point(position)
         return position
 
@@ -671,8 +825,8 @@ class SphericalMeasurementMotionManager(IMotionManager):
 
         The arm is first retracted radially to the no-fly zone's retract radius
         (outside the keep-out sphere) at the current direction, then the normal angular,
-        radial and arc moves are performed to reach the target. Because the
-        retract happens outside the sphere and the subsequent moves converge on
+        radial, and arc moves are performed to reach the target. Because the
+        retract happens outside the sphere and the later moves converge on
         the (safe) target from the outside, the arm never enters the interior.
 
         :param position: The target CylindricalPosition.
@@ -680,7 +834,7 @@ class SphericalMeasurementMotionManager(IMotionManager):
         current_position = self._scanner.get_position()
         retract_radius = self._no_fly_zone.retract_radius
         current_length = current_position.length()
-        if current_length > self.TOLERANCE and current_length < retract_radius - self.TOLERANCE:
+        if self.TOLERANCE < current_length < retract_radius - self.TOLERANCE:
             ratio = retract_radius / current_length
             x, y, z = cyl_to_cart(current_position)
             x *= ratio
@@ -802,6 +956,7 @@ class MotionManagerFactory:
         motion_manager_only_keys = (
             'type',
             'no_fly_radius', 'no_fly_z_min', 'no_fly_z_max',
+            'unsafe_point_policy',
         )
 
         if measurement_points_section_name and config_parser.has_section(measurement_points_section_name):
@@ -830,6 +985,9 @@ class MotionManagerFactory:
                 return float(raw)
             return None
 
+        unsafe_point_policy = normalize_unsafe_point_policy(
+            config_parser.get(section, 'unsafe_point_policy', fallback=None))
+
         def _read_cylindrical_no_fly_zone() -> CylindricalNoFlyZone:
             r_wall = _read_float('no_fly_radius')
             z_min = _read_float('no_fly_z_min')
@@ -853,12 +1011,15 @@ class MotionManagerFactory:
 
         if motion_manager_type == 'CylindricalMeasurementMotionManager':
             return CylindricalMeasurementMotionManager(
-                scanner, measurement_points, _read_cylindrical_no_fly_zone())
+                scanner, measurement_points, _read_cylindrical_no_fly_zone(),
+                unsafe_point_policy)
         elif motion_manager_type == 'FastCylindricalMeasurementMotionManager':
             return FastCylindricalMeasurementMotionManager(
-                scanner, measurement_points, _read_cylindrical_no_fly_zone())
+                scanner, measurement_points, _read_cylindrical_no_fly_zone(),
+                unsafe_point_policy)
         elif motion_manager_type == 'SphericalMeasurementMotionManager':
             return SphericalMeasurementMotionManager(
-                scanner, measurement_points, _read_spherical_no_fly_zone())
+                scanner, measurement_points, _read_spherical_no_fly_zone(),
+                unsafe_point_policy)
         else:
             raise ValueError(f'Unknown motion manager type: {motion_manager_type}')

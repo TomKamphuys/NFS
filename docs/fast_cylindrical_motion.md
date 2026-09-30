@@ -126,8 +126,22 @@ type = FastCylindricalMeasurementMotionManager
 no_fly_radius = 300.0   # wall radius (mm) of the protected interior
 no_fly_z_min = 0.0      # bottom cap plane (mm)
 no_fly_z_max = 400.0    # top cap plane (mm)
+unsafe_point_policy = abort   # 'abort' or 'skip' if a point is inside the zone
 ```
 
 The no-fly zone describes the keep-out volume around the device under test; the
 arm retracts to `no_fly_radius` (the wall radius) for evasive moves. Everything
 else (measurement-points configuration) is unchanged.
+
+## Endpoint safety guard
+
+Evasive moves only decide *how to travel between two points*; they assume both
+endpoints are themselves safe. To close the remaining gap, every manager also
+checks the **target** point against the no-fly zone before moving. If a point
+lies strictly inside the keep-out volume, the `unsafe_point_policy` setting
+(configurable in the Settings dialog) decides what happens:
+
+- `abort` (default, safest): the scan stops immediately with an
+  `UnsafeMeasurementPointError` — the arm never moves toward the unsafe point.
+- `skip`: the offending point is logged and skipped, and the scan continues with
+  the next point.

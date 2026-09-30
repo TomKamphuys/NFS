@@ -650,6 +650,7 @@ class SettingsDialog(QDialog):
                 "no_fly_radius",
                 "no_fly_z_min",
                 "no_fly_z_max",
+                "unsafe_point_policy",
                 "measurement_points",
                 "measurement_points_type",
             }:

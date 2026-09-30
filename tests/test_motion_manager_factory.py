@@ -1,7 +1,11 @@
 import configparser
 import os
 from unittest.mock import Mock
-from nfs.motion_manager import MotionManagerFactory
+from nfs.motion_manager import (
+    MotionManagerFactory,
+    UNSAFE_POINT_ABORT,
+    UNSAFE_POINT_SKIP,
+)
 from nfs.plugins.file_measurement_points import FileMeasurementPoints
 from nfs import loader
 
@@ -46,6 +50,43 @@ def test_motion_manager_factory_direct_config(tmp_path):
         assert isinstance(mm._measurement_points, FileMeasurementPoints)
         assert mm._no_fly_zone.retract_radius == 101.0
         assert mm._measurement_points.total_points() == 1
+        # No policy configured -> defaults to the safest 'abort'.
+        assert mm._unsafe_point_policy == UNSAFE_POINT_ABORT
+    finally:
+        os.chdir(old_cwd)
+
+
+def test_motion_manager_factory_reads_unsafe_point_policy(tmp_path):
+    config_file = tmp_path / "test_config_policy.ini"
+    config = configparser.ConfigParser()
+    config['nfs'] = {'plugins': 'plugins'}
+    config['plugins'] = {'plugin_1': 'nfs.plugins.file_measurement_points'}
+    config['motion_manager'] = {
+        'type': 'CylindricalMeasurementMotionManager',
+        'no_fly_radius': '101.0',
+        'no_fly_z_min': '0.0',
+        'no_fly_z_max': '400.0',
+        'unsafe_point_policy': 'skip',
+        'measurement_points_type': 'FileMeasurementPoints',
+        'filename': 'jan_cylinder_grid1_policy.csv',
+        'homing_gap': '0.0',
+        'pole_gap': '0.0'
+    }
+    with open(config_file, 'w') as f:
+        config.write(f)
+
+    loader.load_plugins(str(config_file), 'plugins')
+
+    grid_file = tmp_path / "jan_cylinder_grid1_policy.csv"
+    with open(grid_file, 'w') as f:
+        f.write("r_xy_mm,phi_deg,z_mm\n100,0,0\n")
+
+    old_cwd = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        mock_scanner = Mock()
+        mm = MotionManagerFactory.create(str(config_file), 'motion_manager', mock_scanner)
+        assert mm._unsafe_point_policy == UNSAFE_POINT_SKIP
     finally:
         os.chdir(old_cwd)
 
