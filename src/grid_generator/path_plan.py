@@ -20,6 +20,7 @@ Usage:
 import pandas as pd
 import numpy as np
 
+
 # ── Sorting Helpers ──────────────────────────────────────────────────────────
 
 def get_binned_indices(mask, theta_bins_arr, num_bins, reverse_bins=False):
@@ -34,6 +35,7 @@ def get_binned_indices(mask, theta_bins_arr, num_bins, reverse_bins=False):
             bin_groups.append(idxs)
     return bin_groups
 
+
 def sort_bin_by_radius(indices, r_arr, high_to_low=True):
     """Sorts a set of indices by radius."""
     sorted_idxs = indices[np.argsort(r_arr[indices])]
@@ -41,13 +43,14 @@ def sort_bin_by_radius(indices, r_arr, high_to_low=True):
         return sorted_idxs[::-1]
     return sorted_idxs
 
+
 def plan_path(
-    input_data,
-    cap_tol_mm,
-    output_path=None,
-    delta_theta_deg=7.5,
-    side_snake_start="up",
-    show_replay=False
+        input_data,
+        cap_tol_mm,
+        output_path=None,
+        delta_theta_deg=7.5,
+        side_snake_start="up",
+        show_replay=False
 ):
     """
     Plans the measurement path using a θ-binned snake strategy.
@@ -69,24 +72,24 @@ def plan_path(
     # Internal units: meters for geometry, degrees for phi
     r_xy_mm = df["r_xy_mm"].to_numpy(dtype=float)
     # No modulo 360. Trust input is approx -180 to 180.
-    phi_d   = df["phi_deg"].to_numpy(dtype=float)
-    z_mm    = df["z_mm"].to_numpy(dtype=float)
+    phi_d = df["phi_deg"].to_numpy(dtype=float)
+    z_mm = df["z_mm"].to_numpy(dtype=float)
 
     r_xy = r_xy_mm / 1000.0
-    z    = z_mm    / 1000.0
-    N    = len(df)
+    z = z_mm / 1000.0
+    N = len(df)
 
     # Cap detection
     z_min, z_max = float(z.min()), float(z.max())
     cap_tol = cap_tol_mm / 1000.0
-    on_top_cap    = np.isclose(z, z_max, atol=cap_tol)
+    on_top_cap = np.isclose(z, z_max, atol=cap_tol)
     on_bottom_cap = np.isclose(z, z_min, atol=cap_tol)
-    on_side       = ~(on_top_cap | on_bottom_cap)
+    on_side = ~(on_top_cap | on_bottom_cap)
 
     # ── Binning Logic (-180 to 180) ──────────────────────────────────────────────
     # Shift +180 to create 0-360 scale for binning only
     bin_width = float(delta_theta_deg)
-    num_bins  = int(np.ceil(360.0 / bin_width))
+    num_bins = int(np.ceil(360.0 / bin_width))
 
     phi_shifted = phi_d + 180.0
     theta_bins = np.floor(phi_shifted / bin_width).astype(int)
@@ -110,20 +113,20 @@ def plan_path(
     top_bins = get_binned_indices(on_top_cap, theta_bins, num_bins, reverse_bins=True)
 
     if top_bins:
-        previous_end_was_high_r = True 
+        previous_end_was_high_r = True
         for i, idxs in enumerate(top_bins):
             is_first = (i == 0)
-            is_last  = (i == len(top_bins) - 1)
+            is_last = (i == len(top_bins) - 1)
             if is_first:
                 sorted_idxs = sort_bin_by_radius(idxs, r_xy, high_to_low=True)
-                previous_end_was_high_r = False 
+                previous_end_was_high_r = False
             elif is_last:
                 sorted_idxs = sort_bin_by_radius(idxs, r_xy, high_to_low=False)
                 previous_end_was_high_r = True
             else:
                 start_high = previous_end_was_high_r
                 sorted_idxs = sort_bin_by_radius(idxs, r_xy, high_to_low=start_high)
-                previous_end_was_high_r = not start_high 
+                previous_end_was_high_r = not start_high
             order_indices.extend(sorted_idxs.tolist())
 
     # 3. Bottom Cap (Low Phi -> High Phi | -180 -> +180)
@@ -133,10 +136,10 @@ def plan_path(
         previous_end_was_high_r = True
         for i, idxs in enumerate(bot_bins):
             is_first = (i == 0)
-            is_last  = (i == len(bot_bins) - 1)
+            is_last = (i == len(bot_bins) - 1)
             if is_first:
                 sorted_idxs = sort_bin_by_radius(idxs, r_xy, high_to_low=True)
-                previous_end_was_high_r = False 
+                previous_end_was_high_r = False
             elif is_last:
                 sorted_idxs = sort_bin_by_radius(idxs, r_xy, high_to_low=False)
                 previous_end_was_high_r = True
@@ -171,7 +174,7 @@ def plan_path(
 
     if output_path is not None:
         out.to_csv(output_path, index=False)
-        
+
     if show_replay:
         import tkinter as tk
         from coord_viewer_util import TkinterCoordApp
@@ -179,8 +182,9 @@ def plan_path(
         app = TkinterCoordApp(root)
         app.engine.load_data(out)
         root.mainloop()
-        
+
     return out
+
 
 if __name__ == "__main__":
     from config_grid import (
@@ -190,7 +194,7 @@ if __name__ == "__main__":
         CAP_TOL_MM,
         SIDE_SNAKE_START
     )
-    
+
     plan_path(
         input_data=INPUT_PATH_PLAN,
         output_path=OUTPUT_PATH_PLAN,

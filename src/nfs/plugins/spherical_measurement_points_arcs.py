@@ -101,9 +101,6 @@ class SphericalMeasurementPointsArcs:
         self._actual_nr_of_points = self._r_cyl.size
         self._current_index = 0
 
-    def get_radius(self) -> float:
-        return self._radius
-
     def next(self) -> CylindricalPosition:
         i = self._current_index
         logger.info(f'Point {i} of {self._actual_nr_of_points}')
@@ -127,9 +124,6 @@ class SphericalMeasurementPointsArcs:
 
     def total_points(self) -> int:
         return self._actual_nr_of_points
-
-    def need_to_do_evasive_move(self) -> bool:
-        return False
 
 
 def register(factory) -> None:

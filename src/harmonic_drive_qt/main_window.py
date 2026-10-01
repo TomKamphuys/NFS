@@ -210,14 +210,19 @@ class MainWindow(QMainWindow):
         self.live_button = self._menu_button("Live Capture", self.show_live_capture)
         self.settings_button = self._menu_button("Settings", self.show_settings)
         self.shutdown_button = self._menu_button("Shutdown Program", self.close, danger=True)
-        for button in (
+        buttons = [
             self.audio_button,
             self.grid_button,
             self.machine_button,
             self.live_button,
-            self.settings_button,
-            self.shutdown_button,
-        ):
+        ]
+        self.motion_preview_button = self._menu_button(
+            "Motion Preview", self.show_motion_preview)
+        self.motion_preview_button.setVisible(
+            _config_bool(self.config_file, "app", "show_motion_preview", False))
+        buttons.append(self.motion_preview_button)
+        buttons.extend((self.settings_button, self.shutdown_button))
+        for button in buttons:
             layout.addWidget(button)
         layout.addStretch(1)
         return frame
@@ -241,6 +246,11 @@ class MainWindow(QMainWindow):
     def _run_menu_action(self, callback) -> None:
         callback()
         self._apply_menu_auto_hide()
+
+    def _refresh_motion_preview_visibility(self) -> None:
+        if hasattr(self, "motion_preview_button"):
+            self.motion_preview_button.setVisible(
+                _config_bool(self.config_file, "app", "show_motion_preview", False))
 
     def _apply_menu_auto_hide(self, initial: bool = False) -> None:
         self.menu_auto_hide = _config_bool(self.config_file, "app", "auto_hide_left_menu", False)
@@ -291,6 +301,21 @@ class MainWindow(QMainWindow):
         self.left_stack.setCurrentWidget(self.control_pane)
         self._mark_active(self.machine_button, self.grid_button)
 
+    def show_motion_preview(self) -> None:
+        from .motion_preview import MotionPreviewWindow
+
+        # Start the previewed motion at the arm's current position (when known)
+        # instead of the origin, which usually sits inside the no-fly zone and
+        # makes the path look wrong.
+        try:
+            start_position = self.backend.get_position()
+        except Exception:
+            start_position = None
+        window = MotionPreviewWindow(self.config_file, self, start=start_position)
+        window.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        self._motion_preview_window = window
+        window.show()
+
     def show_settings(self, initial_section: str | None = None) -> None:
         self._mark_active(self.settings_button)
         dialog = SettingsDialog(self.config_file, self.on_settings_applied, self)
@@ -310,6 +335,7 @@ class MainWindow(QMainWindow):
         self.backend.load()
         self._rebuild_control_pane()
         self._apply_menu_auto_hide()
+        self._refresh_motion_preview_visibility()
         self.grid_pane.refresh_from_config()
         self.live_capture.refresh_all()
 

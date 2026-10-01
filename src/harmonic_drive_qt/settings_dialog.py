@@ -647,7 +647,10 @@ class SettingsDialog(QDialog):
         ):
             if target_section == "motion_manager" and stale_key in {
                 "type",
-                "safe_radius",
+                "no_fly_radius",
+                "no_fly_z_min",
+                "no_fly_z_max",
+                "unsafe_point_policy",
                 "measurement_points",
                 "measurement_points_type",
             }:

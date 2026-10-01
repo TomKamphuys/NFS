@@ -18,9 +18,6 @@ class SphericalMeasurementPointsSorted:
 
     :ivar _ready: True if all points have been iterated, False otherwise.
     :type _ready: bool
-    :ivar _evasive_move_needed: True if a measurement point adjustment has
-        been flagged as needed, False otherwise.
-    :type _evasive_move_needed: bool
     :ivar _radius: The radius of the sphere where measurement points will
         be generated.
     :type _radius: float
@@ -66,7 +63,6 @@ class SphericalMeasurementPointsSorted:
                  speaker_width,
                  speaker_depth):
         self._ready = False
-        self._evasive_move_needed = False
         self._radius = float(radius)
         self._wall_spacing = float(wall_spacing)
         self._nr_of_points = int(nr_of_points)
@@ -145,14 +141,6 @@ class SphericalMeasurementPointsSorted:
 
         return CylindricalPosition(r, theta, z)
 
-    def get_radius(self) -> float:
-        """
-        Returns the radius of the sphere.
-
-        :return: The sphere radius.
-        """
-        return self._radius
-
     def reset(self) -> None:
         self._current_index = 0;
 
@@ -161,9 +149,6 @@ class SphericalMeasurementPointsSorted:
 
     def total_points(self) -> int:
         return self._actual_nr_of_points
-
-    def need_to_do_evasive_move(self) -> bool:
-        return self._evasive_move_needed
 
 
 def register(factory) -> None:

@@ -39,7 +39,18 @@ package "nfs" {
         }
 
         class CylindricalMeasurementMotionManager
+        class FastCylindricalMeasurementMotionManager
         class SphericalMeasurementMotionManager
+
+        class CylindricalNoFlyZone {
+            + blocks_move(start: CylindricalPosition, end: CylindricalPosition): bool
+            + retract_radius: float
+        }
+
+        class SphericalNoFlyZone {
+            + blocks_move(start: CylindricalPosition, end: CylindricalPosition): bool
+            + retract_radius: float
+        }
 
         class MotionManagerFactory {
             {static} + create(config_file: str, section: str, scanner: Scanner): IMotionManager
@@ -84,9 +95,8 @@ package "nfs" {
         interface MeasurementPoints {
             + next(): CylindricalPosition
             + ready(): bool
-            + get_radius(): float
             + reset()
-            + need_to_do_evasive_move(): bool
+            + total_points(): int
         }
 
         package "plugins" {
@@ -126,9 +136,14 @@ ESP32Duino --> GrblStreamerClientConnection
 GrblControllerFactory ..> IGrblController
 
 IMotionManager <|.. CylindricalMeasurementMotionManager
+IMotionManager <|.. FastCylindricalMeasurementMotionManager
 IMotionManager <|.. SphericalMeasurementMotionManager
 CylindricalMeasurementMotionManager --> MeasurementPoints
+FastCylindricalMeasurementMotionManager --> MeasurementPoints
 SphericalMeasurementMotionManager --> MeasurementPoints
+CylindricalMeasurementMotionManager --> CylindricalNoFlyZone
+FastCylindricalMeasurementMotionManager --> CylindricalNoFlyZone
+SphericalMeasurementMotionManager --> SphericalNoFlyZone
 MotionManagerFactory ..> IMotionManager
 
 IAudio <|.. Audio

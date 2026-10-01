@@ -1,4 +1,33 @@
 --------
+13/09/26
+--------
+Added FastCylindricalMeasurementMotionManager: a faster, concurrent-yet-safe
+motion manager for cylindrical scans. It moves the radial, angular and vertical
+axes simultaneously (single G0) for the many moves that stay on a measurement
+surface, and only performs the safe out-and-around evasive maneuver for the one
+interior-crossing transition per angular sector (flagged by the point generator
+via need_to_do_evasive_move). The microphone arm still never travels through the
+volume inside the measurement grid.
+
+Added Scanner.move_to(r, angle, z) for simultaneous three-axis moves, registered
+the new manager in the motion-manager factory, the Qt settings schema and the
+packaging entry points.
+
+Elaborate tests verify the safety invariant by simulating and densely sampling
+the full scan path (with a negative-control proving the keep-out check has
+teeth) and quantify the time gain: for a representative grid the modelled scan
+time drops from ~6.4 min to ~2.5 min (about 2.6x faster / ~61% saved). See
+docs/fast_cylindrical_motion.md for the safety proof and time-gain details.
+
+Files touched:
+src/nfs/scanner.py
+src/nfs/motion_manager.py
+src/harmonic_drive_qt/config_support.py
+pyproject.toml
+tests/test_fast_cylindrical_measurement_motion_manager.py
+docs/fast_cylindrical_motion.md
+
+--------
 05/09/26
 --------
 Removed the dead "nfs-app" console entry point, which pointed at a
