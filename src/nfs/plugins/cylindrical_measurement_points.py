@@ -10,8 +10,7 @@ class CylindricalMeasurementPoints:
     Points are produced angular sector by angular sector. Within each sector the
     path sweeps the bottom cap outwards, climbs the wall, and finally sweeps the
     top cap outwards, using a zigzag pattern so that consecutive points stay on
-    the same measurement surface. When a sector is finished the generator flags
-    an evasive move for the transition to the next sector's bottom cap.
+    the same measurement surface.
     """
 
     def __init__(self,

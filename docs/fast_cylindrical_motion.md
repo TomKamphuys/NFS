@@ -4,14 +4,11 @@
 original `CylindricalMeasurementMotionManager`. It performs the cylindrical scan
 much faster by moving all three axes (radial `R`, angular `θ`, vertical `Z`)
 **simultaneously**, while keeping the exact same safety guarantee: the
-microphone arm never travels through the volume enclosed by the measurement grid.
+microphone arm never travels through the no-fly zone.
 
 ## Why the original manager is slow
 
-The cylindrical point generator (`CylindricalMeasurementPoints`) scans the grid
-as a zig-zag over three surfaces per angular sector: the **bottom cap**, the
-**wall**, and the **top cap**. Almost every consecutive point changes its `Z`
-coordinate.
+Almost every consecutive point changes its `Z` coordinate.
 
 The original manager treats *any* `Z` change conservatively:
 
@@ -21,8 +18,8 @@ The original manager treats *any* `Z` change conservatively:
 
 all as **three separate, sequential** moves. Because nearly every step changes
 `Z`, virtually every measurement point pays for a full out-and-back detour of
-three start/stop moves. This is safe but very time consuming — exactly the
-prototype-era behaviour the new, stiffer setup no longer needs.
+three start/stop moves. This is safe but very time-consuming — exactly the
+prototype-era behavior the new, stiffer setup no longer needs.
 
 ## What the fast manager does
 
@@ -31,7 +28,7 @@ The fast manager distinguishes two kinds of transitions:
 ### 1. Surface moves (the vast majority) — one simultaneous move
 
 Consecutive points on the same surface (bottom cap, wall, top cap) are adjacent
-zig-zag steps. They are executed as a **single** `G0 X.. Y.. Z..` command, so the
+zigzag steps. They are executed as a **single** `G0 X.. Y.. Z..` command, so the
 controller accelerates and decelerates **once** and interpolates all axes
 together.
 
@@ -61,17 +58,17 @@ The proof rests on one property of the machine kinematics: each axis moves by
 r(s) = r_start + s · (r_end − r_start),   s ∈ [0, 1]
 ```
 
-which is **monotonic** in `s`. Therefore the radius along any straight move never
+which is **monotonic** in `s`. Therefore, the radius along any straight move never
 drops below `min(r_start, r_end)`.
 
 - **Surface moves.** Both endpoints lie on a measurement surface, so the whole
   segment stays on/against that surface:
-  - *Caps*: `Z` stays inside the thin cap band near `Z = 0` or `Z = height`, i.e.
+  - *Caps*: `Z` stays inside the thin cap band near `Z = bottom` or `Z = top`, i.e.,
     it never crosses the mid-height bulk of the grid.
-  - *Wall*: `r` stays `≥ radius − Δr` (the wall shell), i.e. it never moves inward
+  - *Wall*: `r` stays `≥ radius − Δr` (the wall shell), i.e., it never moves inward
     into the bulk.
 - **Interior-crossing transition.** The entire vertical sweep and rotation happen
-  at the no-fly zone's retract radius (its wall radius), i.e. completely outside
+  at the no-fly zone's retract radius (its wall radius), i.e., completely outside
   the protected interior. Only after reaching the target `Z` does the arm move
   radially inward, along the bottom cap plane.
 

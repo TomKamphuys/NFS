@@ -17,6 +17,13 @@ UNSAFE_POINT_SKIP = 'skip'
 _VALID_UNSAFE_POLICIES = (UNSAFE_POINT_ABORT, UNSAFE_POINT_SKIP)
 
 
+class SafetyConfigurationError(ValueError):
+    """
+    Raised when the safety (no-fly zone) configuration is missing, incomplete,
+    or contains invalid geometry / numerical values.
+    """
+
+
 class UnsafeMeasurementPointError(RuntimeError):
     """
     Raised when a measurement point lies inside the configured no-fly zone and
@@ -67,22 +74,49 @@ class CylindricalNoFlyZone:
     * both at or above the top cap (``z >= z_max``), or
     * both at or outside the wall radius (``r >= r_wall``).
 
-    :ivar _r_wall: Wall radius (mm) of the protected interior.
+    :ivar _r_wall: Wall radius (mm) of the protected interior. Must be a finite positive number (> 0).
     :ivar _z_min: Bottom cap plane (mm) of the protected interior.
-    :ivar _z_max: Top cap plane (mm) of the protected interior.
+    :ivar _z_max: Top cap plane (mm) of the protected interior (must satisfy z_min < z_max).
     """
 
     def __init__(self, r_wall: float, z_min: float, z_max: float):
         """
         Build a cylindrical no-fly zone.
 
-        :param r_wall: Wall radius (mm). Use ``0`` (or less) to disable.
-        :param z_min: Bottom cap plane (mm).
-        :param z_max: Top cap plane (mm).
+        :param r_wall: Wall radius (mm), must be finite and > 0.
+        :param z_min: Bottom cap plane (mm), must be finite.
+        :param z_max: Top cap plane (mm), must be finite and > z_min.
+        :raises SafetyConfigurationError: If any parameter is non-finite, r_wall <= 0, or z_min >= z_max.
         """
-        self._r_wall = float(r_wall)
-        self._z_min = float(z_min)
-        self._z_max = float(z_max)
+        try:
+            r = float(r_wall)
+            z1 = float(z_min)
+            z2 = float(z_max)
+        except (TypeError, ValueError) as err:
+            raise SafetyConfigurationError(
+                f"Cylindrical no-fly zone parameters must be numeric: "
+                f"r_wall={r_wall!r}, z_min={z_min!r}, z_max={z_max!r}"
+            ) from err
+
+        if not (math.isfinite(r) and math.isfinite(z1) and math.isfinite(z2)):
+            raise SafetyConfigurationError(
+                f"Cylindrical no-fly zone parameters must be finite: "
+                f"r_wall={r}, z_min={z1}, z_max={z2}"
+            )
+
+        if r <= 0.0:
+            raise SafetyConfigurationError(
+                f"Cylindrical no-fly zone wall radius must be strictly positive (> 0), got {r}"
+            )
+
+        if z2 <= z1:
+            raise SafetyConfigurationError(
+                f"Cylindrical no-fly zone must satisfy z_min < z_max, got z_min={z1} and z_max={z2}"
+            )
+
+        self._r_wall = r
+        self._z_min = z1
+        self._z_max = z2
 
     @property
     def r_wall(self) -> float:
@@ -114,9 +148,6 @@ class CylindricalNoFlyZone:
         :param end: The move's target position.
         :return: True when the direct move is unsafe, False otherwise.
         """
-        if self._r_wall <= 0.0 or self._z_max <= self._z_min:
-            # Degenerate/disabled zone: nothing to protect.
-            return False
         both_below = start.z() <= self._z_min and end.z() <= self._z_min
         both_above = start.z() >= self._z_max and end.z() >= self._z_max
         both_outside = start.r() >= self._r_wall and end.r() >= self._r_wall
@@ -134,8 +165,6 @@ class CylindricalNoFlyZone:
             are treated as safe.
         :return: True when the point is inside the protected interior.
         """
-        if self._r_wall <= 0.0 or self._z_max <= self._z_min:
-            return False
         inside_radius = position.r() < self._r_wall - tolerance
         inside_height = (self._z_min + tolerance) < position.z() < (self._z_max - tolerance)
         return inside_radius and inside_height
@@ -152,16 +181,34 @@ class SphericalNoFlyZone:
     smaller of its two endpoints' lengths. A move is therefore only unsafe when
     one of its endpoints lies inside the ball.
 
-    :ivar _radius: Radius (mm) of the protected sphere.
+    :ivar _radius: Radius (mm) of the protected sphere. Must be a finite positive number (> 0).
     """
 
     def __init__(self, radius: float):
         """
         Build a spherical no-fly zone.
 
-        :param radius: Sphere radius (mm). Use ``0`` (or less) to disable.
+        :param radius: Sphere radius (mm). Must be finite and > 0.
+        :raises SafetyConfigurationError: If radius is non-finite or <= 0.
         """
-        self._radius = float(radius)
+        try:
+            r = float(radius)
+        except (TypeError, ValueError) as err:
+            raise SafetyConfigurationError(
+                f"Spherical no-fly zone radius must be numeric: radius={radius!r}"
+            ) from err
+
+        if not math.isfinite(r):
+            raise SafetyConfigurationError(
+                f"Spherical no-fly zone radius must be finite, got {r}"
+            )
+
+        if r <= 0.0:
+            raise SafetyConfigurationError(
+                f"Spherical no-fly zone radius must be strictly positive (> 0), got {r}"
+            )
+
+        self._radius = r
 
     @property
     def radius(self) -> float:
@@ -183,8 +230,6 @@ class SphericalNoFlyZone:
         :param end: The move's target position.
         :return: True when the direct move is unsafe, False otherwise.
         """
-        if self._radius <= 0.0:
-            return False
         return min(start.length(), end.length()) < self._radius
 
     def contains(self, position: CylindricalPosition, tolerance: float = 0.1) -> bool:
@@ -199,8 +244,6 @@ class SphericalNoFlyZone:
             surface are treated as safe.
         :return: True when the point is inside the protected sphere.
         """
-        if self._radius <= 0.0:
-            return False
         return position.length() < self._radius - tolerance
 
 
@@ -957,6 +1000,7 @@ class MotionManagerFactory:
             'type',
             'no_fly_radius', 'no_fly_z_min', 'no_fly_z_max',
             'unsafe_point_policy',
+            'optimize_point_order',
         )
 
         if measurement_points_section_name and config_parser.has_section(measurement_points_section_name):
@@ -979,35 +1023,47 @@ class MotionManagerFactory:
         except (ValueError, TypeError):
             pass
 
-        def _read_float(key: str) -> float | None:
+        def _read_required_float(key: str) -> float:
+            if not config_parser.has_option(section, key):
+                raise SafetyConfigurationError(
+                    f"Missing required safety parameter '{key}' in section [{section}]."
+                )
             raw = config_parser.get(section, key, fallback='').strip()
-            if raw and raw.lower() != 'none':
-                return float(raw)
-            return None
+            if not raw or raw.lower() == 'none':
+                raise SafetyConfigurationError(
+                    f"Missing value for required safety parameter '{key}' in section [{section}]."
+                )
+            try:
+                val = float(raw)
+            except ValueError as err:
+                raise SafetyConfigurationError(
+                    f"Invalid non-numeric value for safety parameter '{key}' in section [{section}]: {raw!r}"
+                ) from err
+            if not math.isfinite(val):
+                raise SafetyConfigurationError(
+                    f"Safety parameter '{key}' in section [{section}] must be finite, got {val}."
+                )
+            return val
 
         unsafe_point_policy = normalize_unsafe_point_policy(
             config_parser.get(section, 'unsafe_point_policy', fallback=None))
 
         def _read_cylindrical_no_fly_zone() -> CylindricalNoFlyZone:
-            r_wall = _read_float('no_fly_radius')
-            z_min = _read_float('no_fly_z_min')
-            z_max = _read_float('no_fly_z_max')
-            if r_wall is None or z_min is None or z_max is None:
-                logger.warning(
-                    f"Incomplete cylindrical no-fly zone for [{section}] "
-                    f"(no_fly_radius/no_fly_z_min/no_fly_z_max); keep-out disabled."
-                )
-                return CylindricalNoFlyZone(0.0, 0.0, 0.0)
+            r_wall = _read_required_float('no_fly_radius')
+            z_min = _read_required_float('no_fly_z_min')
+            z_max = _read_required_float('no_fly_z_max')
             return CylindricalNoFlyZone(r_wall, z_min, z_max)
 
         def _read_spherical_no_fly_zone() -> SphericalNoFlyZone:
-            radius = _read_float('no_fly_radius')
-            if radius is None:
-                logger.warning(
-                    f"No no_fly_radius configured for [{section}]; keep-out disabled."
-                )
-                return SphericalNoFlyZone(0.0)
+            radius = _read_required_float('no_fly_radius')
             return SphericalNoFlyZone(radius)
+
+        if config_parser.getboolean(section, 'optimize_point_order', fallback=False):
+            from .point_ordering import OptimizedMeasurementPoints
+            zone = (_read_spherical_no_fly_zone()
+                    if motion_manager_type == 'SphericalMeasurementMotionManager'
+                    else _read_cylindrical_no_fly_zone())
+            measurement_points = OptimizedMeasurementPoints(measurement_points, motion_manager_type, zone)
 
         if motion_manager_type == 'CylindricalMeasurementMotionManager':
             return CylindricalMeasurementMotionManager(

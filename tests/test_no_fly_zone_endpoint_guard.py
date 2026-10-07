@@ -41,9 +41,6 @@ def test_cylindrical_wall_and_caps_are_safe():
     assert zone.contains(CylindricalPosition(50.0, 0.0, 400.0)) is False
 
 
-def test_cylindrical_disabled_zone_contains_nothing():
-    zone = CylindricalNoFlyZone(0.0, 0.0, 0.0)
-    assert zone.contains(CylindricalPosition(0.0, 0.0, 0.0)) is False
 
 
 def test_spherical_contains_interior_and_surface():

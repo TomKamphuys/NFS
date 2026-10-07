@@ -45,13 +45,14 @@ _MIN_SAMPLES = 2
 @dataclass
 class MotionSegment:
     """
-    A single reconstructed machine move in the ``(r, z)`` plane.
+    A single reconstructed machine move with radius, height and azimuth samples.
 
     :ivar kind: The move primitive that produced it (``'planar'``, ``'radial'``,
         ``'vertical'``, ``'angular'``, ``'combined'``, ``'cw_arc'`` or
         ``'ccw_arc'``).
     :ivar r: Sampled radius values (mm) along the move.
     :ivar z: Sampled height values (mm) along the move, aligned with ``r``.
+    :ivar theta: Sampled azimuth values (degrees), aligned with ``r`` and ``z``.
     :ivar evasive: True when the move is part of an evasive (keep-out avoiding)
         maneuver rather than a straight measurement transition.
     """
@@ -60,6 +61,7 @@ class MotionSegment:
     r: list[float]
     z: list[float]
     evasive: bool = False
+    theta: list[float] = field(default_factory=list)
 
 
 @dataclass
@@ -86,6 +88,17 @@ class MotionSimulation:
     unsafe_points: list[CylindricalPosition] = field(default_factory=list)
     unsafe_point_policy: str = UNSAFE_POINT_ABORT
     aborted: bool = False
+    measurement_sample_indices: list[int] = field(default_factory=list)
+
+    def flatten_cylindrical(self) -> list[tuple[float, float, float]]:
+        """Return aligned R/theta/Z samples, retaining pure angular motion."""
+        path = []
+        for segment in self.segments:
+            angles = segment.theta or [0.0] * len(segment.r)
+            for point in zip(segment.r, angles, segment.z):
+                if not path or path[-1] != point:
+                    path.append(point)
+        return path
 
     def flatten(self) -> list[tuple[float, float]]:
         """
@@ -134,8 +147,7 @@ class RecordingScanner:
         self._straight(CylindricalPosition(self._pos.r(), self._pos.t(), z), "vertical")
 
     def angular_move_to(self, angle: float) -> None:
-        # A pure azimuth change does not move the arm in the (r, z) plane, but we
-        # still record it (as a zero-length segment) so the step count matches.
+        # Preserve the full angular sweep even though its r/z projection is fixed.
         self._straight(CylindricalPosition(self._pos.r(), angle, self._pos.z()), "angular")
 
     def move_to(self, r: float, angle: float, z: float) -> None:
@@ -159,13 +171,15 @@ class RecordingScanner:
     def _straight(self, target: CylindricalPosition, kind: str) -> None:
         start = self._pos
         distance = math.hypot(target.r() - start.r(), target.z() - start.z())
-        samples = max(_MIN_SAMPLES, int(distance / _MM_PER_SAMPLE) + 1)
-        rs, zs = [], []
+        samples = max(_MIN_SAMPLES, int(distance / _MM_PER_SAMPLE) + 1,
+                      int(abs(target.t() - start.t()) / _ARC_DEG_PER_SAMPLE) + 1)
+        rs, zs, angles = [], [], []
         for i in range(samples):
             f = i / (samples - 1)
             rs.append(start.r() + f * (target.r() - start.r()))
             zs.append(start.z() + f * (target.z() - start.z()))
-        self.segments.append(MotionSegment(kind, rs, zs, self._evasive))
+            angles.append(start.t() + f * (target.t() - start.t()))
+        self.segments.append(MotionSegment(kind, rs, zs, self._evasive, angles))
         self._pos = target
 
     def _arc(self, target: CylindricalPosition, radius: float, kind: str) -> None:
@@ -184,7 +198,8 @@ class RecordingScanner:
         # Pin the exact endpoints (guard against tiny rounding drift).
         rs[0], zs[0] = start.r(), start.z()
         rs[-1], zs[-1] = target.r(), target.z()
-        self.segments.append(MotionSegment(kind, rs, zs, self._evasive))
+        self.segments.append(MotionSegment(kind, rs, zs, self._evasive,
+                                           [start.t()] * samples))
         self._pos = target
 
 
@@ -243,12 +258,14 @@ def simulate_motion(
     )
 
     manager.move_to_safe_starting_radius()
+    measurement_segment_ends = []
     guard = 0
     max_iterations = manager.total_points() + 5
     try:
         while not manager.ready():
             position = manager.next()
             simulation.points.append(position)
+            measurement_segment_ends.append(len(scanner.segments))
             guard += 1
             if guard > max_iterations:
                 logger.warning(
@@ -264,6 +281,20 @@ def simulate_motion(
         simulation.aborted = True
 
     simulation.segments = scanner.segments
+    # Map actual measurement arrivals, not intermediate waypoints, to samples.
+    segment_sample_ends = [0]
+    previous = None
+    sample_count = 0
+    for segment in simulation.segments:
+        angles = segment.theta or [0.0] * len(segment.r)
+        for point in zip(segment.r, angles, segment.z):
+            if point != previous:
+                sample_count += 1
+                previous = point
+        segment_sample_ends.append(max(0, sample_count - 1))
+    simulation.measurement_sample_indices = [
+        segment_sample_ends[end] for end in measurement_segment_ends
+    ]
     return simulation
 
 

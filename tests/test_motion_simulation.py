@@ -11,6 +11,8 @@ They verify that the off-line simulation:
 """
 import configparser
 
+import pytest
+
 from nfs import loader
 from nfs.motion_simulation import simulate_motion, RecordingScanner
 from nfs.datatypes import CylindricalPosition
@@ -222,6 +224,17 @@ def test_simulate_motion_starts_at_given_current_position(tmp_path):
     first_r, first_z = path[0]
     assert abs(first_r - start.r()) < 1e-6
     assert abs(first_z - start.z()) < 1e-6
+
+
+def test_measurement_arrivals_match_sampled_path(tmp_path):
+    config_file, _, _, _ = _write_cylindrical_config(tmp_path)
+    simulation = simulate_motion(config_file)
+    path = simulation.flatten_cylindrical()
+    assert len(simulation.measurement_sample_indices) == len(simulation.points)
+    assert simulation.measurement_sample_indices == sorted(simulation.measurement_sample_indices)
+    assert len(simulation.points) > 0
+    for index, point in zip(simulation.measurement_sample_indices, simulation.points):
+        assert path[index] == pytest.approx((point.r(), point.t(), point.z()))
 
 
 def test_simulate_motion_never_enters_cylindrical_zone(tmp_path):

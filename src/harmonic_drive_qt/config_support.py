@@ -58,12 +58,13 @@ DISPLAY_LABELS = {
 # ---------------------------------------------------------------------------
 MOTION_MANAGER_TYPES: Dict[str, List[SchemaEntry]] = {
     "CylindricalMeasurementMotionManager": [
-        ("no_fly_radius", "optional_float",
+        ("optimize_point_order", "bool", "Reduce physical travel distance while preserving every point and safety detours.", None),
+        ("no_fly_radius", "float",
          "Wall radius (mm) of the cylindrical no-fly (keep-out) zone around the "
-         "device under test. Leave empty to disable the keep-out zone.", None),
-        ("no_fly_z_min", "optional_float",
+         "device under test.", None),
+        ("no_fly_z_min", "float",
          "Bottom cap plane (mm) of the cylindrical no-fly zone.", None),
-        ("no_fly_z_max", "optional_float",
+        ("no_fly_z_max", "float",
          "Top cap plane (mm) of the cylindrical no-fly zone.", None),
         ("unsafe_point_policy", "choice",
          "What to do if a measurement point lies inside the no-fly zone: "
@@ -72,12 +73,13 @@ MOTION_MANAGER_TYPES: Dict[str, List[SchemaEntry]] = {
          ["abort", "skip"]),
     ],
     "FastCylindricalMeasurementMotionManager": [
-        ("no_fly_radius", "optional_float",
+        ("optimize_point_order", "bool", "Reduce physical travel distance while preserving every point and safety detours.", None),
+        ("no_fly_radius", "float",
          "Wall radius (mm) of the cylindrical no-fly (keep-out) zone around the "
-         "device under test. Leave empty to disable the keep-out zone.", None),
-        ("no_fly_z_min", "optional_float",
+         "device under test.", None),
+        ("no_fly_z_min", "float",
          "Bottom cap plane (mm) of the cylindrical no-fly zone.", None),
-        ("no_fly_z_max", "optional_float",
+        ("no_fly_z_max", "float",
          "Top cap plane (mm) of the cylindrical no-fly zone.", None),
         ("unsafe_point_policy", "choice",
          "What to do if a measurement point lies inside the no-fly zone: "
@@ -86,9 +88,10 @@ MOTION_MANAGER_TYPES: Dict[str, List[SchemaEntry]] = {
          ["abort", "skip"]),
     ],
     "SphericalMeasurementMotionManager": [
-        ("no_fly_radius", "optional_float",
+        ("optimize_point_order", "bool", "Reduce physical travel distance while preserving every point and safety detours.", None),
+        ("no_fly_radius", "float",
          "Radius (mm) of the spherical no-fly (keep-out) zone around the device "
-         "under test. Leave empty to disable the keep-out zone.", None),
+         "under test.", None),
         ("unsafe_point_policy", "choice",
          "What to do if a measurement point lies inside the no-fly zone: "
          "'abort' stops the scan (safest); 'skip' logs a warning and moves on "

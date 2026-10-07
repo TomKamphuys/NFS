@@ -1,5 +1,5 @@
 """
-Optional 2D motion-preview window.
+Optional 2D/3D motion-preview window.
 
 This window lets the operator *see* the complete planned motion of the arm --
 every interpolated move, not just the measurement end points -- together with
@@ -13,6 +13,10 @@ path) lives in :mod:`nfs.motion_simulation`, which is GUI-free and unit tested.
 """
 from __future__ import annotations
 
+from bisect import bisect_right
+
+import numpy as np
+
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
 from matplotlib.patches import Rectangle, Wedge
@@ -23,6 +27,7 @@ from nfs.datatypes import CylindricalPosition
 from nfs.motion_simulation import MotionSimulation, simulate_motion
 
 from .qt_compat import (
+    QComboBox,
     QHBoxLayout,
     QLabel,
     QMainWindow,
@@ -37,7 +42,7 @@ from .qt_compat import (
 
 
 class MotionPreviewWindow(QMainWindow):
-    """A standalone window that animates the planned motion in the (r, z) plane."""
+    """Animate planned motion in the r/z plane or Cartesian 3D space."""
 
     # Milliseconds between animation frames while playing.
     _PLAY_INTERVAL_MS = 30
@@ -71,7 +76,9 @@ class MotionPreviewWindow(QMainWindow):
         self._unsafe_scatter = None
 
         self._simulation = self._load_simulation()
-        self._path = self._simulation.flatten()
+        self._cylindrical_path = self._simulation.flatten_cylindrical()
+        self._path = [(r, z) for r, theta, z in self._cylindrical_path]
+        self._is_3d = False
 
         self._build_ui()
         self._draw_static()
@@ -99,6 +106,12 @@ class MotionPreviewWindow(QMainWindow):
         layout.addWidget(self._canvas, 1)
 
         controls = QHBoxLayout()
+        self._view_selector = QComboBox()
+        self._view_selector.addItems(["2D", "3D"])
+        self._view_selector.setToolTip("3D: drag to rotate; right-drag to zoom.")
+        self._view_selector.currentIndexChanged.connect(self._change_view)
+        controls.addWidget(QLabel("View:"))
+        controls.addWidget(self._view_selector)
         self._play_button = QPushButton("Play")
         self._play_button.setFixedWidth(90)
         self._play_button.clicked.connect(self._toggle_play)
@@ -128,7 +141,86 @@ class MotionPreviewWindow(QMainWindow):
         layout.addWidget(self._warning_label)
 
     # -- drawing ----------------------------------------------------------- #
+    def _change_view(self, index: int) -> None:
+        self._is_3d = index == 1
+        self._figure.clear()
+        self._axes = self._figure.add_subplot(111, projection="3d" if self._is_3d else None)
+        self._draw_static()
+        self._update_position(self._slider.value())
+
+    @staticmethod
+    def _cartesian(samples):
+        if not samples:
+            return np.empty((3, 0))
+        r, theta, z = np.asarray(samples, dtype=float).T
+        angle = np.deg2rad(theta)
+        return np.array([r * np.cos(angle), r * np.sin(angle), z])
+
+    def _draw_3d(self) -> None:
+        axes = self._axes
+        axes.set_title("Planned motion (3D) — drag to rotate", fontsize=10)
+        axes.set_xlabel("X (mm)")
+        axes.set_ylabel("Y (mm)")
+        axes.set_zlabel("Z (mm)")
+        self._draw_zone_3d(axes)
+        if self._path:
+            axes.plot(*self._cartesian(self._cylindrical_path), color="#cbd5e1", linewidth=1)
+        points = self._simulation.points
+        if points:
+            axes.scatter(*self._cartesian([(p.r(), p.t(), p.z()) for p in points]),
+                         s=10, color="#2563eb", label="Measurement points")
+        unsafe = self._simulation.unsafe_points
+        self._unsafe_scatter = None
+        if unsafe:
+            self._unsafe_scatter = axes.scatter(
+                *self._cartesian([(p.r(), p.t(), p.z()) for p in unsafe]),
+                s=140, marker="X", color="#dc2626", depthshade=False,
+                label="Unsafe points (in no-fly zone)")
+            self._unsafe_scatter.set_visible(self._flash_on)
+            self._flash_timer.start()
+        elif not self._path:
+            axes.text2D(0.5, 0.5, "No motion to display", transform=axes.transAxes,
+                        ha="center", va="center", color="#6b7280")
+        # Equal physical scale prevents a spherical zone appearing distorted.
+        limits = [axes.get_xlim3d(), axes.get_ylim3d(), axes.get_zlim3d()]
+        span = max(high - low for low, high in limits)
+        for setter, (low, high) in zip(
+                (axes.set_xlim3d, axes.set_ylim3d, axes.set_zlim3d), limits):
+            center = (low + high) / 2
+            setter(center - span / 2, center + span / 2)
+        axes.set_box_aspect((1, 1, 1))
+        (self._travelled_line,) = axes.plot([], [], [], color="#16a34a", linewidth=2,
+                                           label="Travelled")
+        (self._arm_marker,) = axes.plot([], [], [], marker="o", markersize=9,
+                                       color="#dc2626", label="Arm")
+        axes.legend(loc="upper right", fontsize=8)
+        self._canvas.draw_idle()
+
+    def _draw_zone_3d(self, axes) -> None:
+        zone = self._simulation.zone
+        kind = self._simulation.zone_kind
+        angle = np.linspace(0, 2 * np.pi, 65)
+        style = dict(color="#fca5a5", alpha=0.25, linewidth=0, shade=False)
+        if kind == "cylindrical":
+            theta, height = np.meshgrid(angle, [zone["z_min"], zone["z_max"]])
+            radius = zone["r_wall"]
+            axes.plot_surface(radius * np.cos(theta), radius * np.sin(theta), height,
+                              label="No-fly zone", **style)
+            theta, radial = np.meshgrid(angle, [0, radius])
+            for height in (zone["z_min"], zone["z_max"]):
+                axes.plot_surface(radial * np.cos(theta), radial * np.sin(theta),
+                                  np.full_like(theta, height), **style)
+        elif kind == "spherical":
+            theta, polar = np.meshgrid(angle, np.linspace(0, np.pi, 33))
+            radius = zone["radius"]
+            axes.plot_surface(radius * np.sin(polar) * np.cos(theta),
+                              radius * np.sin(polar) * np.sin(theta),
+                              radius * np.cos(polar), label="No-fly zone", **style)
+
     def _draw_static(self) -> None:
+        if self._is_3d:
+            self._draw_3d()
+            return
         axes = self._axes
         axes.clear()
         axes.set_title("Planned motion (r, z plane)", fontsize=10)
@@ -181,6 +273,7 @@ class MotionPreviewWindow(QMainWindow):
             label="Unsafe points (in no-fly zone)")
         # Start the attention-grabbing flash.
         self._flash_timer.start()
+        self._unsafe_scatter.set_visible(self._flash_on)
 
     def _toggle_flash(self) -> None:
         """Blink the unsafe-point markers on and off."""
@@ -268,13 +361,24 @@ class MotionPreviewWindow(QMainWindow):
             self._status.setText("No motion")
             return
         index = max(0, min(index, len(self._path) - 1))
-        rs = [p[0] for p in self._path[: index + 1]]
-        zs = [p[1] for p in self._path[: index + 1]]
-        self._travelled_line.set_data(rs, zs)
+        arrivals = self._simulation.measurement_sample_indices
+        reached = bisect_right(arrivals, index)
+        start = arrivals[reached - 10] if reached >= 10 else 0
+        rs = [p[0] for p in self._path[start: index + 1]]
+        zs = [p[1] for p in self._path[start: index + 1]]
+        if self._is_3d:
+            self._travelled_line.set_data_3d(
+                *self._cartesian(self._cylindrical_path[start:index + 1]))
+            self._arm_marker.set_data_3d(
+                *self._cartesian([self._cylindrical_path[index]]))
+        else:
+            self._travelled_line.set_data(rs, zs)
+            self._arm_marker.set_data([rs[-1]], [zs[-1]])
         cur_r, cur_z = self._path[index]
-        self._arm_marker.set_data([cur_r], [cur_z])
+        theta = self._cylindrical_path[index][1]
         self._status.setText(
-            f"Sample {index + 1}/{len(self._path)}   r={cur_r:.1f} mm  z={cur_z:.1f} mm"
+            f"Sample {index + 1}/{len(self._path)}   r={cur_r:.1f} mm  "
+            f"θ={theta:.1f}°  z={cur_z:.1f} mm"
         )
         self._canvas.draw_idle()
 
