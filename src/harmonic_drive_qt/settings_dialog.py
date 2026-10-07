@@ -5,6 +5,8 @@ import shutil
 from pathlib import Path
 from typing import Callable
 
+from nfs.motion_manager import CylindricalNoFlyZone, SafetyConfigurationError, SphericalNoFlyZone
+
 from .config_support import (
     DISPLAY_LABELS,
     EDITABLE_SCHEMA,
@@ -545,6 +547,10 @@ class SettingsDialog(QDialog):
                 )
                 return
 
+        if selected_motion_manager_type is not None:
+            if not self._validate_safety_zone(selected_motion_manager_type):
+                return
+
         active_motion_manager_keys = set()
         if selected_motion_manager_type is not None:
             active_motion_manager_keys = {
@@ -593,6 +599,42 @@ class SettingsDialog(QDialog):
             
         self.on_apply()
         self.accept()
+
+    def _validate_safety_zone(self, manager_type: str) -> bool:
+        keys = [
+            key for key, _kind, _tooltip, _options in MOTION_MANAGER_TYPES[manager_type]
+            if key.startswith("no_fly_")
+        ]
+        values = {}
+        try:
+            for key in keys:
+                widget, kind = self.inputs[("motion_manager", key)]
+                try:
+                    values[key] = _coerce(kind, widget.text())
+                except (ValueError, TypeError) as exc:
+                    raise SafetyConfigurationError(
+                        f"{DISPLAY_LABELS[key]} must contain a number."
+                    ) from exc
+            if manager_type == "SphericalMeasurementMotionManager":
+                SphericalNoFlyZone(values["no_fly_radius"])
+            else:
+                CylindricalNoFlyZone(
+                    values["no_fly_radius"], values["no_fly_z_min"], values["no_fly_z_max"]
+                )
+        except SafetyConfigurationError as exc:
+            fields = ", ".join(DISPLAY_LABELS[key] for key in keys)
+            QMessageBox.warning(
+                self,
+                "Invalid safety zone",
+                f"{exc}\n\nCheck {fields}. All values must be finite numbers, "
+                "the radius must be greater than zero, and for a cylindrical zone "
+                "the bottom Z must be lower than the top Z.\n\n"
+                "Settings have not been saved or applied. Correct the values and save again; "
+                "safety protection cannot be disabled.",
+            )
+            self.select_section("motion_manager")
+            return False
+        return True
 
     def _save_measurement_points_fields(self) -> bool:
         if self.measurement_points_type_input is None:
@@ -647,7 +689,10 @@ class SettingsDialog(QDialog):
         ):
             if target_section == "motion_manager" and stale_key in {
                 "type",
-                "safe_radius",
+                "no_fly_radius",
+                "no_fly_z_min",
+                "no_fly_z_max",
+                "unsafe_point_policy",
                 "measurement_points",
                 "measurement_points_type",
             }:

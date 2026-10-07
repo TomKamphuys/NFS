@@ -26,7 +26,9 @@ DISPLAY_LABELS = {
     "default_project_dir": "Default session folder",
     "cal_tool_height": "Calibration tool height (mm)",
     "feed_rate": "Feed rate (mm/min)",
-    "safe_radius": "Safe radius (mm)",
+    "no_fly_radius": "No-fly radius (mm)",
+    "no_fly_z_min": "No-fly bottom Z (mm)",
+    "no_fly_z_max": "No-fly top Z (mm)",
     "homing_gap": "Homing gap (degrees)",
     "pole_gap": "Pole gap (mm)",
     "cap_spacing": "Cap spacing (mm)",
@@ -37,6 +39,8 @@ DISPLAY_LABELS = {
     "speaker_width": "Speaker width (mm)",
     "speaker_depth": "Speaker depth (mm)",
     "use_alternative_motion_controls": "Use alternative motion controls",
+    "show_motion_preview": "Show motion preview window",
+    "unsafe_point_policy": "Unsafe point handling",
 }
 
 # ---------------------------------------------------------------------------
@@ -54,12 +58,45 @@ DISPLAY_LABELS = {
 # ---------------------------------------------------------------------------
 MOTION_MANAGER_TYPES: Dict[str, List[SchemaEntry]] = {
     "CylindricalMeasurementMotionManager": [
-        ("safe_radius", "optional_float",
-         "Optional extra-safe radius (mm) the motion manager retracts to before slewing. "
-         "Leave empty to default to 0 and avoid extra safe-radius intervention.", None),
+        ("optimize_point_order", "bool", "Reduce physical travel distance while preserving every point and safety detours.", None),
+        ("no_fly_radius", "float",
+         "Wall radius (mm) of the cylindrical no-fly (keep-out) zone around the "
+         "device under test.", None),
+        ("no_fly_z_min", "float",
+         "Bottom cap plane (mm) of the cylindrical no-fly zone.", None),
+        ("no_fly_z_max", "float",
+         "Top cap plane (mm) of the cylindrical no-fly zone.", None),
+        ("unsafe_point_policy", "choice",
+         "What to do if a measurement point lies inside the no-fly zone: "
+         "'abort' stops the scan (safest); 'skip' logs a warning and moves on "
+         "to the next point without going to the unsafe one.",
+         ["abort", "skip"]),
+    ],
+    "FastCylindricalMeasurementMotionManager": [
+        ("optimize_point_order", "bool", "Reduce physical travel distance while preserving every point and safety detours.", None),
+        ("no_fly_radius", "float",
+         "Wall radius (mm) of the cylindrical no-fly (keep-out) zone around the "
+         "device under test.", None),
+        ("no_fly_z_min", "float",
+         "Bottom cap plane (mm) of the cylindrical no-fly zone.", None),
+        ("no_fly_z_max", "float",
+         "Top cap plane (mm) of the cylindrical no-fly zone.", None),
+        ("unsafe_point_policy", "choice",
+         "What to do if a measurement point lies inside the no-fly zone: "
+         "'abort' stops the scan (safest); 'skip' logs a warning and moves on "
+         "to the next point without going to the unsafe one.",
+         ["abort", "skip"]),
     ],
     "SphericalMeasurementMotionManager": [
-        # No extra parameters beyond the base ones.
+        ("optimize_point_order", "bool", "Reduce physical travel distance while preserving every point and safety detours.", None),
+        ("no_fly_radius", "float",
+         "Radius (mm) of the spherical no-fly (keep-out) zone around the device "
+         "under test.", None),
+        ("unsafe_point_policy", "choice",
+         "What to do if a measurement point lies inside the no-fly zone: "
+         "'abort' stops the scan (safest); 'skip' logs a warning and moves on "
+         "to the next point without going to the unsafe one.",
+         ["abort", "skip"]),
     ],
 }
 
@@ -215,6 +252,9 @@ EDITABLE_SCHEMA: Dict[str, List[SchemaEntry]] = {
          "Default parent folder used to create new session folders.", None),
         ("use_alternative_motion_controls", "bool",
          "Use a compact alternative layout for machine motion controls.", None),
+        ("show_motion_preview", "bool",
+         "Show a 'Motion Preview' view that animates the full planned arm motion "
+         "and the no-fly (keep-out) zone in the r/z plane for visual verification.", None),
     ],
     "debug": [
         ("direct_progress_ui", "bool",

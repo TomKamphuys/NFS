@@ -1,4 +1,5 @@
 import os
+from unittest.mock import Mock
 
 import pytest
 
@@ -14,8 +15,65 @@ def _app():
     return QApplication.instance() or QApplication([])
 
 
+@pytest.mark.parametrize("manager_type", [
+    "CylindricalMeasurementMotionManager",
+    "FastCylindricalMeasurementMotionManager",
+    "SphericalMeasurementMotionManager",
+])
+@pytest.mark.parametrize("bad_radius", ["", "none", "abc", "nan", "inf", "-inf", "0", "-10"])
+def test_invalid_safety_radius_can_be_corrected(tmp_path, monkeypatch, manager_type, bad_radius):
+    _app()
+    config_file = tmp_path / "config.ini"
+    original = (
+        f"[motion_manager]\ntype = {manager_type}\n"
+        "no_fly_radius = 100\nno_fly_z_min = 0\nno_fly_z_max = 400\n"
+    )
+    config_file.write_text(original, encoding="utf-8")
+    applied = Mock()
+    warnings = Mock()
+    monkeypatch.setattr(QMessageBox, "warning", warnings)
+    dialog = SettingsDialog(str(config_file), applied)
+    dialog.show()
+    radius, _kind = dialog.inputs[("motion_manager", "no_fly_radius")]
+    radius.setText(bad_radius)
+    dialog.save()
+
+    warnings.assert_called_once()
+    assert "safety" in warnings.call_args.args[1].lower()
+    assert "No-fly radius" in warnings.call_args.args[2]
+    assert config_file.read_text(encoding="utf-8") == original
+    applied.assert_not_called()
+    assert dialog.isVisible()
+    radius.setText("150")
+    dialog.save()
+    applied.assert_called_once()
+    assert not dialog.isVisible()
+
+
+@pytest.mark.parametrize("bottom, top", [("400", "0"), ("100", "100"), ("nan", "400"), ("0", "inf"), ("", "400")])
+def test_invalid_safety_heights_are_not_saved(tmp_path, monkeypatch, bottom, top):
+    _app()
+    config_file = tmp_path / "config.ini"
+    original = (
+        "[motion_manager]\ntype = CylindricalMeasurementMotionManager\n"
+        "no_fly_radius = 100\nno_fly_z_min = 0\nno_fly_z_max = 400\n"
+    )
+    config_file.write_text(original, encoding="utf-8")
+    applied = Mock()
+    warnings = Mock()
+    monkeypatch.setattr(QMessageBox, "warning", warnings)
+    dialog = SettingsDialog(str(config_file), applied)
+    dialog.inputs[("motion_manager", "no_fly_z_min")][0].setText(bottom)
+    dialog.inputs[("motion_manager", "no_fly_z_max")][0].setText(top)
+    dialog.save()
+    warnings.assert_called_once()
+    assert "safety" in warnings.call_args.args[1].lower()
+    assert config_file.read_text(encoding="utf-8") == original
+    applied.assert_not_called()
+
+
 def test_motion_setting_labels_include_normalized_units():
-    assert DISPLAY_LABELS["safe_radius"] == "Safe radius (mm)"
+    assert DISPLAY_LABELS["no_fly_radius"] == "No-fly radius (mm)"
     assert DISPLAY_LABELS["homing_gap"] == "Homing gap (degrees)"
     assert DISPLAY_LABELS["pole_gap"] == "Pole gap (mm)"
 
@@ -156,24 +214,33 @@ def test_settings_dialog_saves_cylindrical_motion_manager_fields(tmp_path):
     config_file = tmp_path / "config.ini"
     config_file.write_text(
         "[motion_manager]\n"
-        "type = SphericalMeasurementMotionManager\n",
+        "type = SphericalMeasurementMotionManager\n"
+        "no_fly_radius = 50.0\n",
         encoding="utf-8",
     )
 
     dialog = SettingsDialog(str(config_file), lambda: None)
     manager_type, _kind = dialog.inputs[("motion_manager", "type")]
-    safe_radius, _kind = dialog.inputs[("motion_manager", "safe_radius")]
+    no_fly_radius, _kind = dialog.inputs[("motion_manager", "no_fly_radius")]
+    no_fly_z_min, _kind = dialog.inputs[("motion_manager", "no_fly_z_min")]
+    no_fly_z_max, _kind = dialog.inputs[("motion_manager", "no_fly_z_max")]
 
     assert isinstance(manager_type, QComboBox)
-    assert isinstance(safe_radius, QLineEdit)
+    assert isinstance(no_fly_radius, QLineEdit)
+    assert isinstance(no_fly_z_min, QLineEdit)
+    assert isinstance(no_fly_z_max, QLineEdit)
 
     manager_type.setCurrentText("CylindricalMeasurementMotionManager")
-    safe_radius.setText("123.5")
+    no_fly_radius.setText("123.5")
+    no_fly_z_min.setText("0.0")
+    no_fly_z_max.setText("400.0")
     dialog.save()
 
     content = config_file.read_text(encoding="utf-8")
     assert "type = CylindricalMeasurementMotionManager" in content
-    assert "safe_radius = 123.5" in content
+    assert "no_fly_radius = 123.5" in content
+    assert "no_fly_z_min = 0.0" in content
+    assert "no_fly_z_max = 400.0" in content
 
 
 def test_settings_dialog_removes_stale_motion_manager_fields(tmp_path):
@@ -182,7 +249,9 @@ def test_settings_dialog_removes_stale_motion_manager_fields(tmp_path):
     config_file.write_text(
         "[motion_manager]\n"
         "type = CylindricalMeasurementMotionManager\n"
-        "safe_radius = 123.5\n",
+        "no_fly_radius = 123.5\n"
+        "no_fly_z_min = 0.0\n"
+        "no_fly_z_max = 400.0\n",
         encoding="utf-8",
     )
 
@@ -191,12 +260,14 @@ def test_settings_dialog_removes_stale_motion_manager_fields(tmp_path):
 
     assert isinstance(manager_type, QComboBox)
 
+    # The spherical manager has no z-bounds, so those keys become stale.
     manager_type.setCurrentText("SphericalMeasurementMotionManager")
     dialog.save()
 
     content = config_file.read_text(encoding="utf-8")
     assert "type = SphericalMeasurementMotionManager" in content
-    assert "safe_radius" not in content
+    assert "no_fly_z_min" not in content
+    assert "no_fly_z_max" not in content
 
 
 def test_settings_dialog_saves_referenced_measurement_points_fields(tmp_path):
@@ -205,6 +276,9 @@ def test_settings_dialog_saves_referenced_measurement_points_fields(tmp_path):
     config_file.write_text(
         "[motion_manager]\n"
         "type = CylindricalMeasurementMotionManager\n"
+        "no_fly_radius = 100.0\n"
+        "no_fly_z_min = 0.0\n"
+        "no_fly_z_max = 400.0\n"
         "measurement_points = points\n"
         "[points]\n"
         "type = FileMeasurementPoints\n"
@@ -236,6 +310,9 @@ def test_settings_dialog_can_inline_measurement_points_fields(tmp_path):
     config_file.write_text(
         "[motion_manager]\n"
         "type = CylindricalMeasurementMotionManager\n"
+        "no_fly_radius = 100.0\n"
+        "no_fly_z_min = 0.0\n"
+        "no_fly_z_max = 400.0\n"
         "measurement_points = points\n"
         "[points]\n"
         "type = FileMeasurementPoints\n"

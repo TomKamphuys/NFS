@@ -41,6 +41,25 @@ class Scanner:
         """
         self._grbl_controller.send_and_wait_for_move_ready(f'G0 X{z:.4f} Y{r:.4f}')
 
+    def move_to(self, r: float, angle: float, z: float) -> None:
+        """
+        Move all three axes (radial, angular, vertical) simultaneously.
+
+        This issues a single ``G0`` rapid command containing every axis so the
+        controller interpolates them together (one accelerate/decelerate cycle)
+        instead of running three separate, sequential moves.
+
+        Mapping (see class docstring / other move methods):
+        ``z`` -> X axis, ``r`` -> Y axis, ``angle`` -> Z axis.
+
+        :param r: The target radial coordinate (Y axis, mm).
+        :param angle: The target angular coordinate (Z axis, degrees).
+        :param z: The target vertical coordinate (X axis, mm).
+        """
+        self._grbl_controller.send_and_wait_for_move_ready(
+            f'G0 X{z:.4f} Y{r:.4f} Z{angle:.1f}'
+        )
+
     def cw_arc_move_to(self, r: float, z: float, radius: float) -> None:
         """Move in a clockwise arc to the specified radial and vertical position."""
         self._grbl_controller.send_and_wait_for_move_ready(f'G02 X{z:.4f} Y{r:.4f} R{radius:.4f} F{self._feed_rate}')
