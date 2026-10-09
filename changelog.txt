@@ -6,8 +6,12 @@ RFT Calculator copied from HALS Studio. The calculator uses speaker-to-mic
 and speaker/mic-to-boundary distances to calculate the reflection-free time.
 
 The RFT value is saved in each _project.json under
-scanner_settings.reflection_free_time_ms for later use in HALS Studio,
+stage1_vars.fdw_rft_ms as a string for use in HALS Studio,
 and restored when the project is reopened.
+
+Added a Set as system default button beside RFT. The system default persists
+across restarts and supplies fresh projects; opening or editing a project uses
+its own RFT without changing the system default.
 
 Moved the Audio Setup value-field and arrow styling into styles.py so the
 RFT calculator can reuse the same design. Audio Setup now imports the shared

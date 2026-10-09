@@ -86,6 +86,10 @@ class SettingsDialog(QDialog):
         self.parser.optionxform = str
         self._combo_wheel_filter = _ComboWheelFilter(self)
         self._reload_config_state()
+        if self.parser.has_option("scanner", "reflection_free_time_ms"):
+            from . import project
+            project.get_system_rft_default(config_file)
+            self.parser.read(config_file)
         
         self.setWindowTitle("Edit configuration")
         self.resize(760, 560)
@@ -325,7 +329,24 @@ class SettingsDialog(QDialog):
                     "QPushButton:hover { background: #eff6ff; }"
                 )
                 inline.addWidget(button, 0, Qt.AlignmentFlag.AlignVCenter)
+                default_button = QPushButton("Set as system default")
+                default_button.setToolTip("Use this RFT for new projects and future app starts.")
+                default_button.setStyleSheet(button.styleSheet())
+                default_button.clicked.connect(self._set_rft_system_default)
+                inline.addWidget(default_button, 0, Qt.AlignmentFlag.AlignVCenter)
                 row.layout().addLayout(inline)
+
+    def _set_rft_system_default(self) -> None:
+        from . import project
+
+        field, _kind = self.inputs[("scanner", "reflection_free_time_ms")]
+        try:
+            value = float(field.text())
+            project.set_system_rft_default(self.config_file, value)
+        except (ValueError, OSError) as exc:
+            QMessageBox.warning(self, "Error", f"Could not set RFT default: {exc}")
+            return
+        self.parser.set("scanner", "default_reflection_free_time_ms", str(value))
 
     def _open_rft_calculator(self) -> None:
         from rft_calc.dialog import RFTDialog

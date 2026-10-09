@@ -136,6 +136,7 @@ def _notify_project_changed() -> None:
 
 def set_project_dir(path: str | Path, config_file: str = "config.ini") -> Dict[str, Any]:
     global _project_dir, _project_data
+    get_system_rft_default(config_file)
     _project_dir = Path(path).expanduser().resolve()
     _project_dir.mkdir(parents=True, exist_ok=True)
 
@@ -159,6 +160,10 @@ def set_project_dir(path: str | Path, config_file: str = "config.ini") -> Dict[s
 
     if not loaded_existing:
         sync_defaults_from_config(config_file, save=False)
+    else:
+        _project_data.setdefault("stage1_vars", {}).setdefault(
+            "fdw_rft_ms", str(get_system_rft_default(config_file))
+        )
     _notify_project_changed()
     return _project_data
 
@@ -169,7 +174,7 @@ def set_project_name(name: str) -> None:
 
 
 def save_project() -> None:
-    _project_data.setdefault("scanner_settings", {}).setdefault("reflection_free_time_ms", 0.0)
+    _project_data.setdefault("stage1_vars", {}).setdefault("fdw_rft_ms", "0.0")
     _project_dir.mkdir(parents=True, exist_ok=True)
     get_project_json_path().write_text(
         json.dumps(_project_data, indent=4),
@@ -222,13 +227,39 @@ def sync_rft_from_config(config_file: str, save: bool = True) -> None:
     parser = configparser.ConfigParser(inline_comment_prefixes=("#", ";"))
     parser.read(config_file)
     value = parser.getfloat("scanner", "reflection_free_time_ms", fallback=0.0)
-    _project_data["scanner_settings"] = {"reflection_free_time_ms": value}
+    _project_data.setdefault("stage1_vars", {})["fdw_rft_ms"] = str(value)
     if save:
         save_project()
 
 
 def sync_defaults_from_config(config_file: str, save: bool = True) -> None:
-    sync_from_config(str(get_default_config_path(config_file)), save=save)
+    _sync_sweep_from_config(get_default_config_path(config_file), save=False)
+    _project_data.setdefault("stage1_vars", {})["fdw_rft_ms"] = str(get_system_rft_default(config_file))
+    if save:
+        save_project()
+
+
+def get_system_rft_default(config_file: str) -> float:
+    parser = configparser.ConfigParser(inline_comment_prefixes=("#", ";"))
+    parser.read(config_file)
+    if parser.has_option("scanner", "default_reflection_free_time_ms"):
+        return parser.getfloat("scanner", "default_reflection_free_time_ms")
+    value = parser.getfloat("scanner", "reflection_free_time_ms", fallback=0.0)
+    set_system_rft_default(config_file, value)
+    return value
+
+
+def set_system_rft_default(config_file: str, value: float) -> None:
+    if not math.isfinite(value) or value < 0:
+        raise ValueError("Reflection Free Time must be finite and non-negative")
+    parser = configparser.ConfigParser(inline_comment_prefixes=("#", ";"))
+    parser.optionxform = str
+    parser.read(config_file)
+    if not parser.has_section("scanner"):
+        parser.add_section("scanner")
+    parser.set("scanner", "default_reflection_free_time_ms", str(value))
+    with open(config_file, "w", encoding="utf-8") as f:
+        parser.write(f)
 
 
 def get_default_config_path(config_file: str | Path = "config.ini") -> Path:
@@ -259,20 +290,26 @@ def _sync_sweep_from_config(config_file: str | Path, save: bool = True) -> None:
 
 
 def apply_to_config(config_file: str) -> bool:
+    get_system_rft_default(config_file)
     parser = configparser.ConfigParser(inline_comment_prefixes=("#", ";"))
     parser.optionxform = str  # type: ignore[assignment]
     parser.read(config_file)
 
     changed = False
-    for project_key, section in (("sweep_settings", "sweep"), ("scanner_settings", "scanner")):
+    stage1_vars = _project_data.get("stage1_vars", {})
+    rft = stage1_vars.get("fdw_rft_ms")
+    if rft is not None:
+        if not parser.has_section("scanner"):
+            parser.add_section("scanner")
+        parser.set("scanner", "reflection_free_time_ms", str(rft))
+        changed = True
+    for project_key, section in (("sweep_settings", "sweep"),):
         settings = _project_data.get(project_key)
         if not isinstance(settings, dict):
             continue
         if not parser.has_section(section):
             parser.add_section(section)
         for key, value in settings.items():
-            if section == "scanner" and key != "reflection_free_time_ms":
-                continue
             if section == "audio" and key == "mode":
                 continue
             parser.set(section, key, str(value))
