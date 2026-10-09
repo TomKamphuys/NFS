@@ -21,6 +21,7 @@ from __future__ import annotations
 import os
 import shutil
 import sys
+import multiprocessing
 from pathlib import Path
 
 
@@ -64,6 +65,19 @@ def _prepare_runtime_environment() -> None:
 
 
 def main() -> int:
+    if len(sys.argv) > 1 and sys.argv[1] in {
+        "--run-grid-optimizer",
+        "--run-grid-optimizer-service",
+    }:
+        service_mode = sys.argv[1] == "--run-grid-optimizer-service"
+        sys.argv.pop(1)
+        if service_mode:
+            sys.argv.insert(1, "--service-dir")
+        from grid_generator.grid_optimizer_multi1 import main as optimizer_main
+
+        optimizer_main()
+        return 0
+
     if getattr(sys, "frozen", False):
         _prepare_runtime_environment()
 
@@ -73,4 +87,5 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    multiprocessing.freeze_support()
     raise SystemExit(main())

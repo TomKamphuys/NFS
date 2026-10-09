@@ -61,6 +61,7 @@ datas += collect_data_files("nfs")
 # plugin modules are declared explicitly and the distribution metadata (which
 # lists the entry points) is copied into the bundle.
 hiddenimports = [
+    "grid_generator.grid_optimizer_multi1",
     "nfs.audio",
     "nfs.motion_manager",
     "nfs.plugins.cylindrical_measurement_points",

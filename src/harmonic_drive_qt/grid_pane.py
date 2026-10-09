@@ -3,6 +3,14 @@
 from __future__ import annotations
 
 import configparser
+import json
+import queue
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+import uuid
 from collections.abc import Callable
 from pathlib import Path
 
@@ -17,7 +25,6 @@ from grid_generator.grid_gen import (
     calculate_geometry_from_cylindrical_waypoints,
     generate_measurement_grid,
 )
-from grid_generator.grid_optimizer_single import optimize_grid
 from grid_generator.path_plan import plan_path
 
 from .backend import BackendManager, Worker
@@ -27,6 +34,7 @@ from .qt_compat import (
     QComboBox,
     QDoubleSpinBox,
     QAbstractSpinBox,
+    QButtonGroup,
     QFileDialog,
     QFrame,
     QGridLayout,
@@ -108,12 +116,29 @@ class GridGeneratorPane(QWidget):
     ) -> None:
         super().__init__(parent)
         self.backend = backend
+        self._optimizer_process: subprocess.Popen | None = None
+        self._optimizer_process_lock = threading.Lock()
+        self._optimizer_service_dir: Path | None = None
+        self._optimizer_service_temp: tempfile.TemporaryDirectory | None = None
+        self._optimizer_service_log = None
+        self._optimizer_service_ready = threading.Event()
+        self._optimizer_service_error: str | None = None
+        self._optimizer_service_shutting_down = False
+        self._optimizer_job_queues: dict[str, queue.Queue] = {}
+        self._optimizer_view_active = False
+        self._optimizer_close_requested = False
+        self._optimizer_job_active = False
+        self._generation_running = False
+        self._generation_done = threading.Event()
+        self._generation_done.set()
+        self._optimizer_service_reader_thread: threading.Thread | None = None
         self.config_file = config_file
         self.require_session_folder = require_session_folder or (lambda: True)
         self.pool = QThreadPool.globalInstance()
         self.viewer_backend = self._read_viewer_backend()
         self.current_viewer_input = None
         self._use_manual_geometry_for_next_generation = False
+        self._optimizer_settings_for_next_generation = None
         self.canvas = None
         self.viewer_widget: QWidget | None = None
         self.viewer_layout: QVBoxLayout | None = None
@@ -259,6 +284,7 @@ class GridGeneratorPane(QWidget):
         primary_button(generate)
         generate.setMinimumHeight(38)
         generate.clicked.connect(self.generate_and_plan)
+        self.generate_button = generate
         gen_layout.addWidget(generate)
         
         self.status_label = QLabel("Ready")
@@ -421,7 +447,7 @@ class GridGeneratorPane(QWidget):
 
         self.settings_content = QWidget()
         self.settings_content.setVisible(False)
-        self.settings_content.setStyleSheet("background: #fbfdff; border: 1px solid #e2e8f0; border-top: none; border-radius: 0 0 4px 4px;")
+        self.settings_content.setStyleSheet("background: #fbfdff; border: none;")
         w.toggled.connect(self.settings_content.setVisible)
         
         grid = QGridLayout(self.settings_content)
@@ -483,11 +509,103 @@ class GridGeneratorPane(QWidget):
             toggle_row.addWidget(checkbox)
         toggle_row.addStretch(1)
         grid.addLayout(toggle_row, 4, 0, 1, 4)
+
+        optimizer_group = QGroupBox("")
+        optimizer_group.setStyleSheet("QGroupBox { border: none; margin: 0; padding: 0; }")
+        optimizer_layout = QGridLayout(optimizer_group)
+        optimizer_layout.setContentsMargins(10, 0, 10, 0)
+        optimizer_layout.setHorizontalSpacing(12)
+        optimizer_layout.setVerticalSpacing(8)
+        optimizer_title = QLabel("Optimizer")
+        optimizer_title.setStyleSheet("font-weight: 700; border: none; background: transparent;")
+        optimizer_layout.addWidget(optimizer_title, 0, 0, 1, 4)
+        self.optimizer_enabled = QCheckBox("Run coordinate optimization")
+        self.optimizer_enabled.setChecked(self._gv_bool(grid_vars, "optimizer_enabled", True))
+        self.optimizer_enabled.setStyleSheet(toggle_style() + "QCheckBox { font-weight: 700; }")
+        optimizer_layout.addWidget(self.optimizer_enabled, 1, 0, 1, 4)
+
+        self.optimizer_level_group = QButtonGroup(optimizer_group)
+        self.optimizer_level_group.setExclusive(True)
+        self.optimizer_level_buttons = {}
+        level_box = QGroupBox("Optimizer level")
+        level_box.setObjectName("OptimizerLevelGroup")
+        level_box.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
+        level_box.setStyleSheet(
+            "QGroupBox#OptimizerLevelGroup { border: 1px solid #cbd5e1; "
+            "border-radius: 4px; margin-top: 10px; padding: 4px 8px 4px 8px; }"
+            "QGroupBox#OptimizerLevelGroup::title { subcontrol-origin: margin; "
+            "background-color: #fbfdff; "
+            "left: 8px; padding: 0 4px; color: #64748b; font-size: 10px; font-weight: 800; }"
+        )
+        level_row = QHBoxLayout()
+        level_row.setContentsMargins(0, 2, 0, 0)
+        level_row.setSpacing(4)
+        saved_level = str(grid_vars.get("optimizer_level", "medium")).strip().lower()
+        if saved_level not in {"low", "medium", "high"}:
+            saved_level = "medium"
+        for level in ("low", "medium", "high"):
+            button = QPushButton(level.title())
+            button.setCheckable(True)
+            button.setStyleSheet(
+                "QPushButton { border: 1px solid #94a3b8; border-radius: 4px; "
+                "padding: 4px 8px; background: white; color: #334155; }"
+                "QPushButton:checked { background: #3978bd; color: white; border-color: #3978bd; }"
+            )
+            button.setFixedWidth(button.fontMetrics().horizontalAdvance("Medium") + 20)
+            self.optimizer_level_group.addButton(button)
+            self.optimizer_level_buttons[level] = button
+            level_row.addWidget(button)
+            button.setChecked(level == saved_level)
+        level_row.addStretch(1)
+        level_box.setLayout(level_row)
+
+        self.optimizer_frequencies_per_octave = self._spin(
+            self._gv_float(grid_vars, "optimizer_frequencies_per_octave", 12),
+            1, 24, "", decimals=0,
+        )
+        self.optimizer_orders = QLineEdit(str(grid_vars.get("optimizer_orders") or "6"))
+        self.optimizer_orders.textChanged.connect(self._resize_optimizer_orders_field)
+        frequency_field = self._settings_field_compact(
+            "Test frequencies per octave", self.optimizer_frequencies_per_octave
+        )
+        orders_field = self._settings_field_compact(
+            "Harmonic orders to test (comma separated)", self.optimizer_orders
+        )
+        controls_row = QWidget()
+        fields_layout = QHBoxLayout(controls_row)
+        fields_layout.setContentsMargins(0, 0, 0, 0)
+        fields_layout.setSpacing(8)
+        field_height = max(
+            68, frequency_field.sizeHint().height(), orders_field.sizeHint().height()
+        )
+        frequency_field.setFixedHeight(field_height)
+        orders_field.setFixedHeight(field_height)
+        level_box.setFixedHeight(field_height)
+        level_box.setFixedWidth(level_box.sizeHint().width())
+        fields_layout.addWidget(level_box)
+        fields_layout.addWidget(frequency_field)
+        fields_layout.addWidget(orders_field)
+        fields_layout.addStretch(1)
+        optimizer_layout.addWidget(controls_row, 2, 0, 1, 4)
+
+        def set_optimizer_controls_enabled(enabled: bool) -> None:
+            for button in self.optimizer_level_buttons.values():
+                button.setEnabled(enabled)
+            self.optimizer_frequencies_per_octave.setEnabled(enabled)
+            self.optimizer_orders.setEnabled(enabled)
+
+        self.optimizer_enabled.toggled.connect(set_optimizer_controls_enabled)
+        set_optimizer_controls_enabled(self.optimizer_enabled.isChecked())
+        grid.addWidget(optimizer_group, 5, 0, 1, 4)
         for col in range(4):
             grid.setColumnStretch(col, 1)
         
         layout.addWidget(self.settings_content)
         return w
+
+    def _resize_optimizer_orders_field(self, text: str) -> None:
+        width = self.optimizer_orders.fontMetrics().horizontalAdvance(text or "6") + 22
+        self.optimizer_orders.setFixedWidth(max(44, width))
 
     def _settings_field(self, label: str, widget: QWidget) -> QWidget:
         cell = QWidget()
@@ -500,6 +618,21 @@ class GridGeneratorPane(QWidget):
         widget.setStyleSheet("border: none; border-bottom: 1px solid #cbd5e1; background: transparent; font-size: 12px;")
         layout.addWidget(lbl)
         layout.addWidget(widget)
+        return cell
+
+    def _settings_field_compact(self, label: str, widget: QWidget) -> QWidget:
+        cell = self._settings_field(label, widget)
+        if isinstance(widget, QLineEdit):
+            self._resize_optimizer_orders_field(widget.text())
+        elif isinstance(widget, QDoubleSpinBox):
+            content = str(int(widget.maximum()))
+            widget.setFixedWidth(widget.fontMetrics().horizontalAdvance(content) + 38)
+        label_widget = cell.layout().itemAt(0).widget()
+        label_width = label_widget.fontMetrics().horizontalAdvance(label)
+        content_width = widget.width() or widget.sizeHint().width()
+        # Leave enough room for the label's full glyph bounds and the cell
+        # layout's horizontal padding so long captions do not clip at either end.
+        cell.setFixedWidth(max(label_width, content_width) + 28)
         return cell
 
 
@@ -783,18 +916,95 @@ class GridGeneratorPane(QWidget):
         return project.get_project_dir() / filename
 
     def generate_and_plan(self) -> None:
+        if self._generation_running:
+            return
         if not self.require_session_folder():
             return
         geometry_mode = self._generation_geometry_mode()
         if geometry_mode is None:
             return
         self._use_manual_geometry_for_next_generation = geometry_mode == "manual"
+        optimizer_settings = self._read_optimizer_settings()
+        if optimizer_settings is None:
+            return
+        self._optimizer_settings_for_next_generation = optimizer_settings
+        self._generation_running = True
+        self._generation_done.clear()
+        self.generate_button.setEnabled(False)
         self.status_label.setText("Generating grid...")
-        worker = Worker(self._generate_and_plan_blocking)
-        worker.signals.failed.connect(lambda message: QMessageBox.warning(self, "Grid Generation Error", message))
-        worker.signals.failed.connect(lambda _message: self.status_label.setText("Grid generation failed"))
-        worker.signals.finished.connect(lambda: self.status_label.setText("Ready"))
+        worker = Worker(self._generate_and_plan_with_completion_signal)
+        worker.signals.failed.connect(self._on_generation_failed)
+        worker.signals.finished.connect(self._on_generation_finished)
+        self._generation_worker = worker
         self.pool.start(worker)
+
+    def _read_optimizer_settings(self) -> dict | None:
+        if not self.optimizer_enabled.isChecked():
+            return {"enabled": False}
+        selected_level = next(
+            level for level, button in self.optimizer_level_buttons.items()
+            if button.isChecked()
+        )
+        orders_text = self.optimizer_orders.text().strip()
+        try:
+            orders = tuple(int(item.strip()) for item in orders_text.split(",") if item.strip())
+        except ValueError:
+            QMessageBox.warning(
+                self, "Optimizer Settings",
+                "Harmonic orders must be comma-separated nonnegative integers, for example: 6, 8, 10.",
+            )
+            return None
+        if not orders or any(order < 0 for order in orders) or len(set(orders)) != len(orders):
+            QMessageBox.warning(
+                self, "Optimizer Settings",
+                "Enter one or more unique nonnegative harmonic orders, for example: 6, 8, 10.",
+            )
+            return None
+        return {
+            "enabled": True,
+            "proposals": {"low": 500, "medium": 1000, "high": 2000}[selected_level],
+            "level": selected_level,
+            "frequencies_per_octave": int(self.optimizer_frequencies_per_octave.value()),
+            "orders": orders,
+        }
+
+    def _generate_and_plan_with_completion_signal(self) -> None:
+        try:
+            self._generate_and_plan_blocking()
+        finally:
+            self._generation_done.set()
+
+    def _on_generation_failed(self, message: str) -> None:
+        self._generation_running = False
+        self._generation_worker = None
+        self.generate_button.setEnabled(True)
+        self.status_label.setText("Grid generation failed")
+        self._close_optimizer_service_if_idle()
+        QMessageBox.warning(self, "Grid Generation Error", message)
+
+    def _on_generation_finished(self) -> None:
+        self._generation_running = False
+        self._generation_worker = None
+        self.generate_button.setEnabled(True)
+        self.status_label.setText("Ready")
+        self._close_optimizer_service_if_idle()
+
+    def showEvent(self, event) -> None:  # noqa: N802
+        with self._optimizer_process_lock:
+            self._optimizer_view_active = True
+            self._optimizer_close_requested = False
+        self.status_label.setText(
+            "Ready" if self._optimizer_service_ready.is_set() else "Preparing optimizer workers..."
+        )
+        self._ensure_optimizer_service()
+        super().showEvent(event)
+
+    def hideEvent(self, event) -> None:  # noqa: N802
+        with self._optimizer_process_lock:
+            self._optimizer_view_active = False
+            self._optimizer_close_requested = True
+        self._close_optimizer_service_if_idle()
+        super().hideEvent(event)
 
     def _generation_geometry_mode(self) -> str | None:
         top = self._waypoint("top")
@@ -887,7 +1097,11 @@ class GridGeneratorPane(QWidget):
             top_crit_pos=top,
             bot_crit_pos=bottom,
         )
-        self.status_updated.emit("Optimizing grid... 0%")
+        optimizer_settings = self._optimizer_settings_for_next_generation or {"enabled": True}
+        self.status_updated.emit(
+            "Optimizing grid... 0%" if optimizer_settings.get("enabled", True)
+            else "Optimization disabled; planning grid path..."
+        )
 
         last_percent = -1
 
@@ -896,7 +1110,12 @@ class GridGeneratorPane(QWidget):
             stage = progress.get("stage")
             percent = int(float(progress.get("fraction", 0.0)) * 100)
             if stage == "initializing":
-                message = "Optimizing grid... initializing"
+                completed = int(progress.get("completed", 0))
+                total = int(progress.get("total", 0))
+                message = (
+                    f"Initializing optimizer matrices... {completed}/{total}"
+                    if total else "Initializing optimizer matrices..."
+                )
             elif stage == "finalizing":
                 message = "Optimizing grid... finalizing (100%)"
             elif stage == "complete":
@@ -908,11 +1127,10 @@ class GridGeneratorPane(QWidget):
                 message = f"Optimizing grid... {percent}%"
             self.status_updated.emit(message)
 
-        generated, _optimization_report = optimize_grid(
-            generated,
-            progress=None,
-            progress_callback=report_optimization,
-        )
+        if optimizer_settings.get("enabled", True):
+            generated = self._run_optimizer_subprocess(
+                generated, report_optimization, optimizer_settings
+            )
         self.status_updated.emit("Planning grid path...")
         output_path = self._output_path()
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -930,6 +1148,202 @@ class GridGeneratorPane(QWidget):
         project.save_project()
         self.grid_saved.emit(output_path.name, grid_vars)
         self.generated.emit(planned, str(output_path))
+
+    def _optimizer_request_path(self) -> Path | None:
+        return None if self._optimizer_service_dir is None else self._optimizer_service_dir / "request.json"
+
+    def _optimizer_events_path(self) -> Path | None:
+        return None if self._optimizer_service_dir is None else self._optimizer_service_dir / "events.jsonl"
+
+    def _ensure_optimizer_service(self) -> None:
+        with self._optimizer_process_lock:
+            current = self._optimizer_process
+            if current is not None:
+                if current.poll() is None:
+                    return
+                # The event reader owns log closure and temp cleanup. If it is
+                # still observing an exited process, it will restart the service
+                # once its cleanup finishes (while the pane or a job is active).
+                if (self._optimizer_service_reader_thread is not None
+                        and self._optimizer_service_reader_thread.is_alive()):
+                    return
+            self._optimizer_service_temp = tempfile.TemporaryDirectory(prefix="nfs-grid-optimizer-service-")
+            self._optimizer_service_dir = Path(self._optimizer_service_temp.name)
+            self._optimizer_service_ready.clear()
+            self._optimizer_service_error = None
+            script = Path(__file__).resolve().parents[1] / "grid_generator" / "grid_optimizer_multi1.py"
+            if getattr(sys, "frozen", False):
+                command = [sys.executable, "--run-grid-optimizer-service", str(self._optimizer_service_dir)]
+            else:
+                command = [sys.executable, str(script), "--service-dir", str(self._optimizer_service_dir)]
+            log_path = self._optimizer_service_dir / "optimizer_service.log"
+            log_stream = log_path.open("w", encoding="utf-8")
+            try:
+                process = subprocess.Popen(
+                    command,
+                    stdin=subprocess.DEVNULL,
+                    stdout=log_stream,
+                    stderr=subprocess.STDOUT,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                )
+            except Exception:
+                log_stream.close()
+                self._optimizer_service_temp.cleanup()
+                self._optimizer_service_temp = None
+                self._optimizer_service_dir = None
+                raise
+            self._optimizer_service_log = log_stream
+            self._optimizer_process = process
+            reader_thread = threading.Thread(
+                target=self._read_optimizer_service_events,
+                args=(process, self._optimizer_service_dir),
+                name="grid-optimizer-service-events",
+                daemon=True,
+            )
+            self._optimizer_service_reader_thread = reader_thread
+            reader_thread.start()
+
+    def _read_optimizer_service_events(self, process: subprocess.Popen, service_dir: Path) -> None:
+        events_path = service_dir / "events.jsonl"
+        offset = 0
+        while process.poll() is None or (events_path.exists() and events_path.stat().st_size > offset):
+            if events_path.exists():
+                try:
+                    with events_path.open("r", encoding="utf-8") as stream:
+                        stream.seek(offset)
+                        lines = stream.readlines()
+                        offset = stream.tell()
+                except OSError:
+                    lines = []
+                for line in lines:
+                    try:
+                        event = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if event.get("event") == "service_ready":
+                        self._optimizer_service_ready.set()
+                        self._optimizer_service_shutting_down = False
+                        self.status_updated.emit("Ready")
+                    job_id = event.get("job_id")
+                    if job_id:
+                        with self._optimizer_process_lock:
+                            response_queue = self._optimizer_job_queues.get(job_id)
+                        if response_queue is not None:
+                            response_queue.put(event)
+            if process.poll() is None:
+                time.sleep(0.05)
+
+        return_code = process.poll()
+        with self._optimizer_process_lock:
+            if not self._optimizer_service_ready.is_set():
+                if not self._optimizer_service_shutting_down:
+                    self._optimizer_service_error = (
+                        f"Optimizer service exited during startup (code {return_code})."
+                    )
+                    self._optimizer_service_ready.set()
+            for response_queue in self._optimizer_job_queues.values():
+                response_queue.put({
+                    "event": "service_failed",
+                    "error": f"Optimizer service exited (code {return_code}).",
+                })
+            if self._optimizer_process is process:
+                self._optimizer_process = None
+                restart_service = self._optimizer_view_active or self._generation_running
+                self._optimizer_service_shutting_down = False
+                if restart_service:
+                    self._optimizer_service_ready.clear()
+                    self._optimizer_service_error = None
+                if self._optimizer_service_log is not None:
+                    self._optimizer_service_log.close()
+                    self._optimizer_service_log = None
+                service_temp = self._optimizer_service_temp
+                self._optimizer_service_temp = None
+                self._optimizer_service_dir = None
+            else:
+                service_temp = None
+                restart_service = False
+        if service_temp is not None:
+            service_temp.cleanup()
+        if restart_service:
+            self._ensure_optimizer_service()
+
+    def _write_optimizer_service_request(self, request: dict) -> None:
+        request_path = self._optimizer_request_path()
+        if request_path is None:
+            raise RuntimeError("Optimizer service has no request directory")
+        temporary_path = request_path.with_suffix(".tmp")
+        temporary_path.write_text(json.dumps(request), encoding="utf-8")
+        temporary_path.replace(request_path)
+
+    def _close_optimizer_service_if_idle(self) -> None:
+        with self._optimizer_process_lock:
+            self._optimizer_close_requested = not self._optimizer_view_active
+            if self._optimizer_view_active or self._optimizer_job_active or self._generation_running:
+                return
+            process = self._optimizer_process
+            request_path = self._optimizer_request_path()
+            if process is None or process.poll() is not None or request_path is None:
+                return
+            if request_path.exists():
+                try:
+                    existing = json.loads(request_path.read_text(encoding="utf-8"))
+                    if existing.get("command") != "shutdown":
+                        return
+                    return
+                except (OSError, json.JSONDecodeError):
+                    return
+            self._optimizer_service_shutting_down = True
+            self._optimizer_service_ready.clear()
+            self._write_optimizer_service_request({"command": "shutdown"})
+
+    def _run_optimizer_subprocess(self, generated: pd.DataFrame, report_progress,
+                                 optimizer_settings: dict) -> pd.DataFrame:
+        self._ensure_optimizer_service()
+        if not self._optimizer_service_ready.wait(timeout=120):
+            raise RuntimeError("Timed out waiting for optimizer workers to start.")
+        if self._optimizer_service_error is not None:
+            raise RuntimeError(self._optimizer_service_error)
+
+        job_id = uuid.uuid4().hex
+        job_dir = self._optimizer_service_dir / job_id
+        job_dir.mkdir(parents=True, exist_ok=True)
+        input_path = job_dir / "generated_grid.csv"
+        output_path = job_dir / "optimized_grid.csv"
+        generated.to_csv(input_path, index=False)
+        response_queue: queue.Queue = queue.Queue()
+        with self._optimizer_process_lock:
+            self._optimizer_job_active = True
+            self._optimizer_job_queues[job_id] = response_queue
+        self._write_optimizer_service_request({
+            "command": "optimize", "job_id": job_id,
+            "input": str(input_path), "output": str(output_path),
+            "proposals": optimizer_settings["proposals"],
+            "frequencies_per_octave": optimizer_settings["frequencies_per_octave"],
+            "orders": list(optimizer_settings["orders"]),
+        })
+        try:
+            while True:
+                try:
+                    event = response_queue.get(timeout=1.0)
+                except queue.Empty:
+                    process = self._optimizer_process
+                    if process is None or process.poll() is not None:
+                        raise RuntimeError(self._optimizer_service_error or "Optimizer service stopped unexpectedly.")
+                    continue
+                if event.get("event") == "progress":
+                    report_progress(event)
+                elif event.get("event") == "job_failed":
+                    raise RuntimeError(event.get("error", "Optimizer failed."))
+                elif event.get("event") == "service_failed":
+                    raise RuntimeError(event.get("error", "Optimizer service stopped."))
+                elif event.get("event") == "job_complete":
+                    return pd.read_csv(event.get("output", output_path))
+        finally:
+            with self._optimizer_process_lock:
+                self._optimizer_job_active = False
+                self._optimizer_job_queues.pop(job_id, None)
+            if self._optimizer_close_requested or not self._optimizer_view_active:
+                self._close_optimizer_service_if_idle()
 
     def _grid_vars(self, filename: str, effective_geometry: dict | None = None) -> dict:
         def wp_value(key: str, index: int):
@@ -988,6 +1402,13 @@ class GridGeneratorPane(QWidget):
             "flip_poles": self.flip_poles.isChecked(),
             "z_midpoint_zero": self.z_midpoint_zero.isChecked(),
             "side_snake_start": self.snake_start.currentText(),
+            "optimizer_enabled": self.optimizer_enabled.isChecked(),
+            "optimizer_level": next(
+                level for level, button in self.optimizer_level_buttons.items()
+                if button.isChecked()
+            ),
+            "optimizer_frequencies_per_octave": int(self.optimizer_frequencies_per_octave.value()),
+            "optimizer_orders": self.optimizer_orders.text().strip(),
             "user_positions": [
                 {
                     "name": row["name"].text().strip(),
@@ -1133,6 +1554,28 @@ class GridGeneratorPane(QWidget):
         self._redraw_viewer()
 
     def shutdown(self) -> None:
+        with self._optimizer_process_lock:
+            self._optimizer_view_active = False
+            self._optimizer_close_requested = True
+        # Let an accepted generation finish first. Its worker owns the optimizer
+        # request and must be allowed to receive the result before shutdown.
+        if self._generation_running:
+            self._generation_done.wait()
+        with self._optimizer_process_lock:
+            process = self._optimizer_process
+            request_path = self._optimizer_request_path()
+            if process is not None and process.poll() is None and request_path is not None:
+                self._optimizer_service_shutting_down = True
+                self._optimizer_service_ready.clear()
+                self._write_optimizer_service_request({"command": "shutdown"})
+            reader_thread = self._optimizer_service_reader_thread
+        if process is not None:
+            try:
+                process.wait()
+            except Exception:
+                logger.exception("Could not wait for optimizer service shutdown")
+        if reader_thread is not None and reader_thread is not threading.current_thread():
+            reader_thread.join()
         try:
             self.engine.pause()
             self.engine.stop_rotation()
