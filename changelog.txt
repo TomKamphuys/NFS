@@ -1,4 +1,34 @@
 --------
+09/10/26
+--------
+Added Reflection Free Time (ms) to the SCANNER settings, with an inline
+RFT Calculator copied from HALS Studio. The calculator uses speaker-to-mic
+and speaker/mic-to-boundary distances to calculate the reflection-free time.
+
+The RFT value is saved in each _project.json under
+stage1_vars.fdw_rft_ms as a string for use in HALS Studio,
+and restored when the project is reopened.
+
+Added a Set as system default button beside RFT. The system default persists
+across restarts and supplies fresh projects; opening or editing a project uses
+its own RFT without changing the system default.
+
+Moved the Audio Setup value-field and arrow styling into styles.py so the
+RFT calculator can reuse the same design. Audio Setup now imports the shared
+style.
+
+Files touched:
+src/rft_calc/
+src/harmonic_drive_qt/settings_dialog.py
+src/harmonic_drive_qt/config_support.py
+src/harmonic_drive_qt/project.py
+src/harmonic_drive_qt/styles.py
+src/harmonic_drive_qt/audio_setup_pane.py
+config_default.ini
+pyproject.toml
+tests/test_rft_calculator.py
+
+--------
 05/09/26
 --------
 Removed the dead "nfs-app" console entry point, which pointed at a

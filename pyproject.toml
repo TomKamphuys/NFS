@@ -56,11 +56,12 @@ spherical = "nfs.motion_manager:SphericalMeasurementMotionManager"
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["nfs*", "harmonic_drive_qt*", "grid_generator*"]
+include = ["nfs*", "harmonic_drive_qt*", "grid_generator*", "rft_calc*"]
 exclude = ["tests*"]
 
 [tool.setuptools.package-data]
 nfs = ["config.ini"]
+rft_calc = ["assets/*.svg"]
 grid_generator = ["images_grid_gen/*.png"]
 
 [tool.setuptools.exclude-package-data]
