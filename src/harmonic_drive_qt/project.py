@@ -169,6 +169,7 @@ def set_project_name(name: str) -> None:
 
 
 def save_project() -> None:
+    _project_data.setdefault("scanner_settings", {}).setdefault("reflection_free_time_ms", 0.0)
     _project_dir.mkdir(parents=True, exist_ok=True)
     get_project_json_path().write_text(
         json.dumps(_project_data, indent=4),
@@ -213,11 +214,21 @@ def ensure_output_dirs() -> None:
 
 
 def sync_from_config(config_file: str, save: bool = True) -> None:
+    sync_rft_from_config(config_file, save=False)
     _sync_sweep_from_config(config_file, save=save)
 
 
+def sync_rft_from_config(config_file: str, save: bool = True) -> None:
+    parser = configparser.ConfigParser(inline_comment_prefixes=("#", ";"))
+    parser.read(config_file)
+    value = parser.getfloat("scanner", "reflection_free_time_ms", fallback=0.0)
+    _project_data["scanner_settings"] = {"reflection_free_time_ms": value}
+    if save:
+        save_project()
+
+
 def sync_defaults_from_config(config_file: str, save: bool = True) -> None:
-    _sync_sweep_from_config(get_default_config_path(config_file), save=save)
+    sync_from_config(str(get_default_config_path(config_file)), save=save)
 
 
 def get_default_config_path(config_file: str | Path = "config.ini") -> Path:
@@ -253,13 +264,15 @@ def apply_to_config(config_file: str) -> bool:
     parser.read(config_file)
 
     changed = False
-    for project_key, section in (("sweep_settings", "sweep"),):
+    for project_key, section in (("sweep_settings", "sweep"), ("scanner_settings", "scanner")):
         settings = _project_data.get(project_key)
         if not isinstance(settings, dict):
             continue
         if not parser.has_section(section):
             parser.add_section(section)
         for key, value in settings.items():
+            if section == "scanner" and key != "reflection_free_time_ms":
+                continue
             if section == "audio" and key == "mode":
                 continue
             parser.set(section, key, str(value))

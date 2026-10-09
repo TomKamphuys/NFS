@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import configparser
+import math
 import shutil
 from pathlib import Path
 from typing import Callable
@@ -300,10 +301,39 @@ class SettingsDialog(QDialog):
                 continue
             if visible_keys is not None and key not in visible_keys:
                 continue
-            if not self.parser.has_option(section, key): continue
-            raw = _strip_inline_comment(self.parser.get(section, key))
+            is_rft = section == "scanner" and key == "reflection_free_time_ms"
+            if not self.parser.has_option(section, key) and not is_rft: continue
+            raw = _strip_inline_comment(self.parser.get(section, key, fallback="0"))
             label = DISPLAY_LABELS.get(key, key.replace('_', ' ').capitalize())
-            self._add_field(layout, section, key, label, kind, raw, options)
+            field, row = self._add_field(layout, section, key, label, kind, raw, options)
+            if is_rft:
+                button = QPushButton("RFT Calculator")
+                button.clicked.connect(self._open_rft_calculator)
+                field_label = row.layout().takeAt(0).widget()
+                row.layout().removeWidget(field)
+                value_layout = QVBoxLayout()
+                value_layout.setSpacing(0)
+                value_layout.addWidget(field_label)
+                value_layout.addWidget(field)
+                inline = QHBoxLayout()
+                inline.setContentsMargins(0, 0, 0, 0)
+                inline.addLayout(value_layout, 1)
+                button.setStyleSheet(
+                    "QPushButton { color: #2563eb; background: white; "
+                    "border: 1px solid #cbd5e1; border-radius: 4px; "
+                    "padding: 4px 10px; font-weight: bold; }"
+                    "QPushButton:hover { background: #eff6ff; }"
+                )
+                inline.addWidget(button, 0, Qt.AlignmentFlag.AlignVCenter)
+                row.layout().addLayout(inline)
+
+    def _open_rft_calculator(self) -> None:
+        from rft_calc.dialog import RFTDialog
+
+        dialog = RFTDialog(self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            field, _kind = self.inputs[("scanner", "reflection_free_time_ms")]
+            field.setText(f"{dialog.result["rft_ms"]:.4f}")
 
     def _build_motion_manager_fields(self, layout) -> None:
         raw_type = _strip_inline_comment(
@@ -571,6 +601,9 @@ class SettingsDialog(QDialog):
                 
             try:
                 typed = _coerce(kind, raw)
+                if section == "scanner" and key == "reflection_free_time_ms":
+                    if not math.isfinite(typed) or typed < 0:
+                        raise ValueError("Reflection Free Time must be finite and non-negative")
                 if kind == "optional_float" and typed is None:
                     if self.parser.has_option(section, key):
                         self.parser.remove_option(section, key)
@@ -591,6 +624,8 @@ class SettingsDialog(QDialog):
         with open(self.config_file, "w") as f:
             self.parser.write(f)
             
+        from . import project
+        project.sync_rft_from_config(self.config_file)
         self.on_apply()
         self.accept()
 
