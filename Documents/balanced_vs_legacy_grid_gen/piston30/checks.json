@@ -1,0 +1,131 @@
+{
+  "quadrature": [
+    {
+      "frequency_hz": 3000,
+      "relative_error": 4.851527812225969e-16
+    },
+    {
+      "frequency_hz": 17000,
+      "relative_error": 1.1650245154008436e-15
+    },
+    {
+      "frequency_hz": 20000,
+      "relative_error": 1.4779195511581816e-15
+    }
+  ],
+  "solver_comparisons": [
+    {
+      "frequency_hz": 3000,
+      "order": 5,
+      "method": "legacy",
+      "passed": true
+    },
+    {
+      "frequency_hz": 3000,
+      "order": 5,
+      "method": "balanced",
+      "passed": true
+    },
+    {
+      "frequency_hz": 3000,
+      "order": 8,
+      "method": "legacy",
+      "passed": true
+    },
+    {
+      "frequency_hz": 3000,
+      "order": 8,
+      "method": "balanced",
+      "passed": true
+    },
+    {
+      "frequency_hz": 3000,
+      "order": 12,
+      "method": "legacy",
+      "passed": true
+    },
+    {
+      "frequency_hz": 3000,
+      "order": 12,
+      "method": "balanced",
+      "passed": true
+    },
+    {
+      "frequency_hz": 17000,
+      "order": 5,
+      "method": "legacy",
+      "passed": true
+    },
+    {
+      "frequency_hz": 17000,
+      "order": 5,
+      "method": "balanced",
+      "passed": true
+    },
+    {
+      "frequency_hz": 17000,
+      "order": 8,
+      "method": "legacy",
+      "passed": true
+    },
+    {
+      "frequency_hz": 17000,
+      "order": 8,
+      "method": "balanced",
+      "passed": true
+    },
+    {
+      "frequency_hz": 17000,
+      "order": 12,
+      "method": "legacy",
+      "passed": true
+    },
+    {
+      "frequency_hz": 17000,
+      "order": 12,
+      "method": "balanced",
+      "passed": true
+    },
+    {
+      "frequency_hz": 20000,
+      "order": 5,
+      "method": "legacy",
+      "passed": true
+    },
+    {
+      "frequency_hz": 20000,
+      "order": 5,
+      "method": "balanced",
+      "passed": true
+    },
+    {
+      "frequency_hz": 20000,
+      "order": 8,
+      "method": "legacy",
+      "passed": true
+    },
+    {
+      "frequency_hz": 20000,
+      "order": 8,
+      "method": "balanced",
+      "passed": true
+    },
+    {
+      "frequency_hz": 20000,
+      "order": 12,
+      "method": "legacy",
+      "passed": true
+    },
+    {
+      "frequency_hz": 20000,
+      "order": 12,
+      "method": "balanced",
+      "passed": true
+    }
+  ],
+  "elapsed_seconds": 41.92428440001095,
+  "source": "finite uniform disk of monopole+dipole sources",
+  "radius_m": 0.015,
+  "axis": "+X",
+  "noise_trials": 8
+}

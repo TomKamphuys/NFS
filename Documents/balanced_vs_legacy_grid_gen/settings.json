@@ -1,0 +1,47 @@
+{
+  "settings": {
+    "cyl_radius_mm": 200.0,
+    "cyl_height_mm": 500.0,
+    "num_points": 1000,
+    "wall_thickness_mm": 50.0,
+    "bottom_cutoff_mm": 30,
+    "cap_fraction": null,
+    "P_side": 0.5,
+    "P_caps": 0.8,
+    "generate_reverse_spiral": true,
+    "z_rotation_deg": 90,
+    "flip_poles": false,
+    "phi_min_deg": -170.0,
+    "phi_max_deg": 180.0,
+    "azimuth_density_ratio": 1.0,
+    "azimuth_weight_center_deg": 0.0,
+    "seed": 42,
+    "z_midpoint_zero": true
+  },
+  "actual_points": 973,
+  "orders": [
+    5,
+    8,
+    12
+  ],
+  "pair_swaps": false,
+  "frequency_range": [
+    3000,
+    20000,
+    100
+  ],
+  "geometry": [
+    {
+      "method": "legacy",
+      "points": 973,
+      "wall_points": 729,
+      "end_to_middle_count_ratio": 1.0165289256198347
+    },
+    {
+      "method": "balanced",
+      "points": 973,
+      "wall_points": 740,
+      "end_to_middle_count_ratio": 0.7152777777777778
+    }
+  ]
+}

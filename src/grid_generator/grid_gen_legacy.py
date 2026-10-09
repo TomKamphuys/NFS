@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-Balanced angular-coverage measurement grid constructor.
+Legacy Fibonacci sine-hash measurement grid constructor.
 
-Legacy spiral arguments remain accepted for app compatibility but do not affect
-this constructor. For Fibonacci sine-hash use grid_gen_legacy.py.
+Preserves cylindrical wall/cap expansion and dual-spiral generation.
+For balanced angular coverage use grid_gen.py.
 """
 
 import numpy as np
@@ -38,115 +38,116 @@ def calculate_geometry_from_cylindrical_waypoints(top_crit_pos, bot_crit_pos):
         'z_offset_mm': (top_z_mm + bot_z_mm) / 2.0
     }
 
-def generate_balanced_cylinder(radius_mm, height_mm, num_points, thickness_mm=50.0,
-                               bottom_cutoff_mm=0.0, cap_fraction=None,
-                               phi_min_deg=-180.0, phi_max_deg=180.0,
-                               azimuth_density_ratio=1.0,
-                               azimuth_weight_center_deg=0.0,
-                               z_offset_mm=0.0, seed=42):
-    """Sample the shell with angular density proportional to inner/outer ray distance.
+def generate_cylinder_spiral(N, R, H, cap_frac,
+                             reverse=False, rotate_deg=0.0, flip_z=False,
+                             wall_thickness_mm=0.0,
+                             vd_power_side=0.5, vd_power_caps=0.5,
+                             index_offset=0, bottom_cutoff=0.0,
+                                 azimuth_density_ratio=1.0,
+                             azimuth_weight_center_deg=0.0):
+    """Generate one Fibonacci spiral with Hashed Cylindrical Variable Density."""
+    phi = (-1 if reverse else 1) * np.pi * (3. - np.sqrt(5))
+    n_side = int(round(N*(1-cap_frac)))
+    n_caps = N - n_side
+    n_top = n_caps//2 + (n_caps%2)
+    n_bot = n_caps - n_top
 
-    Distances are millimetres; output is quantized robot cylindrical coordinates.
-    Cap allocation is nominal before exclusions, not a fixed final point count.
-    """
-    from scipy.integrate import cumulative_trapezoid
-    from scipy.stats import qmc
+    z_shift_m = wall_thickness_mm / 1000.0
+    pts = []
 
-    for name, value in (("num_points", num_points), ("seed", seed)):
-        if isinstance(value, (bool, np.bool_)) or not isinstance(value, (int, np.integer)):
-            raise ValueError(f"{name} must be an integer")
-    if num_points <= 0 or seed < 0:
-        raise ValueError("num_points must be positive and seed nonnegative")
-    values = [radius_mm, height_mm, thickness_mm, bottom_cutoff_mm,
-              phi_min_deg, phi_max_deg, azimuth_density_ratio,
-              azimuth_weight_center_deg, z_offset_mm]
-    if not np.all(np.isfinite(values)):
-        raise ValueError("Balanced grid parameters must be finite")
-    if radius_mm <= 0 or height_mm <= 0 or thickness_mm < 0 or bottom_cutoff_mm < 0:
-        raise ValueError("Radius/height must be positive; thickness/cutoff nonnegative")
-    if not -180 <= phi_min_deg < phi_max_deg <= 180 or azimuth_density_ratio < 1:
-        raise ValueError("Require -180 <= phi_min < phi_max <= 180 and azimuth ratio >= 1")
-    if cap_fraction is not None and (not np.isfinite(cap_fraction) or not 0 <= cap_fraction <= 1):
-        raise ValueError("cap_fraction must be None or in [0, 1]")
-    R, h, t = float(radius_mm), float(height_mm) / 2, float(thickness_mm)
-    c = h / np.hypot(R, h)
-    co = (h + t) / np.hypot(R + t, h + t)
+    # Convert center to radians, accounting for any subsequent rotation
+    # so the concentrated area ends up at the requested global angle
+    azimuth_weight_center_rad = np.radians(azimuth_weight_center_deg - rotate_deg)
 
-    def intersections(mu):
-        sine = np.sqrt(np.maximum(0, 1 - mu * mu))
-        with np.errstate(divide="ignore"):
-            return (np.minimum(R / sine, h / np.abs(mu)),
-                    np.minimum((R + t) / sine, (h + t) / np.abs(mu)))
+    # Calculate the conformal mapping coefficient 'alpha'
+    # Ratio = 1 / alpha^2  =>  alpha = 1 / sqrt(Ratio)
+    alpha = 1.0 / np.sqrt(max(1.0, azimuth_density_ratio))
 
-    nodes = np.unique(np.concatenate((np.linspace(-1, 1, 8193),
-                       np.cos(np.linspace(0, np.pi, 8193)), [-c, c, -co, co])))
-    a, b = intersections(nodes)
-    weights = a * b
+    for i in range(n_side):
+        t = i/max(n_side-1,1)
+        z = -H/2 + H * t
 
-    def cdf(x, weight):
-        result = cumulative_trapezoid(weight, x, initial=0)
-        return result / result[-1]
+        # Start with a uniform spiral angle
+        u = (i * phi) % (2 * np.pi)
 
-    full_cdf = cdf(nodes, weights)
-    side_probability = np.interp(c, nodes, full_cdf) - np.interp(-c, nodes, full_cdf)
-    if cap_fraction is not None:
-        side_probability = 1 - float(cap_fraction)
-        side_mask = np.abs(nodes) <= c
-        cap_mask = nodes >= c
-        side_nodes, cap_nodes = nodes[side_mask], nodes[cap_mask]
-        side_cdf = cdf(side_nodes, weights[side_mask])
-        cap_cdf = cdf(cap_nodes, weights[cap_mask])
-    phi_nodes = np.linspace(phi_min_deg, phi_max_deg, 16385)
-    alpha = 1 / np.sqrt(azimuth_density_ratio)
-    delta = np.radians(phi_nodes - azimuth_weight_center_deg) / 2
-    phi_cdf = cdf(phi_nodes, alpha / (alpha**2 * np.cos(delta)**2 + np.sin(delta)**2))
-    phi_lo, phi_hi = np.ceil(10 * phi_min_deg) / 10, np.floor(10 * phi_max_deg) / 10
-    max_r = np.floor(R + t)
-    min_z, max_z = np.ceil(z_offset_mm - h - t), np.floor(z_offset_mm + h + t)
-    if phi_lo > phi_hi or max_r < 1 or min_z > max_z:
-        raise ValueError("No representable robot coordinates in the requested shell")
-    sampler = qmc.Halton(d=3, scramble=True, seed=int(seed))
-    accepted, seen = [], set()
-    draw_limit = max(100000, 200 * num_points)
-    drawn = 0
-    while len(accepted) < num_points and drawn < draw_limit:
-        batch = min(max(256, num_points - len(accepted)), draw_limit - drawn)
-        samples = sampler.random(batch)
-        drawn += batch
-        u, v, w = samples.T
-        if cap_fraction is None:
-            mu = np.interp(u, full_cdf, nodes)
-        else:
-            mu = np.empty(batch)
-            side = u < side_probability
-            if side.any():
-                mu[side] = np.interp(u[side] / side_probability, side_cdf, side_nodes)
-            if (~side).any():
-                cu = (u[~side] - side_probability) / (1 - side_probability)
-                mu[~side] = np.where(cu < .5, -1, 1) * np.interp((2 * cu) % 1, cap_cdf, cap_nodes)
-        a, b = intersections(mu)
-        distance = a + w * (b - a)
-        radius = np.clip(np.round(distance * np.sqrt(np.maximum(0, 1 - mu**2))), 0, max_r)
-        z = np.clip(np.round(distance * mu + z_offset_mm), min_z, max_z)
-        phi = np.clip(np.round(np.interp(v, phi_cdf, phi_nodes), 1), phi_lo, phi_hi)
-        if phi_min_deg == -180:
-            phi[phi == 180] = -180
-        centred_z = z - z_offset_mm
-        valid = ((radius >= R) | (np.abs(centred_z) >= h)) & (radius > 0)
-        valid &= ~((centred_z <= -h) & (radius <= bottom_cutoff_mm))
-        for r, angle, robot_z in zip(radius[valid], phi[valid], z[valid]):
-            key = (int(r), int(round(angle * 10)), int(robot_z))
-            if key not in seen:
-                seen.add(key)
-                accepted.append((int(r), angle, int(robot_z)))
-                if len(accepted) == num_points:
-                    break
-    if len(accepted) != num_points:
-        raise ValueError(f"Balanced grid exhausted {draw_limit} draws: accepted {len(accepted)} of {num_points} unique positions")
-    result = pd.DataFrame(accepted, columns=["r_xy_mm", "phi_deg", "z_mm"])
-    result.attrs.update(method="balanced", seed=int(seed), cap_fraction_eff=1 - side_probability)
-    return result
+        # Warp using a conformal mapping for a perfectly smooth, continuous density gradient
+        u_shifted = u - azimuth_weight_center_rad
+        theta_half = np.arctan2(alpha * np.sin(u_shifted / 2.0), np.cos(u_shifted / 2.0))
+        θ = (2.0 * theta_half + azimuth_weight_center_rad) % (2 * np.pi)
 
+        pts.append([R*np.cos(θ), R*np.sin(θ), z])
+
+    for j in range(n_top):
+        r = R*np.sqrt((j+0.5)/n_top)
+        θ = (j*phi)%(2*np.pi)
+        pts.append([r*np.cos(θ), r*np.sin(θ), +H/2 - z_shift_m])
+
+    for j in range(n_bot):
+        r = R*np.sqrt((j+0.5)/n_bot)
+        θ = (j*phi)%(2*np.pi)
+        pts.append([r*np.cos(θ), r*np.sin(θ), -H/2 + z_shift_m])
+
+    arr = np.array(pts)
+
+    # --- Apply Variable Density (Deterministic Hash + Cylindrical Expansion) ---
+    if wall_thickness_mm > 0:
+        d_max = wall_thickness_mm / 1000.0
+
+        # High-frequency constants for the deterministic hash
+        HASH_A = 12.9898
+        HASH_B = 43758.5453
+
+        for k in range(arr.shape[0]):
+            x, y, z = arr[k]
+            global_k = k + index_offset
+
+            # 1. The Deterministic Sine-Hash (breaks the screw thread)
+            u_k = (np.abs(np.sin(global_k * HASH_A) * HASH_B)) % 1.0
+
+            # 2. Strict Cylindrical Expansion & Index-Based Power Law
+            is_cap = (k >= n_side)
+
+            if is_cap:
+                # Point is on an end cap -> Push strictly vertically (Z) using P_caps
+                dr = d_max * (u_k ** vd_power_caps)
+                if k < n_side + n_top:
+                    # Top cap expands upwards
+                    arr[k, 2] += dr
+                else:
+                    # Bottom cap expands downwards
+                    arr[k, 2] -= dr
+            else:
+                # Point is on the side wall -> Push strictly radially (X, Y) using P_side
+                dr = d_max * (u_k ** vd_power_side)
+                mag_xy = np.hypot(x, y)
+                if mag_xy > 0:
+                    arr[k, 0] += (x / mag_xy) * dr
+                    arr[k, 1] += (y / mag_xy) * dr
+
+    # --- Apply Transformations AFTER Density Expansion ---
+    if flip_z:
+        arr[:,2] *= -1
+
+    if rotate_deg != 0:
+        ang = np.radians(rotate_deg)
+        c,s = np.cos(ang), np.sin(ang)
+        x2 = c*arr[:,0] - s*arr[:,1]
+        y2 = s*arr[:,0] + c*arr[:,1]
+        arr[:,0], arr[:,1] = x2, y2
+
+
+    df = pd.DataFrame(arr, columns=['x','y','z'])
+
+    tol = (wall_thickness_mm/1000.0) if wall_thickness_mm>0 else 0
+    # Update bottom cutoff mask to account for the new cap_z_shift
+    mask_bottom = (
+        (np.abs(df['z'] - (-H/2 + z_shift_m)) <= tol + 1e-8) &
+        (np.hypot(df['x'], df['y']) <= bottom_cutoff)
+    )
+    if mask_bottom.any():
+        df = df[~mask_bottom].reset_index(drop=True)
+
+    return df
 
 def generate_measurement_grid(
     cyl_radius_mm=None,
@@ -177,7 +178,7 @@ def generate_measurement_grid(
     seed=42
 ):
     # Constructor is selected by module, not the compatibility argument.
-    balanced_spherical_angular_coverage = True
+    balanced_spherical_angular_coverage = False
     z_offset_mm = None
     # If valid waypoints are provided, calculate geometry and override manual settings
     if top_crit_pos is not None and bot_crit_pos is not None:
@@ -200,13 +201,99 @@ def generate_measurement_grid(
     # will end exactly at the new outer cyl_height boundary.
     cyl_height_working = cyl_height + 2.0 * (wall_thickness_mm / 1000.0)
 
-    if z_offset_mm is None:
-        z_offset_mm = 0.0 if z_midpoint_zero else cyl_height_working * 500.0
-    cyl_df = generate_balanced_cylinder(
-        cyl_radius_mm, cyl_height_mm, num_points, wall_thickness_mm,
-        bottom_cutoff_mm, cap_fraction, phi_min_deg, phi_max_deg,
-        azimuth_density_ratio, azimuth_weight_center_deg, z_offset_mm, seed)
-    cap_fraction_eff = cyl_df.attrs["cap_fraction_eff"]
+    # ============================================================
+    # Automatic / manual end-cap fraction handling
+    # ============================================================
+    if cap_fraction is None:
+        side_area = 2.0 * np.pi * cyl_radius * cyl_height_working
+        cap_area  = 2.0 * np.pi * cyl_radius**2
+        cap_fraction_eff = cap_area / (side_area + cap_area)
+        print(f"cap_fraction = Auto (None) → computed cap fraction = {cap_fraction_eff:.4f}")
+    elif isinstance(cap_fraction, (int, float)):
+        cap_fraction_eff = float(cap_fraction)
+        if not (0.0 <= cap_fraction_eff <= 1.0):
+            raise ValueError("cap_fraction must be in [0, 1] or None")
+        print(f"cap_fraction (manual) = {cap_fraction_eff:.4f}")
+    else:
+        raise TypeError("cap_fraction must be None (Auto) or a float in [0, 1]")
+
+    # ===============================
+    # Deterministic Generation
+    # ===============================
+    print("Generating Variable Density Grid (Hash + Cylindrical Expansion)...")
+
+    if generate_reverse_spiral:
+        pts_forward = (num_points + 1) // 2
+        pts_reverse = num_points // 2
+    else:
+        pts_forward = num_points
+        pts_reverse = 0
+
+    df_f = generate_cylinder_spiral(
+        pts_forward, cyl_radius, cyl_height_working, cap_fraction_eff,
+        reverse=False,
+        wall_thickness_mm=wall_thickness_mm,
+        vd_power_side=P_side, vd_power_caps=P_caps,
+        index_offset=0,
+        bottom_cutoff=bottom_cutoff,
+        azimuth_density_ratio=azimuth_density_ratio,
+        azimuth_weight_center_deg=azimuth_weight_center_deg
+    )
+
+    if generate_reverse_spiral and pts_reverse > 0:
+        df_r = generate_cylinder_spiral(
+            pts_reverse, cyl_radius, cyl_height_working, cap_fraction_eff,
+            reverse=True, rotate_deg=z_rotation_deg, flip_z=flip_poles,
+            wall_thickness_mm=wall_thickness_mm,
+            vd_power_side=P_side, vd_power_caps=P_caps,
+            index_offset=len(df_f),
+            bottom_cutoff=bottom_cutoff,
+            azimuth_density_ratio=azimuth_density_ratio,
+            azimuth_weight_center_deg=azimuth_weight_center_deg
+        )
+        df = pd.concat([df_f, df_r], ignore_index=True)
+    else:
+        df = df_f
+
+    df[['x','y','z']] *= 1000.0
+
+    # ===============================
+    # Cylindrical coordinates
+    # ===============================
+    r_xy = np.hypot(df['x'].to_numpy(), df['y'].to_numpy())
+    phi_deg_cyl = np.degrees(np.arctan2(df['y'], df['x']))
+
+    cyl_df = pd.DataFrame({
+        'r_xy_mm': r_xy,
+        'phi_deg': phi_deg_cyl,
+        'z_mm': df['z'].to_numpy()
+    })
+
+    phi_mask = (
+        (cyl_df['phi_deg'] >= phi_min_deg) &
+        (cyl_df['phi_deg'] <= phi_max_deg)
+    )
+
+    cyl_df = cyl_df[phi_mask].reset_index(drop=True)
+
+    # ===============================
+    # Quantisation
+    # ===============================
+    cyl_df['r_xy_mm'] = np.round(cyl_df['r_xy_mm']).astype(int)
+    H_mm = cyl_height_working * 1000.0
+
+    if z_offset_mm is not None:
+        # Override legacy centering/shifting using absolute waypoint coordinates
+        cyl_df['z_mm'] = np.round(cyl_df['z_mm'] + z_offset_mm).astype(int)
+    else:
+        if z_midpoint_zero:
+            cyl_df['z_mm'] = np.round(cyl_df['z_mm']).astype(int)
+        else:
+            cyl_df['z_mm'] = np.round(cyl_df['z_mm'] + H_mm/2.0).astype(int)
+            cyl_df['z_mm'] = np.clip(cyl_df['z_mm'], 0, int(round(H_mm)))
+
+    cyl_df['phi_deg'] = np.round(cyl_df['phi_deg'], 1)
+
     # ===============================
     # Append Generation Settings
     # ===============================

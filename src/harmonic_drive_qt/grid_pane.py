@@ -25,6 +25,7 @@ from grid_generator.grid_gen import (
     calculate_geometry_from_cylindrical_waypoints,
     generate_measurement_grid,
 )
+from grid_generator.grid_gen_legacy import generate_measurement_grid as generate_legacy_grid
 from grid_generator.path_plan import plan_path
 
 from .backend import BackendManager, Worker
@@ -466,7 +467,7 @@ class GridGeneratorPane(QWidget):
         self.bottom_cutoff = self._spin(self._gv_float(grid_vars, "bottom_cutoff_mm", 30.0), 0, 1000, " mm")
         self.delta_theta = self._spin(self._gv_float(grid_vars, "delta_theta_deg", 7.5), 0.1, 90, " deg")
         self.wall_thickness = self._spin(self._gv_float(grid_vars, "wall_thickness_mm", 50.0), 0, 1000, " mm")
-        self.cap_fraction = QLineEdit(str(grid_vars.get("cap_fraction") or "Auto"))
+        self.cap_fraction = QLineEdit(self._auto_text(grid_vars.get("cap_fraction")))
         self._normalize_decimal_editor(self.cap_fraction)
         self.p_side = self._spin(self._gv_float(grid_vars, "P_side", 0.5), 0.01, 5.0, "", decimals=2)
         self.p_caps = self._spin(self._gv_float(grid_vars, "P_caps", 0.8), 0.01, 5.0, "", decimals=2)
@@ -474,6 +475,12 @@ class GridGeneratorPane(QWidget):
         self._normalize_decimal_editor(self.cap_tol)
         self.az_weight = self._spin(self._gv_float(grid_vars, "azimuth_weight_center_deg", 0.0), -180, 180, " deg")
         self.z_rotation = self._spin(self._gv_float(grid_vars, "z_rotation_deg", 90.0), -360, 360, " deg")
+        self.grid_constructor = QCheckBox()
+        self.grid_constructor.setStyleSheet(toggle_style() + "QCheckBox { font-weight: 700; }")
+        constructor = str(grid_vars.get("grid_constructor") or
+                          ("balanced" if self._gv_bool(grid_vars, "balanced_spherical_angular_coverage", True) else "legacy"))
+        self.grid_constructor.setChecked(constructor != "legacy")
+        self.grid_constructor.setToolTip("On: Balanced angular coverage. Off: Fibonacci sine-hash. Both support pair-wise optimization.")
         self.reverse_spiral = QCheckBox("Generate reverse spiral")
         self.reverse_spiral.setChecked(self._gv_bool(grid_vars, "generate_reverse_spiral", True))
         self.flip_poles = QCheckBox("Flip poles")
@@ -508,7 +515,23 @@ class GridGeneratorPane(QWidget):
             checkbox.setStyleSheet(toggle_style() + "QCheckBox { font-weight: 700; }")
             toggle_row.addWidget(checkbox)
         toggle_row.addStretch(1)
-        grid.addLayout(toggle_row, 4, 0, 1, 4)
+        grid.addWidget(self.grid_constructor, 4, 0, 1, 4)
+        grid.addLayout(toggle_row, 5, 0, 1, 4)
+
+        def update_constructor_controls():
+            legacy = not self.grid_constructor.isChecked()
+            self.grid_constructor.setText("Grid constructor: " + ("Fibonacci sine-hash" if legacy else "Balanced angular coverage"))
+            self.reverse_spiral.setVisible(legacy)
+            self.flip_poles.setVisible(legacy)
+            for control in (self.p_side, self.p_caps, self.reverse_spiral,
+                            self.z_rotation, self.flip_poles):
+                control.setEnabled(legacy)
+            self.az_density.setMinimum(1.0 if not legacy else 0.05)
+            self.phi_min.setRange(-180 if not legacy else -360, 180 if not legacy else 360)
+            self.phi_max.setRange(-180 if not legacy else -360, 180 if not legacy else 360)
+
+        self.grid_constructor.toggled.connect(update_constructor_controls)
+        update_constructor_controls()
 
         optimizer_group = QGroupBox("")
         optimizer_group.setStyleSheet("QGroupBox { border: none; margin: 0; padding: 0; }")
@@ -596,7 +619,7 @@ class GridGeneratorPane(QWidget):
 
         self.optimizer_enabled.toggled.connect(set_optimizer_controls_enabled)
         set_optimizer_controls_enabled(self.optimizer_enabled.isChecked())
-        grid.addWidget(optimizer_group, 5, 0, 1, 4)
+        grid.addWidget(optimizer_group, 6, 0, 1, 4)
         for col in range(4):
             grid.setColumnStretch(col, 1)
         
@@ -1071,7 +1094,9 @@ class GridGeneratorPane(QWidget):
         if cap_tol is None:
             cap_tol = self.wall_thickness.value() + 1.0
 
-        generated = generate_measurement_grid(
+        constructor = (generate_legacy_grid if not self.grid_constructor.isChecked()
+                       else generate_measurement_grid)
+        generated = constructor(
             cyl_radius_mm=self.cyl_radius.value(),
             cyl_height_mm=self.cyl_height.value(),
             num_points=int(self.num_points.value()),
@@ -1398,6 +1423,8 @@ class GridGeneratorPane(QWidget):
             "cap_tol_mm": self.cap_tol.text(),
             "azimuth_weight_center_deg": self.az_weight.value(),
             "z_rotation_deg": self.z_rotation.value(),
+            "grid_constructor": "balanced" if self.grid_constructor.isChecked() else "legacy",
+            "balanced_spherical_angular_coverage": self.grid_constructor.isChecked(),
             "generate_reverse_spiral": self.reverse_spiral.isChecked(),
             "flip_poles": self.flip_poles.isChecked(),
             "z_midpoint_zero": self.z_midpoint_zero.isChecked(),

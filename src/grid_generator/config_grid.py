@@ -9,6 +9,9 @@ User settings for the capture scripts that generate measruemtn grids, drive robo
 OUTPUT_GRID_GEN         = "jan_cylinder_test.csv" # Default "measurment_grid.csv"
 cyl_radius_mm           = 200.0    # Cylinder internal radius (mm)
 cyl_height_mm           = 500.0    # Cylinder internal height (mm)
+grid_constructor = "balanced"  # GUI: "balanced" or "legacy"
+balanced_spherical_angular_coverage = True  # Backward-compatible saved preference; each script has a fixed constructor
+seed = 42  # Scrambled Halton seed for balanced coverage
 num_points              = 1000     # Total points for the generated grid
 
 # Keep Out areas. 
