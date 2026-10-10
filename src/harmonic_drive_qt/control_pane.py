@@ -106,12 +106,19 @@ class ControlPane(QWidget):
         scroll.setWidget(content)
         root.addWidget(scroll)
 
-        layout.addWidget(self._build_position_group("WCS"))
+        position_frames = [self._build_position_group("WCS")]
         if _config_bool(self.backend.config_file, "app", "show_machine_coordinate_system", False):
-            layout.addWidget(self._build_position_group("MCS", machine=True))
+            position_frames.append(self._build_position_group("MCS", machine=True))
         else:
             self.mcs_labels = {}
-        layout.addWidget(self._build_motion_group())
+        for frame in position_frames:
+            layout.addWidget(frame, 0, Qt.AlignmentFlag.AlignLeft)
+        motion_frame = self._build_motion_group()
+        layout.addWidget(motion_frame, 0, Qt.AlignmentFlag.AlignLeft)
+        motion_frame.ensurePolished()
+        motion_frame.setFixedSize(motion_frame.sizeHint())
+        for frame in position_frames:
+            frame.setFixedWidth(motion_frame.width())
         if _config_bool(self.backend.config_file, "app", "show_height_offset_controls", True):
             layout.addWidget(self._build_height_offset_group())
         layout.addWidget(self._build_measurement_group())
@@ -121,7 +128,6 @@ class ControlPane(QWidget):
         frame = QFrame()
         frame.setObjectName("DroFrame")
         frame.setStyleSheet("QFrame#DroFrame { background-color: #000000; border-radius: 6px; border: 2px solid #1f2937; }")
-        frame.setMaximumWidth(780)
         frame.setMinimumHeight(72)
         frame.setMaximumHeight(86)
         grid = QGridLayout(frame)
@@ -173,7 +179,6 @@ class ControlPane(QWidget):
     def _build_motion_group(self) -> QFrame:
         frame = QFrame()
         frame.setStyleSheet("background-color: #000000; border-radius: 6px; border: 2px solid #1f2937;")
-        frame.setMaximumWidth(780)
         layout = QVBoxLayout(frame)
         layout.setContentsMargins(12, 10, 12, 10)
         layout.setSpacing(10)
@@ -191,8 +196,8 @@ class ControlPane(QWidget):
         jog_layout.setSpacing(4)
         for axis, left, right, unit, left_method, right_method in [
             ("PHI", "CW", "CCW", "deg", "rotate_cw", "rotate_ccw"),
-            ("RADIUS", "-", "+", "mm", "move_in", "move_out"),
-            ("HEIGHT", "-", "+", "mm", "move_down", "move_up"),
+            ("RADIUS", "IN", "OUT", "mm", "move_in", "move_out"),
+            ("HEIGHT", "DOWN", "UP", "mm", "move_down", "move_up"),
         ]:
             jog_layout.addLayout(self._jog_row(axis, left, right, unit, left_method, right_method))
         
@@ -280,9 +285,9 @@ class ControlPane(QWidget):
                 f"QPushButton:hover {{ background: {hover}; color: #ffffff; }}"
             )
 
-        left_btn = QPushButton(left)
-        left_btn.setStyleSheet("QPushButton { background: transparent; color: white; font-weight: bold; border: none; min-width: 32px; }")
-        left_btn.setFixedSize(32, 34)
+        left_btn = QPushButton(left, self)
+        direction_style = "QPushButton { background: transparent; color: white; font-weight: bold; border: none; min-width: 0px; padding: 0px; }"
+        left_btn.setStyleSheet(direction_style)
         row.addWidget(left_btn)
         left_btn.clicked.connect(lambda _checked=False, m=left_method, v=120: self._run_jog(m, v)) # Just an example default
         self._jog_buttons.append(left_btn)
@@ -309,12 +314,21 @@ class ControlPane(QWidget):
             row.addWidget(button)
             self._jog_buttons.append(button)
 
-        right_btn = QPushButton(right)
-        right_btn.setStyleSheet("QPushButton { background: transparent; color: white; font-weight: bold; border: none; min-width: 32px; }")
-        right_btn.setFixedSize(32, 34)
+        right_btn = QPushButton(right, self)
+        right_btn.setStyleSheet(direction_style)
         row.addWidget(right_btn)
         right_btn.clicked.connect(lambda _checked=False, m=right_method, v=120: self._run_jog(m, v))
         self._jog_buttons.append(right_btn)
+
+        for button in (left_btn, right_btn):
+            button.ensurePolished()
+        direction_width = max(
+            64,
+            *(button.fontMetrics().horizontalAdvance("DOWN") + 16 for button in (left_btn, right_btn)),
+        )
+        for button in (left_btn, right_btn):
+            button.setStyleSheet(direction_style.replace("min-width: 0px;", f"min-width: {direction_width}px; max-width: {direction_width}px;"))
+            button.setFixedSize(direction_width, 34)
         
         return row
 
