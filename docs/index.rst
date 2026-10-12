@@ -16,6 +16,7 @@ documentation for details.
    :caption: Contents:
 
    architecture
+   harmonic_drive_qt_architecture
    fast_cylindrical_motion
    api
 

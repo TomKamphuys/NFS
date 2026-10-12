@@ -35,8 +35,7 @@ class NearFieldScanner:
                  scanner: Scanner,
                  audio: IAudio,
                  measurement_motion_manager,
-                 position_log_file: str = 'measurement_positions.csv',
-                 config_file: str = None):
+                 position_log_file: str = 'measurement_positions.csv'):
         """
         Initialize the NearFieldScanner.
 
@@ -44,13 +43,11 @@ class NearFieldScanner:
         :param audio: The audio interface for measurement and signal capture.
         :param measurement_motion_manager: Manager responsible for controlling motions during measurements.
         :param position_log_file: Path to the file where measurement positions are logged.
-        :param config_file: Path to the configuration file used.
         """
         self._scanner = scanner
         self._audio = audio
         self._measurement_motion_manager = measurement_motion_manager
         self._position_log_file = position_log_file
-        self._config_file = config_file
         self._project_dir = Path.cwd()
         self._measurement_pause_requested = threading.Event()
         self._measurement_stop_requested = threading.Event()
@@ -66,13 +63,32 @@ class NearFieldScanner:
         self._clear_position_log()
 
     def _single_measurements_dir(self) -> Path:
+        """
+        Get the directory path used for storing single measurement outputs.
+
+        :return: Path to the single measurements directory.
+        """
         return self._project_dir / "single_measurements"
 
     def _measurement_set_dir(self) -> Path:
+        """
+        Get the directory path used for storing measurement set outputs.
+
+        :return: Path to the measurement set directory.
+        """
         return self._project_dir / "measurement_set"
 
     @staticmethod
     def _safe_measurement_set_name(name: str | None) -> str:
+        """
+        Sanitize or generate a measurement set session name.
+
+        If a valid name is provided, non-alphanumeric characters are replaced
+        with underscores. If no valid name is provided, generates a timestamp-based name.
+
+        :param name: Optional raw name for the measurement set.
+        :return: A sanitized filename-safe measurement set name string.
+        """
         if name:
             cleaned = "".join(ch if ch.isalnum() else "_" for ch in str(name).strip())
             cleaned = "_".join(part for part in cleaned.split("_") if part)
@@ -138,16 +154,37 @@ class NearFieldScanner:
             self._measurement_pause_requested.clear()
 
     def is_measurement_set_running(self) -> bool:
+        """
+        Check if a measurement set is currently in progress.
+
+        :return: True if a measurement set is running, False otherwise.
+        """
         return self._measurement_running
 
     def is_measurement_set_paused(self) -> bool:
+        """
+        Check if the active measurement set is currently paused.
+
+        :return: True if paused, False otherwise.
+        """
         return self._measurement_pause_requested.is_set()
 
     def get_measurement_progress(self) -> dict[str, Any]:
+        """
+        Retrieve a copy of the current measurement set progress dictionary.
+
+        :return: Dictionary containing progress details (status, current point,
+                 total points, timestamp, and estimated time remaining in seconds).
+        """
         with self._measurement_progress_lock:
             return dict(self._measurement_progress)
 
     def _wait_while_measurement_paused(self) -> bool:
+        """
+        Wait in a loop while measurement set is paused until resumed or stopped.
+
+        :return: True if resumed and measurement should continue, False if stop was requested.
+        """
         if self._measurement_pause_requested.is_set():
             logger.info("Measurement set paused.")
         while self._measurement_pause_requested.is_set():
@@ -164,7 +201,15 @@ class NearFieldScanner:
     ) -> None:
         """
         Take a full set of measurements.
-        :return: nothing
+
+        Iterates through all measurement positions defined by the motion manager,
+        records impulse responses at each point, logs cylindrical coordinates,
+        and manages pause/stop requests and progress reporting.
+
+        :param measurement_set_name: Optional name for the measurement session.
+        :param overwrite: If True, overwrite existing measurement set directory.
+        :param progress_callback: Optional callback invoked when progress updates occur.
+        :return: None
         """
         self._measurement_pause_requested.clear()
         self._measurement_stop_requested.clear()
@@ -282,6 +327,20 @@ class NearFieldScanner:
         timestamp: float | None = None,
         eta_seconds: float | None = None,
     ) -> None:
+        """
+        Record and emit a measurement progress update.
+
+        Updates the internal thread-safe progress status dictionary and calls the
+        user-provided callback function if one was supplied.
+
+        :param progress_callback: Optional callback receiving a copy of the progress dictionary.
+        :param status: Current status string (e.g., 'started', 'point_complete', 'finished').
+        :param current: Number of points measured so far.
+        :param total: Total number of points in the measurement set.
+        :param timestamp: Monotonic timestamp of the progress event (defaults to current monotonic time).
+        :param eta_seconds: Estimated remaining time in seconds, or None if undetermined.
+        :return: None
+        """
         event = {
             "status": status,
             "current": current,
@@ -299,6 +358,15 @@ class NearFieldScanner:
             logger.warning(f"Measurement progress callback failed: {exc}")
 
     def set_project_directory(self, project_dir: str | Path) -> None:
+        """
+        Set the active project directory for measurement outputs and position logging.
+
+        Ensures the target directory exists, updates position log path and audio session
+        directory, and clears the position log file.
+
+        :param project_dir: Path to the new project root directory.
+        :return: None
+        """
         self._project_dir = Path(project_dir)
         self._project_dir.mkdir(parents=True, exist_ok=True)
         self._position_log_file = str(self._project_dir / "measurement_positions.csv")
@@ -406,4 +474,4 @@ class NearFieldScannerFactory:
         motion_manager_section = config_parser.get(section, 'motion_manager')
         measurement_manager = MotionManagerFactory.create(config_file, motion_manager_section, scanner)
 
-        return NearFieldScanner(scanner, audio, measurement_manager, config_file=config_file)
+        return NearFieldScanner(scanner, audio, measurement_manager)
