@@ -216,6 +216,35 @@ class Scanner:
         """
         self._grbl_controller.hold()
 
+    def jog(
+        self,
+        r: float = 0.0,
+        t: float = 0.0,
+        z: float = 0.0,
+        feed_rate: float | None = None,
+    ) -> None:
+        """
+        Jog the scanner in cylindrical coordinates using GRBL jog command ($J=).
+
+        In this cylindrical setup:
+        - Radial (r) maps to GRBL Y axis (mm)
+        - Angular (t / theta) maps to GRBL Z axis (deg)
+        - Vertical (z / height) maps to GRBL X axis (mm)
+
+        :param r: Incremental radial motion (mm).
+        :param t: Incremental angular motion (deg).
+        :param z: Incremental vertical motion (mm).
+        :param feed_rate: Feed rate for the jog (defaults to scanner configured feed_rate).
+        """
+        f = feed_rate if feed_rate is not None else self._feed_rate
+        self._grbl_controller.jog(x=z, y=r, z=t, feed_rate=f)
+
+    def cancel_jog(self) -> None:
+        """
+        Instantly cancel active jog motion.
+        """
+        self._grbl_controller.cancel_jog()
+
 
 class ScannerFactory:
     """

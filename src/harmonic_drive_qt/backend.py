@@ -70,6 +70,7 @@ class BackendManager:
         self.nfs = None
         self.audio = None
         self.sine_audio = None
+        self.gamepad_jogger = None
         self.load_warning: str | None = None
         self.preview_ir: dict[str, Any] | None = None
         self.project_dir = self._initial_project_dir()
@@ -140,6 +141,12 @@ class BackendManager:
         setup_logging(self.config_file, force=True)
         set_status("Connecting to GRBL")
         self.load_warning = None
+        if self.gamepad_jogger is not None:
+            try:
+                self.gamepad_jogger.stop()
+            except Exception:
+                pass
+            self.gamepad_jogger = None
         self.scanner = None
         self.nfs = None
         try:
@@ -148,6 +155,16 @@ class BackendManager:
             self.load_warning = format_scanner_error(exc)
             logger.error("{}: {}", self.load_warning, exc)
             set_status("Scanner unavailable; continuing without motion hardware")
+
+        if self.scanner is not None:
+            try:
+                from nfs.gamepad_jogger import GamepadJogger
+
+                jogger = GamepadJogger(self.scanner)
+                if jogger.start():
+                    self.gamepad_jogger = jogger
+            except Exception as exc:
+                logger.warning(f"Could not start gamepad jogger: {exc}")
 
         if self.scanner is not None:
             try:
@@ -333,6 +350,12 @@ class BackendManager:
             self.sine_audio.stop_sine()
 
     def shutdown(self) -> None:
+        if self.gamepad_jogger is not None:
+            try:
+                self.gamepad_jogger.stop()
+            except Exception:
+                pass
+            self.gamepad_jogger = None
         try:
             self.stop_sine()
         except Exception:

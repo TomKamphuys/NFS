@@ -75,6 +75,25 @@ class IGrblController(ABC):
         pass
 
     @abstractmethod
+    def jog(self, x: float = 0.0, y: float = 0.0, z: float = 0.0, feed_rate: float = 1000.0) -> None:
+        """
+        Send a GRBL jog command ($J=G91 G21 ...).
+
+        :param x: Incremental movement along X axis.
+        :param y: Incremental movement along Y axis.
+        :param z: Incremental movement along Z axis.
+        :param feed_rate: Feed rate for jogging in units/min.
+        """
+        pass
+
+    @abstractmethod
+    def cancel_jog(self) -> None:
+        """
+        Cancel any active jog immediately (sends real-time 0x85 byte).
+        """
+        pass
+
+    @abstractmethod
     def get_position(self) -> CylindricalPosition:
         """
         Return the current cylindrical position of the scanner.
@@ -168,6 +187,15 @@ class GrblControllerMock(IGrblController):
 
     def hold(self) -> None:
         logger.trace(f'Mocking hold')
+
+    def jog(self, x: float = 0.0, y: float = 0.0, z: float = 0.0, feed_rate: float = 1000.0) -> None:
+        logger.trace(f'Mocking jog: x={x}, y={y}, z={z}, feed_rate={feed_rate}')
+        self._pos_z += x
+        self._pos_r += y
+        self._pos_t += z
+
+    def cancel_jog(self) -> None:
+        logger.trace(f'Mocking cancel_jog')
 
     def __init__(self):
         self._pos_r = 0.0
@@ -287,6 +315,35 @@ class GrblControllerMockSimulatedDRO(IGrblController):
         with self._lock:
             self._state = GrblMachineState.IDLE
             self._state_raw = "Hold:0"
+        self._motion_done.set()
+        self._emit_state_update()
+
+    def jog(self, x: float = 0.0, y: float = 0.0, z: float = 0.0, feed_rate: float = 1000.0) -> None:
+        logger.trace(f'Mocking jog: x={x}, y={y}, z={z}, feed_rate={feed_rate}')
+        with self._lock:
+            target_r = self._pos_r + y
+            target_t = self._pos_t + z
+            target_z = self._pos_z + x
+            start = (self._pos_r, self._pos_t, self._pos_z)
+            target = (target_r, target_t, target_z)
+            self._state = GrblMachineState.JOG
+            self._state_raw = "Jog"
+            self._motion_done.clear()
+
+        duration = self._motion_duration(start, target)
+        thread = threading.Thread(
+            target=self._run_motion,
+            args=(start, target, duration),
+            name="GrblControllerMockJog",
+            daemon=True,
+        )
+        thread.start()
+
+    def cancel_jog(self) -> None:
+        logger.trace(f'Mocking cancel_jog')
+        with self._lock:
+            self._state = GrblMachineState.IDLE
+            self._state_raw = "Idle"
         self._motion_done.set()
         self._emit_state_update()
 
@@ -787,7 +844,14 @@ class GrblStreamerClientConnection:
         logger.trace(f'GrblStreamerClientConnection: Sending message: hold')
         # somehow the grbl-streamer hold() function does not work with GRBLHAL
         self._grbl_streamer.send_immediately('!')
-        
+
+    def cancel_jog(self) -> None:
+        """
+        Send jog cancel command (real-time 0x85 byte) to the streamer.
+        """
+        logger.trace('GrblStreamerClientConnection: Sending jog cancel (0x85)')
+        self._grbl_streamer.send_immediately('\x85')
+
     def send(self, message: str) -> None:
         """
         Send a message to the streamer.
@@ -1052,6 +1116,34 @@ class ESP32Duino(IGrblController):
         """
         logger.trace(f'Sending hold GRBL device')
         self._connection.hold()
+
+    def jog(self, x: float = 0.0, y: float = 0.0, z: float = 0.0, feed_rate: float = 1000.0) -> None:
+        """
+        Send a GRBL jog command ($J=G91 G21 ...).
+
+        :param x: Incremental movement along X axis (mm).
+        :param y: Incremental movement along Y axis (mm).
+        :param z: Incremental movement along Z axis (degrees).
+        :param feed_rate: Feed rate for jogging in mm/min (or deg/min).
+        """
+        cmd_parts = ["$J=G91 G21"]
+        if x != 0.0:
+            cmd_parts.append(f"X{x:.4f}")
+        if y != 0.0:
+            cmd_parts.append(f"Y{y:.4f}")
+        if z != 0.0:
+            cmd_parts.append(f"Z{z:.4f}")
+        cmd_parts.append(f"F{feed_rate:.1f}")
+        cmd = " ".join(cmd_parts)
+        logger.trace(f'Sending jog command to GRBL device: {cmd}')
+        self._connection.send(cmd + '\n')
+
+    def cancel_jog(self) -> None:
+        """
+        Send a jog cancel command (real-time 0x85 byte).
+        """
+        logger.trace('Sending jog cancel to GRBL device')
+        self._connection.cancel_jog()
 
     def get_position(self) -> CylindricalPosition:
         """
