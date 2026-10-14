@@ -650,27 +650,45 @@ class DSPVerificationTool:
         """
         self.fs = fs
 
-    def calculate_metrics(self, h_full: np.ndarray, h_linear: np.ndarray, psr: float) -> Dict[str, float]:
+    def calculate_metrics(self, h_full: np.ndarray, h_linear: np.ndarray, psr: float,
+                          raw_mic_signal: Optional[np.ndarray] = None) -> Dict[str, float]:
         """
         Calculates a suite of DSP quality metrics.
-        
+
         :param h_full: Full IR including distortion products at negative time.
         :param h_linear: Cropped linear IR.
         :param psr: Peak Sharpness Ratio from the alignment engine.
+        :param raw_mic_signal: Optional raw recorded mic signal (before deconvolution).
+            If provided, the noise floor is estimated from the pre-sweep silence region
+            of this signal, which contains the actual microphone noise. Without it,
+            the noise floor is estimated from the tail of the deconvolved IR, which
+            is artificially suppressed by the Hann window and deconvolution filtering.
         :return: Dictionary of metrics.
         """
         metrics = {}
 
         # 1. SNR Estimation (Peak to Noise Floor)
-        # We estimate noise from the very end of the h_full record where signal should have decayed.
-        # This gives a practical indication of measurement dynamic range.
-        noise_floor_window = int(0.05 * self.fs)  # 50ms window
-        if len(h_full) > noise_floor_window:
-            noise_floor = np.std(h_full[-noise_floor_window:])
-            peak_val = np.max(np.abs(h_linear))
-            metrics['snr_db'] = float(20 * np.log10(peak_val / (noise_floor + 1e-12)))
+        # Prefer the raw mic signal's pre-sweep silence region for noise estimation.
+        # The deconvolved IR's tail is inside the Hann fade-out and has noise suppressed
+        # by 40-100 dB from deconvolution, so it reflects numerical noise, not mic noise.
+        peak_val = np.max(np.abs(h_linear))
+        if raw_mic_signal is not None and len(raw_mic_signal) > 0:
+            # Estimate the pre-sweep silence region: the first ~10% of the raw signal
+            # is silence before the sweep starts. We use the first 50 ms (or 5% of signal)
+            # whichever is smaller, to estimate the true microphone noise floor.
+            silence_samples = min(int(0.05 * self.fs), len(raw_mic_signal) // 10)
+            if silence_samples > 0:
+                noise_floor = np.std(raw_mic_signal[:silence_samples])
+            else:
+                noise_floor = 1e-12
         else:
-            metrics['snr_db'] = 0.0
+            # Fallback: use the tail of the deconvolved IR (less accurate)
+            noise_floor_window = int(0.05 * self.fs)
+            if len(h_full) > noise_floor_window:
+                noise_floor = np.std(h_full[-noise_floor_window:])
+            else:
+                noise_floor = 1e-12
+        metrics['snr_db'] = float(20 * np.log10(peak_val / (noise_floor + 1e-12)))
 
         # 2. THD Estimation (Distortion to Linear Energy)
         # In Farina's method, distortion products appear BEFORE the linear peak.
@@ -1476,6 +1494,7 @@ class Audio(IAudio):
             "rx_mic_conditioned": avg_mic,
             "rx_loop_aligned": avg_loop,
             "debug_mic_slices": mic_slices,
+            "raw_rec_mic": rec_mic,
             "psr": psr
         }
 
@@ -1526,7 +1545,10 @@ class Audio(IAudio):
         )
 
         # 5. DSP Verification
-        metrics = self.verifier.calculate_metrics(ir_full, ir_linear, result.get("psr", 0.0))
+        metrics = self.verifier.calculate_metrics(
+            ir_full, ir_linear, result.get("psr", 0.0),
+            raw_mic_signal=result.get("raw_rec_mic")
+        )
         logger.info(
             f"DSP Metrics: SNR={metrics['snr_db']:.1f}dB, THD={metrics['thd_pct']:.2f}%, PSR={metrics['psr']:.1f}")
 
@@ -1863,6 +1885,7 @@ class MockInterfaceAudio(Audio):
             "rx_mic_conditioned": avg_mic,
             "rx_loop_aligned": avg_loop,
             "debug_mic_slices": mic_slices,
+            "raw_rec_mic": rec_mic,
             "psr": psr
         }
 

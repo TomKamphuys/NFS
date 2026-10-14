@@ -88,11 +88,14 @@ def test_measure_ir_regression(mock_config, tmp_path):
         # These reference values are based on the state as of 2026-04-04 23:16,
         # updated 2026-06-27 for the IR sine-RMS amplitude convention
         # (h_full *= SINE_RMS_FROM_PEAK = 1/sqrt(2) in DeconvolutionEngine.process_ir).
-        # If they change, it means the processing pipeline or hardware simulation has changed.
+        # updated 2026-10-14 for SNR calculation fix: noise floor is now measured from the
+        # pre-silence region of the raw recorded mic signal instead of the deconvolved IR tail,
+        # which was artificially suppressed by the Hann window and deconvolution filtering.
         # np.random.seed(42) is used for reproducibility.
 
         # Expected metrics for MockInterfaceAudio with 0.5s sweep and 100ms silences
-        assert np.isclose(metrics['snr_db'], 105.38, atol=0.5)
+        # SNR ~85 dB reflects the true noise floor (mock adds noise at std=1e-5, IR peak ~0.176)
+        assert np.isclose(metrics['snr_db'], 85.04, atol=0.5)
         assert np.isclose(metrics['thd_pct'], 4.94, atol=0.2)
         assert np.isclose(metrics['psr'], 3.57, atol=0.2)
         assert np.isclose(metrics['crest_factor'], 133.20, atol=1.0)
