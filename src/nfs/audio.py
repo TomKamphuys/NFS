@@ -970,10 +970,15 @@ class AlignmentEngine:
         peak_val = float(corr_sel[i])
 
         # --- BEGIN QUALITY / PSR CHECK ---
-        # Barker-13 autocorrelation main lobe is 2 chips wide. 
+        # Barker-13 autocorrelation main lobe is 2 chips wide.
         # We dynamically calculate this width to mask only the main peak.
         chip_dur_s = (self.marker_dur_ms / 1000.0) / 13.0
         exclusion_samps = int((chip_dur_s * 2.0) * self.fs)
+        # Cap the exclusion zone so it never covers the entire search window —
+        # we must leave enough samples on each side for sidelobe measurement.
+        # Use at most 1/3 of the window on each side, guaranteeing 2/3 remains.
+        max_exclusion = max(1, len(corr_sel) // 3)
+        exclusion_samps = min(exclusion_samps, max_exclusion, i, len(corr_sel) - 1 - i)
         mask_start = max(0, i - exclusion_samps)
         mask_end = min(len(corr_sel), i + exclusion_samps)
 
@@ -981,7 +986,14 @@ class AlignmentEngine:
         corr_masked[mask_start:mask_end] = 0.0  # Zero out the main lobe
 
         sidelobe_val = float(np.max(corr_masked))
-        psr = peak_val / (sidelobe_val + 1e-12) if sidelobe_val > 0 else 99.0
+        if sidelobe_val > 0:
+            psr = peak_val / (sidelobe_val + 1e-12)
+        else:
+            # No sidelobes detected — this can happen when the search window is
+            # narrower than the marker's main lobe, so the exclusion zone covers
+            # all samples with meaningful correlation. A sharp peak in a narrow
+            # window is itself evidence of good alignment.
+            psr = float('inf')
 
         # If the peak is less than 2.5x the height of the sidelobes, alignment is dangerously smeared.
         if psr < 2.5:

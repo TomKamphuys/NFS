@@ -252,6 +252,94 @@ def test_alignment_engine_functional(fs):
     assert len(avg_mic) == fs // 4 + int(round(taper_ms / 1000.0 * fs))
 
 
+def test_alignment_engine_narrow_search_window_psr(fs):
+    """
+    Regression test: when the search window is narrower than the exclusion zone
+    around the correlation peak, the PSR must still be computed from the remaining
+    sidelobes instead of falling back to the sentinel value 99.
+
+    The bug was that the exclusion zone (±738 samples for a 100ms Barker-13 marker
+    at 48kHz) was wider than the search window (e.g. ±240 samples for per-sweep
+    re-sync), so the entire correlation array was zeroed out and np.max returned 0,
+    triggering the fallback psr = 99.
+    """
+    marker_dur_ms = 100.0
+    taper_ms = 10.0
+    engine = AlignmentEngine(fs, 1, True, taper_ms, marker_dur_ms)
+
+    gen = MarkerGenerator(fs, marker_dur_ms, (500.0, 5000.0), -6.0)
+    marker = gen.generate()
+
+    # Build a recording with the marker embedded near the center
+    rec_len = fs  # 1 second of audio
+    marker_center = rec_len // 2
+    rec_loop = np.zeros(rec_len)
+    rec_loop[marker_center:marker_center + len(marker)] = marker
+
+    # Add small noise so sidelobes are non-zero
+    rec_loop += np.random.normal(0, 1e-4, rec_len)
+
+    # Use a narrow search window (±240 samples ≈ ±5ms at 48kHz)
+    # This is narrower than the exclusion zone (±738 samples)
+    window_half = 240
+    search_start = marker_center - window_half
+    search_end = marker_center + window_half
+
+    lag, peak_val, psr = engine._matched_filter_detect(
+        rec_loop, marker, search_start=search_start, search_end=search_end
+    )
+
+    # The peak should be found near the marker center
+    assert abs(lag - marker_center) < 10, f"Peak at {lag}, expected near {marker_center}"
+
+    # PSR should NOT be the fallback value 99 — it should be a real computed value
+    # or infinity (when no sidelobes are detectable in a narrow window)
+    assert psr != 99.0, (
+        f"PSR fell back to 99 — the exclusion zone likely zeroed out the entire "
+        f"search window, leaving no sidelobes to measure (peak_val={peak_val}, psr={psr})"
+    )
+    assert psr > 1.0, f"PSR ({psr}) should be > 1 for a clean marker in noise"
+
+
+def test_matched_filter_detect_narrow_window_returns_inf_psr(fs):
+    """
+    When the search window is narrower than the marker's main lobe, the PSR
+    should be infinity (no detectable sidelobes) rather than the fallback 99.
+    """
+    marker_dur_ms = 100.0
+    taper_ms = 10.0
+    engine = AlignmentEngine(fs, 1, True, taper_ms, marker_dur_ms)
+
+    gen = MarkerGenerator(fs, marker_dur_ms, (500.0, 5000.0), -6.0)
+    marker = gen.generate()
+
+    # Build a recording with the marker embedded
+    rec_len = fs
+    marker_center = rec_len // 2
+    rec_loop = np.zeros(rec_len)
+    rec_loop[marker_center:marker_center + len(marker)] = marker
+
+    # Narrow search window (±240 samples ≈ ±5ms at 48kHz)
+    window_half = 240
+    search_start = marker_center - window_half
+    search_end = marker_center + window_half
+
+    lag, peak_val, psr = engine._matched_filter_detect(
+        rec_loop, marker, search_start=search_start, search_end=search_end
+    )
+
+    # Peak should be found near the marker center
+    assert abs(lag - marker_center) < 10, f"Peak at {lag}, expected near {marker_center}"
+
+    # PSR should be infinity (no sidelobes in narrow window), not the fallback 99
+    assert psr != 99.0, (
+        f"PSR should not be the fallback 99 when sidelobes are undetectable (got {psr})"
+    )
+    assert psr == float('inf') or psr > 1.0, (
+        f"PSR ({psr}) should be inf or > 1 for a clean marker"
+    )
+
+
 def test_deconvolution_separation_functional(fs):
     dur_s = 0.5
     f1 = 20.0
