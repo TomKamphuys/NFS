@@ -221,8 +221,6 @@ class NearFieldScanner:
                     break
 
                 self._measurement_motion_manager.next()
-                if self._measurement_motion_manager.ready():
-                    break
 
                 if self._measurement_stop_requested.is_set():
                     logger.info("Measurement set stopped after current move.")
@@ -251,13 +249,10 @@ class NearFieldScanner:
                 )
 
             self._measurement_motion_manager.reset()
-            self._measurement_motion_manager.move_to_safe_starting_radius()
-            self._scanner.angular_move_to(0.0)
+            self._measurement_motion_manager.move_to_park_position()
 
         finally:
             final_current = current
-            if not stopped_early and total > 0:
-                final_current = total
             finished_eta = 0 if total > 0 and final_current >= total else eta_seconds
             self._emit_measurement_progress(
                 progress_callback,

@@ -68,6 +68,13 @@ class IMotionManager(ABC):
         """
         pass
 
+    @abstractmethod
+    def move_to_park_position(self) -> None:
+        """
+        Move the scanner to a known parking position after measurement completion.
+        """
+        pass
+
 
 class CylindricalMeasurementMotionManager(IMotionManager):
     """
@@ -131,6 +138,14 @@ class CylindricalMeasurementMotionManager(IMotionManager):
         :return: Total points.
         """
         return self._measurement_points.total_points()
+
+    def move_to_park_position(self) -> None:
+        """
+        Move the scanner to the parking position: theta = 0, z = 0, radius = safe radius.
+        """
+        logger.info(f'Moving to park position: R={self._safe_radius:.1f}, theta=0, z=0')
+        self._scanner.planar_move_to(self._safe_radius, 0.0)
+        self._scanner.angular_move_to(0.0)
 
     def _move_to_next_measurement_point(self, position: CylindricalPosition) -> None:
         """
@@ -309,6 +324,15 @@ class SphericalMeasurementMotionManager(IMotionManager):
         :return: Total points.
         """
         return self._measurement_points.total_points()
+
+    def move_to_park_position(self) -> None:
+        """
+        Move the scanner to the parking position: theta = 0, z = 0, radius = measurement radius.
+        """
+        radius = self._measurement_points.get_radius()
+        logger.info(f'Moving to park position: R={radius:.1f}, theta=0, z=0')
+        self._scanner.planar_move_to(radius, 0.0)
+        self._scanner.angular_move_to(0.0)
 
     def _move_to_next_measurement_point(self, position: CylindricalPosition) -> None:
         """
