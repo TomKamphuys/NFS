@@ -94,6 +94,37 @@ It decouples geometry/motion algorithms from collection/iteration logic.
 •
 It makes the motion controllers simpler, safer, and easier to verify with unit tests.
 
+State machine for GUI to keep clear what can be used and what not:
+
+```mermaid
+stateDiagram-v2
+    [*] --> Idle
+
+    Idle --> Jogging: Jog accepted
+    Jogging --> Idle: Move completed
+    Jogging --> Stopping: Stop requested
+    Stopping --> Idle: Stop confirmed
+
+    Idle --> Homing: Home accepted
+    Homing --> Idle: Homing successful
+
+    Idle --> Configuring: Apply blocking config
+    Configuring --> Idle: Configuration applied
+
+    Idle --> Measuring: Start set accepted
+    Measuring --> Stopping: Abort requested
+    Stopping --> Idle: Abort complete and safe
+
+    Jogging --> Fault: Connection lost or motion fault
+    Homing --> Fault: Connection lost or homing fault
+    Measuring --> Fault: Connection lost or unrecoverable failure
+    Configuring --> Fault: Configuration outcome uncertain
+    Stopping --> Fault: Stop not confirmed or connection lost
+
+    Fault --> Homing: Recovery permits homing
+    Homing --> Idle: Recovery homing successful
+```
+
 ```mermaid
 classDiagram
     class IScanner {
