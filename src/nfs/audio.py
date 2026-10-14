@@ -804,10 +804,17 @@ class SweepGenerator:
         s_fund = np.sin(phase).astype(np.float64)
 
         # 2. Generate CLEAN Inverse (Using Time Reversal)
-        # We use the clean fundamental for the inverse to avoid "baking in" the distortion 
+        # We use the clean fundamental for the inverse to avoid "baking in" the distortion
         # or protection filter into the reference.
         envelope = np.exp(-t / L)  # Amplitude envelope to correct pink spectrum to white (flat frequency response)
         inv = s_fund[::-1] * envelope  # Time Reversal effectively conjugates the phase in frequency domain
+
+        # 3. Apply short endpoint fade to the inverse filter to suppress artificial THD
+        # caused by discontinuities at the boundaries of the time-reversed signal.
+        # Fade duration scales with sweep length: 0.2% of duration, clamped to [1ms, 5ms].
+        fade_duration_s = min(5e-3, max(1e-3, 0.002 * self.T))
+        fade_ms = fade_duration_s * 1000.0
+        inv = DSPUtils.hann_fade(inv, fade_ms, self.fs, side="both")
 
         # Normalize Inverse in Frequency Domain to ensure unity gain convolution
         Nfft = int(2 ** np.ceil(np.log2(len(s_fund) + len(inv) - 1)))

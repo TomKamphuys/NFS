@@ -88,12 +88,15 @@ def test_measure_ir_regression(mock_config, tmp_path):
         # These reference values are based on the state as of 2026-04-04 23:16,
         # updated 2026-06-27 for the IR sine-RMS amplitude convention
         # (h_full *= SINE_RMS_FROM_PEAK = 1/sqrt(2) in DeconvolutionEngine.process_ir).
+        # updated 2026-10-14 for inverse-filter endpoint fade fix (duration-scaled Hann fade,
+        # 0.2% of sweep duration clamped to [1ms, 5ms]) which eliminates artificial THD caused
+        # by endpoint discontinuities in the time-reversed inverse filter.
         # If they change, it means the processing pipeline or hardware simulation has changed.
         # np.random.seed(42) is used for reproducibility.
 
         # Expected metrics for MockInterfaceAudio with 0.5s sweep and 100ms silences
-        assert np.isclose(metrics['snr_db'], 105.38, atol=0.5)
-        assert np.isclose(metrics['thd_pct'], 4.94, atol=0.2)
+        assert np.isclose(metrics['snr_db'], 126.94, atol=0.5)
+        assert np.isclose(metrics['thd_pct'], 0.08, atol=0.05)
         assert np.isclose(metrics['psr'], 3.57, atol=0.2)
         assert np.isclose(metrics['crest_factor'], 133.20, atol=1.0)
 
@@ -104,7 +107,7 @@ def test_measure_ir_regression(mock_config, tmp_path):
         # --- FUNCTIONAL VALIDATION (Robust across platforms) ---
         # 1. Peak Amplitude Check
         peak_amp = np.max(np.abs(data))
-        assert np.isclose(peak_amp, 0.1762, atol=1e-3), f"Peak amplitude mismatch: {peak_amp}"
+        assert np.isclose(peak_amp, 0.1795, atol=1e-3), f"Peak amplitude mismatch: {peak_amp}"
 
         # 2. RMS Level Check
         rms_level = np.sqrt(np.mean(data**2))
