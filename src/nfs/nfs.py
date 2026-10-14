@@ -219,6 +219,7 @@ class NearFieldScanner:
         started_at = None
         eta_seconds = None
         stopped_early = False
+        failure_exc: Exception | None = None
 
         # 1. Setup this measurement set's output directory
         session_name = self._safe_measurement_set_name(measurement_set_name)
@@ -299,23 +300,42 @@ class NearFieldScanner:
             self._measurement_motion_manager.move_to_safe_starting_radius()
             self._scanner.angular_move_to(0.0)
 
+        except Exception as exc:
+            failure_exc = exc
+            logger.error(f"Measurement set failed: {exc}")
+            raise
+
         finally:
-            final_current = current
-            if not stopped_early and total > 0:
-                final_current = total
-            finished_eta = 0 if total > 0 and final_current >= total else eta_seconds
-            self._emit_measurement_progress(
-                progress_callback,
-                "finished",
-                final_current,
-                total,
-                eta_seconds=finished_eta,
-            )
+            if failure_exc is not None:
+                self._emit_measurement_progress(
+                    progress_callback,
+                    "failed",
+                    current,
+                    total,
+                    eta_seconds=None,
+                    error=str(failure_exc),
+                    exception=failure_exc,
+                )
+            else:
+                final_current = current
+                if not stopped_early and total > 0:
+                    final_current = total
+                finished_eta = 0 if total > 0 and final_current >= total else eta_seconds
+                self._emit_measurement_progress(
+                    progress_callback,
+                    "finished",
+                    final_current,
+                    total,
+                    eta_seconds=finished_eta,
+                )
             self._measurement_running = False
             self._measurement_pause_requested.clear()
             self._measurement_stop_requested.clear()
             # 5. Cleanup: Restore paths and remove session log sink
-            logger.info(f"Measurement set {session_name} complete.")
+            if failure_exc is not None:
+                logger.error(f"Measurement set {session_name} failed: {failure_exc}")
+            else:
+                logger.info(f"Measurement set {session_name} complete.")
             logger.remove(sink_id)
 
     def _emit_measurement_progress(
@@ -326,6 +346,8 @@ class NearFieldScanner:
         total: int,
         timestamp: float | None = None,
         eta_seconds: float | None = None,
+        error: str | None = None,
+        exception: Exception | None = None,
     ) -> None:
         """
         Record and emit a measurement progress update.
@@ -334,20 +356,26 @@ class NearFieldScanner:
         user-provided callback function if one was supplied.
 
         :param progress_callback: Optional callback receiving a copy of the progress dictionary.
-        :param status: Current status string (e.g., 'started', 'point_complete', 'finished').
+        :param status: Current status string (e.g., 'started', 'point_complete', 'finished', 'failed').
         :param current: Number of points measured so far.
         :param total: Total number of points in the measurement set.
         :param timestamp: Monotonic timestamp of the progress event (defaults to current monotonic time).
         :param eta_seconds: Estimated remaining time in seconds, or None if undetermined.
+        :param error: Optional error description string if failed.
+        :param exception: Optional Exception instance if failed.
         :return: None
         """
-        event = {
+        event: dict[str, Any] = {
             "status": status,
             "current": current,
             "total": total,
             "timestamp": timestamp if timestamp is not None else time.monotonic(),
             "eta_seconds": eta_seconds,
         }
+        if error is not None:
+            event["error"] = error
+        if exception is not None:
+            event["exception"] = exception
         with self._measurement_progress_lock:
             self._measurement_progress = dict(event)
         if progress_callback is None:

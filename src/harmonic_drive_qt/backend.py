@@ -61,6 +61,44 @@ def format_nfs_error(exc: Exception) -> str:
     return f"Near Field Scanner unavailable: {text}"
 
 
+def format_measurement_error(exc: Exception | str) -> dict[str, str]:
+    """Format a measurement execution error into structured user-friendly feedback."""
+    msg = str(exc)
+    exc_type = exc.__class__.__name__ if isinstance(exc, Exception) else ""
+    if "no-fly zone" in msg.lower() or "unsafemeasurementpoint" in exc_type.lower():
+        pos_match = re.search(r"Measurement point \(([^)]+)\)", msg)
+        pos_text = pos_match.group(1) if pos_match else "A measurement point"
+        return {
+            "title": "Safety Alert: Point Inside DUT Volume (No-Fly Zone)",
+            "summary": (
+                f"Measurement scan aborted to prevent a physical collision:\n"
+                f"{pos_text} is located inside the configured DUT Volume / No-Fly Zone."
+            ),
+            "details": (
+                "What happened:\n"
+                f"• {msg}\n\n"
+                "Why this is protected:\n"
+                "• The scanner automatically enforces a safety keep-out zone around your loudspeaker (DUT) "
+                "to prevent the microphone or arm from colliding with the device under test.\n\n"
+                "How to fix:\n"
+                "1. Adjust DUT Volume: Check the 'DUT Volume' section and adjust Top & Bot waypoints (Radius, Height) "
+                "so the boundary closely matches the actual speaker dimensions.\n"
+                "2. Regenerate Grid: In 'Grid Generation & Planning', generate or load measurement points with radii "
+                "and heights that remain outside the DUT Volume boundaries."
+            ),
+            "how_to_fix": (
+                "1. Check and adjust Top/Bot waypoints in the 'DUT Volume' section.\n"
+                "2. Regenerate your grid points in 'Grid Generation & Planning' to stay outside the DUT Volume."
+            ),
+        }
+    return {
+        "title": "Measurement Set Failed",
+        "summary": f"An error occurred during the measurement set: {msg}",
+        "details": msg,
+        "how_to_fix": "Review the system log (logs/Scanner.log) and check hardware and audio connections.",
+    }
+
+
 class BackendManager:
     """Owns scanner/audio objects and exposes thread-safe UI operations."""
 
@@ -150,16 +188,20 @@ class BackendManager:
             set_status("Scanner unavailable; continuing without motion hardware")
 
         if self.scanner is not None:
-            try:
-                set_status("Initializing Near Field Scanner")
-                self.nfs = NearFieldScannerFactory.create(self.scanner, self.config_file)
-            except Exception as exc:
-                self.load_warning = format_nfs_error(exc)
-                logger.error(self.load_warning)
-                if is_audio_setup_error(self.load_warning):
-                    set_status("Audio setup unavailable; continuing")
-                else:
-                    set_status("Near Field Scanner unavailable; continuing")
+            self.reload_nfs()
+
+    def reload_nfs(self) -> None:
+        """(Re)instantiate NearFieldScanner using the current scanner and config_file."""
+        if self.scanner is None:
+            return
+        try:
+            self.nfs = NearFieldScannerFactory.create(self.scanner, self.config_file)
+            if self.project_dir is not None and hasattr(self.nfs, "set_project_directory"):
+                self.nfs.set_project_directory(self.project_dir)
+            self.load_warning = None
+        except Exception as exc:
+            self.load_warning = format_nfs_error(exc)
+            logger.error(self.load_warning)
 
         if self.project_dir is not None:
             self.set_project_dir(self.project_dir)
@@ -247,8 +289,9 @@ class BackendManager:
         progress_callback: Callable[[dict[str, Any]], None],
         overwrite: bool = False,
     ) -> None:
+        self.reload_nfs()
         if self.nfs is None:
-            raise RuntimeError("NFS backend is not loaded")
+            raise RuntimeError(self.load_warning or "NFS backend is not loaded")
         if self.is_measurement_set_running():
             return
         self.clear_preview_ir()
@@ -263,14 +306,30 @@ class BackendManager:
 
     def _run_measurement_set(self, name: str, overwrite: bool) -> None:
         try:
+            self.reload_nfs()
+            if self.nfs is None:
+                raise RuntimeError(self.load_warning or "NFS backend is not loaded")
             self._run_audio(
                 self.nfs.take_measurement_set,
                 name,
                 overwrite,
                 self._progress_callback,
             )
-        except Exception:
-            logger.exception("Measurement set failed")
+        except Exception as exc:
+            logger.exception(f"Measurement set failed: {exc}")
+            if self._progress_callback is not None:
+                err_info = format_measurement_error(exc)
+                try:
+                    self._progress_callback({
+                        "status": "failed",
+                        "current": 0,
+                        "total": 0,
+                        "error": str(exc),
+                        "exception": exc,
+                        "error_info": err_info,
+                    })
+                except Exception as cb_exc:
+                    logger.warning(f"Failed to emit measurement error progress event: {cb_exc}")
 
     def pause_measurement_set(self) -> None:
         if self.nfs is not None and hasattr(self.nfs, "pause_measurement_set"):

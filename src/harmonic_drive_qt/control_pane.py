@@ -12,7 +12,7 @@ from pathlib import Path
 from . import project
 from .config_support import _parse_bool, _strip_inline_comment
 
-from .backend import BackendManager, Worker, format_duration
+from .backend import BackendManager, Worker, format_duration, format_measurement_error
 from .icons import ui_icon
 from .styles import danger_button, primary_button, warning_button
 from .qt_compat import (
@@ -73,6 +73,7 @@ class ControlPane(QWidget):
         self._jog_done = True
         self._jog_error: str | None = None
         self._jog_thread: threading.Thread | None = None
+        self._last_error_notified: str | None = None
         self.progress_event.connect(self._apply_progress_event)
         self._build_ui()
 
@@ -602,6 +603,7 @@ class ControlPane(QWidget):
             title = project.get_project_name() or project.DEFAULT_PROJECT_NAME
             self._save_measurement_project_snapshot()
             self.refresh_grid_readout()
+            self._last_error_notified = None
             self.backend.start_measurement_set(
                 project.sanitize_project_name(title),
                 lambda event: self.progress_event.emit(event),
@@ -735,7 +737,12 @@ class ControlPane(QWidget):
         current = int(event.get("current") or 0)
         total = int(event.get("total") or 0)
         status = str(event.get("status") or "ready")
-        if status == "finished" and total > 0 and current >= total:
+        error_text = str(event.get("error") or "")
+        has_error = status in ("failed", "error") or bool(error_text)
+
+        if has_error:
+            label_status = "Failed"
+        elif status == "finished" and total > 0 and current >= total:
             label_status = "Complete"
         elif status == "finished":
             label_status = "Stopped"
@@ -747,7 +754,28 @@ class ControlPane(QWidget):
         self.progress.setValue(int(max(0.0, min(1.0, percent)) * 1000))
         self._update_grid_readout(max(0, current - 1 if current else 0))
         eta = format_duration(event.get("eta_seconds"))
-        if total:
+
+        if has_error:
+            err_info = event.get("error_info") or format_measurement_error(
+                event.get("exception") or error_text or "Measurement set failed"
+            )
+            title = err_info.get("title", "Measurement Failed")
+            self.progress.setFormat(f"Failed - {title}")
+            self.measurement_start.setText("START MEASUREMENT SET")
+            primary_button(self.measurement_start)
+            self.measurement_start.setIcon(ui_icon("play"))
+            self.measurement_start.setIconSize(QSize(18, 18))
+
+            if error_text and self._last_error_notified != error_text:
+                self._last_error_notified = error_text
+                msg_box = QMessageBox(self)
+                msg_box.setIcon(QMessageBox.Icon.Critical)
+                msg_box.setWindowTitle(title)
+                msg_box.setText(err_info.get("summary", error_text))
+                msg_box.setInformativeText(err_info.get("details", ""))
+                msg_box.setStandardButtons(QMessageBox.StandardButton.Ok)
+                msg_box.exec()
+        elif total:
             self.progress.setFormat(f"{label_status} - {current} of {total} points - ETA {eta}")
         else:
             self.progress.setFormat(f"{label_status} - waiting for measurement points")

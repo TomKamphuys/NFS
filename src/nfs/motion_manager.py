@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import configparser
 import math
 from abc import ABC, abstractmethod
@@ -32,6 +34,16 @@ class UnsafeMeasurementPointError(RuntimeError):
     Aborting turns a would-be physical collision (the arm driving into the
     device under test) into a loud, safe failure before any motion is issued.
     """
+
+    def __init__(
+        self,
+        message: str,
+        position: CylindricalPosition | None = None,
+        no_fly_zone: CylindricalNoFlyZone | None = None,
+    ):
+        super().__init__(message)
+        self.position = position
+        self.no_fly_zone = no_fly_zone
 
 
 def normalize_unsafe_point_policy(value: str | None) -> str:
@@ -332,7 +344,9 @@ class IMotionManager(ABC):
                 raise UnsafeMeasurementPointError(
                     f'Measurement point {position} lies inside the no-fly zone; '
                     f'aborting the scan to avoid a collision. Review the no-fly '
-                    f'zone settings and the measurement grid.'
+                    f'zone settings and the measurement grid.',
+                    position=position,
+                    no_fly_zone=self._no_fly_zone,
                 )
 
             logger.warning(

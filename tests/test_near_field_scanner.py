@@ -208,3 +208,26 @@ def test_shutdown(mocks):
         nfs.shutdown()
 
     mocks['scanner'].shutdown.assert_called_once()
+
+
+def test_take_measurement_set_emits_failed_progress_on_unsafe_point(mocks):
+    from nfs.motion_manager import UnsafeMeasurementPointError
+
+    mocks['motion_manager'].ready.return_value = False
+    mocks['motion_manager'].total_points.return_value = 5
+    unsafe_err = UnsafeMeasurementPointError(
+        "Measurement point (227.0mm, -166.1°, -2.0mm) lies inside the no-fly zone; aborting the scan to avoid a collision. Review the no-fly zone settings and the measurement grid."
+    )
+    mocks['motion_manager'].next.side_effect = unsafe_err
+
+    progress_events = []
+    with patch("builtins.open", mock_open()):
+        nfs = NearFieldScanner(mocks['scanner'], mocks['audio'], mocks['motion_manager'])
+        with pytest.raises(UnsafeMeasurementPointError):
+            nfs.take_measurement_set(progress_callback=progress_events.append)
+
+    assert any(event["status"] == "failed" for event in progress_events)
+    failed_event = [event for event in progress_events if event["status"] == "failed"][0]
+    assert "lies inside the no-fly zone" in failed_event["error"]
+    assert failed_event["exception"] is unsafe_err
+    assert nfs.get_measurement_progress()["status"] == "failed"
