@@ -309,7 +309,7 @@ class SettingsDialog(QDialog):
 
     def _build_motion_manager_fields(self, layout) -> None:
         raw_type = _strip_inline_comment(
-            self.parser.get("motion_manager", "type", fallback="")
+            self.parser.get("motion_manager", "type", fallback="FastCylindricalMeasurementMotionManager")
         )
         type_widget, _type_row = self._add_field(
             layout,
@@ -317,9 +317,11 @@ class SettingsDialog(QDialog):
             "type",
             "Motion Manager Type",
             "choice",
-            raw_type,
-            self._options_with_current(list(MOTION_MANAGER_TYPES.keys()), raw_type),
+            raw_type or "FastCylindricalMeasurementMotionManager",
+            ["FastCylindricalMeasurementMotionManager"],
         )
+        if isinstance(type_widget, QComboBox):
+            type_widget.setEnabled(False)
 
         for key, kind, tooltip, options in self._all_motion_manager_fields():
             raw = _strip_inline_comment(
@@ -388,9 +390,11 @@ class SettingsDialog(QDialog):
             "measurement_points_type",
             "Measurement Points Type",
             "choice",
-            current_type,
-            self._options_with_current(list(MEASUREMENT_POINTS_TYPES.keys()), current_type),
+            current_type or "FileMeasurementPoints",
+            ["FileMeasurementPoints"],
         )
+        if isinstance(self.measurement_points_type_input, QComboBox):
+            self.measurement_points_type_input.setEnabled(False)
 
         for key, kind, tooltip, options in self._all_measurement_points_fields():
             raw = self._measurement_points_raw_value(mp_section_name, key)
@@ -602,9 +606,11 @@ class SettingsDialog(QDialog):
 
     def _validate_safety_zone(self, manager_type: str) -> bool:
         keys = [
-            key for key, _kind, _tooltip, _options in MOTION_MANAGER_TYPES[manager_type]
-            if key.startswith("no_fly_")
+            key for key, _kind, _tooltip, _options in MOTION_MANAGER_TYPES.get(manager_type, [])
+            if key.startswith("no_fly_") and ("motion_manager", key) in self.inputs
         ]
+        if not keys:
+            return True
         values = {}
         try:
             for key in keys:
@@ -613,16 +619,16 @@ class SettingsDialog(QDialog):
                     values[key] = _coerce(kind, widget.text())
                 except (ValueError, TypeError) as exc:
                     raise SafetyConfigurationError(
-                        f"{DISPLAY_LABELS[key]} must contain a number."
+                        f"{DISPLAY_LABELS.get(key, key)} must contain a number."
                     ) from exc
-            if manager_type == "SphericalMeasurementMotionManager":
+            if manager_type == "SphericalMeasurementMotionManager" and "no_fly_radius" in values:
                 SphericalNoFlyZone(values["no_fly_radius"])
-            else:
+            elif all(k in values for k in ("no_fly_radius", "no_fly_z_min", "no_fly_z_max")):
                 CylindricalNoFlyZone(
                     values["no_fly_radius"], values["no_fly_z_min"], values["no_fly_z_max"]
                 )
         except SafetyConfigurationError as exc:
-            fields = ", ".join(DISPLAY_LABELS[key] for key in keys)
+            fields = ", ".join(DISPLAY_LABELS.get(key, key) for key in keys)
             QMessageBox.warning(
                 self,
                 "Invalid safety zone",

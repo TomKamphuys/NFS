@@ -253,7 +253,7 @@ def apply_to_config(config_file: str) -> bool:
     parser.read(config_file)
 
     changed = False
-    for project_key, section in (("sweep_settings", "sweep"),):
+    for project_key, section in (("sweep_settings", "sweep"), ("dut_volume", "dut_volume")):
         settings = _project_data.get(project_key)
         if not isinstance(settings, dict):
             continue
@@ -286,6 +286,14 @@ def update_grid_vars(grid_vars: Dict[str, Any]) -> None:
         current = {}
     current.update(grid_vars)
     _project_data["grid_vars"] = current
+
+
+def update_dut_volume(dut_vars: Dict[str, Any]) -> None:
+    current = _project_data.get("dut_volume")
+    if not isinstance(current, dict):
+        current = {}
+    current.update(dut_vars)
+    _project_data["dut_volume"] = current
 
 
 def build_spl_calibration(

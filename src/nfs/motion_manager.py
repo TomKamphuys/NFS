@@ -1023,25 +1023,25 @@ class MotionManagerFactory:
         except (ValueError, TypeError):
             pass
 
-        def _read_required_float(key: str) -> float:
-            if not config_parser.has_option(section, key):
+        def _read_required_float(key: str, sec: str = section) -> float:
+            if not config_parser.has_option(sec, key):
                 raise SafetyConfigurationError(
-                    f"Missing required safety parameter '{key}' in section [{section}]."
+                    f"Missing required safety parameter '{key}' in section [{sec}]."
                 )
-            raw = config_parser.get(section, key, fallback='').strip()
+            raw = config_parser.get(sec, key, fallback='').strip()
             if not raw or raw.lower() == 'none':
                 raise SafetyConfigurationError(
-                    f"Missing value for required safety parameter '{key}' in section [{section}]."
+                    f"Missing value for required safety parameter '{key}' in section [{sec}]."
                 )
             try:
                 val = float(raw)
             except ValueError as err:
                 raise SafetyConfigurationError(
-                    f"Invalid non-numeric value for safety parameter '{key}' in section [{section}]: {raw!r}"
+                    f"Invalid non-numeric value for safety parameter '{key}' in section [{sec}]: {raw!r}"
                 ) from err
             if not math.isfinite(val):
                 raise SafetyConfigurationError(
-                    f"Safety parameter '{key}' in section [{section}] must be finite, got {val}."
+                    f"Safety parameter '{key}' in section [{sec}] must be finite, got {val}."
                 )
             return val
 
@@ -1049,6 +1049,13 @@ class MotionManagerFactory:
             config_parser.get(section, 'unsafe_point_policy', fallback=None))
 
         def _read_cylindrical_no_fly_zone() -> CylindricalNoFlyZone:
+            if config_parser.has_section('dut_volume'):
+                top_r = _read_required_float('top_r', sec='dut_volume')
+                top_z = _read_required_float('top_z', sec='dut_volume')
+                bot_z = _read_required_float('bot_z', sec='dut_volume')
+                z_min = min(top_z, bot_z)
+                z_max = max(top_z, bot_z)
+                return CylindricalNoFlyZone(top_r, z_min, z_max)
             r_wall = _read_required_float('no_fly_radius')
             z_min = _read_required_float('no_fly_z_min')
             z_max = _read_required_float('no_fly_z_max')

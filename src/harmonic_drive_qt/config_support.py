@@ -57,30 +57,16 @@ DISPLAY_LABELS = {
 # __init__ signatures of the plugins in nfs.plugins.*.
 # ---------------------------------------------------------------------------
 MOTION_MANAGER_TYPES: Dict[str, List[SchemaEntry]] = {
-    "CylindricalMeasurementMotionManager": [
+    "FastCylindricalMeasurementMotionManager": [
         ("optimize_point_order", "bool", "Reduce physical travel distance while preserving every point and safety detours.", None),
-        ("no_fly_radius", "float",
-         "Wall radius (mm) of the cylindrical no-fly (keep-out) zone around the "
-         "device under test.", None),
-        ("no_fly_z_min", "float",
-         "Bottom cap plane (mm) of the cylindrical no-fly zone.", None),
-        ("no_fly_z_max", "float",
-         "Top cap plane (mm) of the cylindrical no-fly zone.", None),
         ("unsafe_point_policy", "choice",
          "What to do if a measurement point lies inside the no-fly zone: "
          "'abort' stops the scan (safest); 'skip' logs a warning and moves on "
          "to the next point without going to the unsafe one.",
          ["abort", "skip"]),
     ],
-    "FastCylindricalMeasurementMotionManager": [
+    "CylindricalMeasurementMotionManager": [
         ("optimize_point_order", "bool", "Reduce physical travel distance while preserving every point and safety detours.", None),
-        ("no_fly_radius", "float",
-         "Wall radius (mm) of the cylindrical no-fly (keep-out) zone around the "
-         "device under test.", None),
-        ("no_fly_z_min", "float",
-         "Bottom cap plane (mm) of the cylindrical no-fly zone.", None),
-        ("no_fly_z_max", "float",
-         "Top cap plane (mm) of the cylindrical no-fly zone.", None),
         ("unsafe_point_policy", "choice",
          "What to do if a measurement point lies inside the no-fly zone: "
          "'abort' stops the scan (safest); 'skip' logs a warning and moves on "
