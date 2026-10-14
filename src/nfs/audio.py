@@ -113,23 +113,41 @@ def _a_weighting_filter(sample_rate: int) -> Tuple[np.ndarray, np.ndarray]:
     if cached is not None:
         return cached
 
+    # Pre-warp critical frequencies to compensate for bilinear transform warping.
+    # The bilinear transform maps analog frequency omega_a to digital frequency
+    # omega_d via omega_a = (2/Ts) * tan(omega_d * Ts / 2).  To make the digital
+    # filter match the analog prototype at the desired frequencies, we substitute
+    # each analog angular frequency 2*pi*f with its pre-warped counterpart.
+    fs = float(sample_rate)
+    ts = 1.0 / fs
+
+    def _prewarp(f: float) -> float:
+        """Return the pre-warped angular frequency for desired digital frequency f."""
+        return (2.0 / ts) * np.tan(np.pi * f * ts)
+
     f1 = 20.598997
     f2 = 107.65265
     f3 = 737.86223
     f4 = 12194.217
     a1000 = 1.9997
+
+    w1 = _prewarp(f1)
+    w2 = _prewarp(f2)
+    w3 = _prewarp(f3)
+    w4 = _prewarp(f4)
+
     nums = [
-        (2 * np.pi * f4) ** 2 * (10 ** (a1000 / 20)),
+        w4 ** 2 * (10 ** (a1000 / 20)),
         0.0,
         0.0,
         0.0,
         0.0,
     ]
     dens = np.polymul(
-        [1.0, 4 * np.pi * f4, (2 * np.pi * f4) ** 2],
-        [1.0, 4 * np.pi * f1, (2 * np.pi * f1) ** 2],
+        [1.0, 2.0 * w4, w4 ** 2],
+        [1.0, 2.0 * w1, w1 ** 2],
     )
-    dens = np.polymul(np.polymul(dens, [1.0, 2 * np.pi * f3]), [1.0, 2 * np.pi * f2])
+    dens = np.polymul(np.polymul(dens, [1.0, w3]), [1.0, w2])
     filt = scipy.signal.bilinear(nums, dens, sample_rate)
     _A_WEIGHTING_FILTERS[sample_rate] = filt
     return filt
@@ -140,17 +158,29 @@ def _c_weighting_filter(sample_rate: int) -> Tuple[np.ndarray, np.ndarray]:
     if cached is not None:
         return cached
 
+    # Pre-warp critical frequencies to compensate for bilinear transform warping.
+    fs = float(sample_rate)
+    ts = 1.0 / fs
+
+    def _prewarp(f: float) -> float:
+        """Return the pre-warped angular frequency for desired digital frequency f."""
+        return (2.0 / ts) * np.tan(np.pi * f * ts)
+
     f1 = 20.598997
     f4 = 12194.217
     c1000 = 0.0619
+
+    w1 = _prewarp(f1)
+    w4 = _prewarp(f4)
+
     nums = [
-        (2 * np.pi * f4) ** 2 * (10 ** (c1000 / 20)),
+        w4 ** 2 * (10 ** (c1000 / 20)),
         0.0,
         0.0,
     ]
     dens = np.polymul(
-        [1.0, 4 * np.pi * f4, (2 * np.pi * f4) ** 2],
-        [1.0, 4 * np.pi * f1, (2 * np.pi * f1) ** 2],
+        [1.0, 2.0 * w4, w4 ** 2],
+        [1.0, 2.0 * w1, w1 ** 2],
     )
     filt = scipy.signal.bilinear(nums, dens, sample_rate)
     _C_WEIGHTING_FILTERS[sample_rate] = filt
