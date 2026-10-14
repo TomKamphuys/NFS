@@ -317,6 +317,16 @@ class IMotionManager(ABC):
         """
         pass
 
+    @abstractmethod
+    def move_to_park_position(self) -> None:
+        """
+        Move the scanner to the parking position after a measurement set completes.
+
+        The parking position is theta = 0, z = 0, and radius equal to the no-fly
+        zone's retract radius (just outside the protected interior).
+        """
+        pass
+
     def _acquire_next_safe_position(self) -> CylindricalPosition | None:
         """
         Return the next measurement point that is safe to move to.
@@ -440,6 +450,19 @@ class CylindricalMeasurementMotionManager(IMotionManager):
         :return: Total points.
         """
         return self._measurement_points.total_points()
+
+    def move_to_park_position(self) -> None:
+        """
+        Move the scanner to the parking position: theta = 0, z = 0,
+        radius = retract radius (just outside the no-fly zone).
+        """
+        retract_radius = self._no_fly_zone.retract_radius
+        logger.info(
+            f'Moving to park position: R={retract_radius:.1f}mm, '
+            f'T=0.0°, Z=0.0mm'
+        )
+        self._scanner.planar_move_to(retract_radius, 0.0)
+        self._scanner.angular_move_to(0.0)
 
     def _move_to_next_measurement_point(self, position: CylindricalPosition) -> None:
         """
@@ -660,6 +683,19 @@ class FastCylindricalMeasurementMotionManager(IMotionManager):
         """
         return self._measurement_points.total_points()
 
+    def move_to_park_position(self) -> None:
+        """
+        Move the scanner to the parking position: theta = 0, z = 0,
+        radius = retract radius (just outside the no-fly zone).
+        """
+        retract_radius = self._no_fly_zone.retract_radius
+        logger.info(
+            f'Moving to park position: R={retract_radius:.1f}mm, '
+            f'T=0.0°, Z=0.0mm'
+        )
+        self._scanner.planar_move_to(retract_radius, 0.0)
+        self._scanner.angular_move_to(0.0)
+
     def _move_to_next_measurement_point(self, position: CylindricalPosition, evasive: bool) -> None:
         """
         Execute the move to the next point, picking the safe strategy.
@@ -849,6 +885,19 @@ class SphericalMeasurementMotionManager(IMotionManager):
         :return: Total points.
         """
         return self._measurement_points.total_points()
+
+    def move_to_park_position(self) -> None:
+        """
+        Move the scanner to the parking position: theta = 0, z = 0,
+        radius = retract radius (just outside the no-fly zone).
+        """
+        retract_radius = self._no_fly_zone.retract_radius
+        logger.info(
+            f'Moving to park position: R={retract_radius:.1f}mm, '
+            f'T=0.0°, Z=0.0mm'
+        )
+        self._scanner.planar_move_to(retract_radius, 0.0)
+        self._scanner.angular_move_to(0.0)
 
     def _move_to_next_measurement_point(self, position: CylindricalPosition) -> None:
         """
@@ -1084,7 +1133,10 @@ class MotionManagerFactory:
             zone = (_read_spherical_no_fly_zone()
                     if motion_manager_type == 'SphericalMeasurementMotionManager'
                     else _read_cylindrical_no_fly_zone())
-            measurement_points = OptimizedMeasurementPoints(measurement_points, motion_manager_type, zone)
+            try:
+                measurement_points = OptimizedMeasurementPoints(measurement_points, motion_manager_type, zone)
+            except ValueError as exc:
+                logger.warning('Point ordering optimization skipped: %s — using original order.', exc)
 
         if motion_manager_type == 'CylindricalMeasurementMotionManager':
             return CylindricalMeasurementMotionManager(

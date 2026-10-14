@@ -201,7 +201,7 @@ class BackendManager:
             self.load_warning = None
         except Exception as exc:
             self.load_warning = format_nfs_error(exc)
-            logger.error(self.load_warning)
+            logger.warning("{}: {}", self.load_warning, exc)
 
         if self.project_dir is not None:
             self.set_project_dir(self.project_dir)
@@ -229,6 +229,15 @@ class BackendManager:
         if self.scanner is None:
             return None
         return self.scanner.get_state()
+
+    def is_homed(self) -> bool:
+        if self.scanner is None:
+            return False
+        return self.scanner.is_homed()
+
+    def is_scanner_loaded(self) -> bool:
+        """Return whether the scanner has been successfully loaded."""
+        return self.scanner is not None
 
     def jog(self, method_name: str, value: float) -> None:
         if self.scanner is None:

@@ -78,8 +78,11 @@ class _ComboWheelFilter(QObject):
         return super().eventFilter(obj, event)
 
 
+SCANNER_RELATED_SECTIONS = {"scanner", "grbl_streamer", "windows", "motion_manager"}
+
+
 class SettingsDialog(QDialog):
-    def __init__(self, config_file: str, on_apply: Callable[[], None], parent=None):
+    def __init__(self, config_file: str, on_apply: Callable[[set[str]], None], parent=None):
         super().__init__(parent)
         self.config_file = config_file
         self.on_apply = on_apply
@@ -87,6 +90,7 @@ class SettingsDialog(QDialog):
         self.parser.optionxform = str
         self._combo_wheel_filter = _ComboWheelFilter(self)
         self._reload_config_state()
+        self._initial_config = self._snapshot_config()
         
         self.setWindowTitle("Edit configuration")
         self.resize(760, 560)
@@ -160,6 +164,27 @@ class SettingsDialog(QDialog):
         self.measurement_points_section_input = None
         self.measurement_points_type_input = None
 
+    def _snapshot_config(self) -> dict[str, dict[str, str]]:
+        """Return a snapshot of all config section/key/value pairs as strings."""
+        snapshot: dict[str, dict[str, str]] = {}
+        for section in self.parser.sections():
+            snapshot[section] = {
+                key: self.parser.get(section, key) for key in self.parser.options(section)
+            }
+        return snapshot
+
+    def _changed_sections(self) -> set[str]:
+        """Compare current parser state against the initial snapshot to find changed sections."""
+        current = self._snapshot_config()
+        changed: set[str] = set()
+        all_sections = set(self._initial_config.keys()) | set(current.keys())
+        for section in all_sections:
+            old_vals = self._initial_config.get(section, {})
+            new_vals = current.get(section, {})
+            if old_vals != new_vals:
+                changed.add(section)
+        return changed
+
     def _populate_tabs(self) -> None:
         self.tabs.clear()
         for section in EDITABLE_SCHEMA:
@@ -215,8 +240,9 @@ class SettingsDialog(QDialog):
             )
             return
 
-        self.on_apply()
+        self.on_apply(SCANNER_RELATED_SECTIONS | {"audio", "sweep", "logging", "app", "debug"})
         self._reload_config_state()
+        self._initial_config = self._snapshot_config()
         self._populate_tabs()
 
     def _add_tab(self, section: str) -> None:
@@ -600,8 +626,9 @@ class SettingsDialog(QDialog):
                 
         with open(self.config_file, "w") as f:
             self.parser.write(f)
-            
-        self.on_apply()
+
+        changed = self._changed_sections()
+        self.on_apply(changed)
         self.accept()
 
     def _validate_safety_zone(self, manager_type: str) -> bool:

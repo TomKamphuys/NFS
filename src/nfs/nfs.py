@@ -297,8 +297,7 @@ class NearFieldScanner:
                 )
 
             self._measurement_motion_manager.reset()
-            self._measurement_motion_manager.move_to_safe_starting_radius()
-            self._scanner.angular_move_to(0.0)
+            self._measurement_motion_manager.move_to_park_position()
 
         except Exception as exc:
             failure_exc = exc

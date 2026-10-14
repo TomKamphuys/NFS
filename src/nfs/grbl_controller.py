@@ -118,6 +118,18 @@ class IGrblController(ABC):
         """
         pass
 
+    def is_homed(self) -> bool:
+        """
+        Return whether the machine has completed a homing cycle.
+
+        The default implementation tracks homing state internally:
+        starts False, becomes True after a successful home command,
+        and resets to False on ALARM state or soft reset.
+
+        :return: True if the machine is homed, False otherwise.
+        """
+        return getattr(self, "_homed", False)
+
     def force_position_update(self):
         """
         Force a position update from the controller.
@@ -189,6 +201,9 @@ class GrblControllerMock(IGrblController):
     def set_on_state_update_callback(self, callback) -> None:
         pass
 
+    def is_homed(self) -> bool:
+        return getattr(self, "_homed", False)
+
     def force_position_update(self):
         logger.trace(f'Mocking force position update')
         pass
@@ -240,6 +255,7 @@ class GrblControllerMockSimulatedDRO(IGrblController):
         self._machine_pos_z = 0.0
         self._state = GrblMachineState.IDLE
         self._state_raw = "Idle"
+        self._homed = False
         self._on_state_update_callback = None
         self._linear_speed_mm_s = max(1.0, float(linear_speed_mm_s))
         self._angular_speed_deg_s = max(1.0, float(angular_speed_deg_s))
@@ -280,6 +296,8 @@ class GrblControllerMockSimulatedDRO(IGrblController):
 
     def softreset(self) -> None:
         logger.trace(f'Mocking softreset')
+        with self._lock:
+            self._homed = False
         self.killalarm()
 
     def hold(self) -> None:
@@ -289,6 +307,10 @@ class GrblControllerMockSimulatedDRO(IGrblController):
             self._state_raw = "Hold:0"
         self._motion_done.set()
         self._emit_state_update()
+
+    def is_homed(self) -> bool:
+        with self._lock:
+            return self._homed
 
     def get_position(self) -> CylindricalPosition:
         with self._lock:
@@ -332,7 +354,8 @@ class GrblControllerMockSimulatedDRO(IGrblController):
             )
 
     def _start_motion(self, message: str) -> None:
-        if message.strip().upper().startswith("$H"):
+        is_home = message.strip().upper().startswith("$H")
+        if is_home:
             target = (0.0, 0.0, 0.0)
         else:
             target = self._target_from_message(message)
@@ -350,7 +373,7 @@ class GrblControllerMockSimulatedDRO(IGrblController):
         duration = self._motion_duration(start, target)
         thread = threading.Thread(
             target=self._run_motion,
-            args=(start, target, duration),
+            args=(start, target, duration, is_home),
             name="GrblControllerMockStatus",
             daemon=True,
         )
@@ -370,6 +393,7 @@ class GrblControllerMockSimulatedDRO(IGrblController):
         start: tuple[float, float, float],
         target: tuple[float, float, float],
         duration_s: float,
+        is_home: bool = False,
     ) -> None:
         started_at = time.monotonic()
         while not self._shutdown:
@@ -390,6 +414,8 @@ class GrblControllerMockSimulatedDRO(IGrblController):
         with self._lock:
             self._pos_r, self._pos_t, self._pos_z = target
             self._machine_pos_r, self._machine_pos_t, self._machine_pos_z = target
+            if is_home:
+                self._homed = True
             self._state = GrblMachineState.IDLE
             self._state_raw = "Idle"
         self._emit_state_update()
@@ -426,6 +452,8 @@ class EventHandler:
 
         self._state: GrblMachineState = GrblMachineState.IDLE
         self._state_raw: str = "Idle"
+        self._homed = False
+        self._previous_state: Optional[GrblMachineState] = None
 
         self._on_state_update_callback = None
         self._debug_serial = debug_serial
@@ -500,6 +528,14 @@ class EventHandler:
         """
         return self._state_raw
 
+    def is_homed(self) -> bool:
+        """
+        Return whether the machine has completed a homing cycle.
+
+        :return: True if homed, False otherwise.
+        """
+        return self._homed
+
     def on_grbl_event(self, event, *data) -> None:
         """
         Callback for GRBL events from the streamer.
@@ -517,7 +553,12 @@ class EventHandler:
         if event == "on_stateupdate":
             if len(data) >= 3:
                 self._state_raw = str(data[0])
+                previous_state = self._state
                 self._state = GrblMachineState.from_grbl_mode(data[0])
+                self._previous_state = previous_state
+                # Only set homed when transitioning from HOME to IDLE (homing cycle completed)
+                if previous_state == GrblMachineState.HOME and self._state == GrblMachineState.IDLE:
+                    self._homed = True
 
                 if isinstance(data[1], tuple):
                     mpos = data[1]
@@ -562,6 +603,7 @@ class EventHandler:
             self._received_message = 'ok'
             self._state_raw = "Alarm"
             self._state = GrblMachineState.ALARM
+            self._homed = False
             logger.error("ERROR: Alarm!")
 
         args = []
@@ -859,6 +901,14 @@ class GrblStreamerClientConnection:
         """
         self._event_handler.set_on_state_update_callback(callback)
 
+    def is_homed(self) -> bool:
+        """
+        Return whether the machine has completed a homing cycle.
+
+        :return: True if homed, False otherwise.
+        """
+        return self._event_handler.is_homed()
+
     def close(self) -> None:
         """
         Close the connection.
@@ -1092,6 +1142,14 @@ class ESP32Duino(IGrblController):
         :param callback: The callback function.
         """
         self._connection.set_on_state_update_callback(callback)
+
+    def is_homed(self) -> bool:
+        """
+        Return whether the machine has completed a homing cycle.
+
+        :return: True if homed, False otherwise.
+        """
+        return self._connection.is_homed()
 
     def _wait_for_ack(self, timeout_s: Optional[float] = None) -> None:
         """

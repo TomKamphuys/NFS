@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import configparser
+import math
 import shutil
 import threading
 import time
@@ -15,6 +16,8 @@ from .config_support import _parse_bool, _strip_inline_comment
 from .backend import BackendManager, Worker, format_duration, format_measurement_error
 from .icons import ui_icon
 from .styles import danger_button, primary_button, warning_button
+from nfs.datatypes import GrblMachineState
+
 from .qt_compat import (
     QDoubleSpinBox,
     QFrame,
@@ -66,14 +69,16 @@ class ControlPane(QWidget):
         self.pool = QThreadPool.globalInstance()
         self.sine_running = False
         self.home_ok = False
-        self._homing_in_progress = False
         self.grid_readout_points: list[dict[str, float]] = []
         self._jog_buttons: list[QPushButton] = []
+        self._control_buttons: list[QPushButton] = []
         self._jog_in_progress = False
         self._jog_done = True
         self._jog_error: str | None = None
         self._jog_thread: threading.Thread | None = None
         self._last_error_notified: str | None = None
+        self._homing_glow_phase: float = 0.0
+        self._homing_glow_timer: QTimer | None = None
         self.progress_event.connect(self._apply_progress_event)
         self._build_ui()
 
@@ -120,6 +125,10 @@ class ControlPane(QWidget):
         motion_frame.setFixedSize(motion_frame.sizeHint())
         for frame in position_frames:
             frame.setFixedWidth(motion_frame.width())
+
+        # Disable all scanner-dependent buttons until the scanner is loaded
+        self._set_jog_buttons_enabled(False)
+        self._set_control_buttons_enabled(False)
         if _config_bool(self.backend.config_file, "app", "show_height_offset_controls", True):
             layout.addWidget(self._build_height_offset_group())
         layout.addWidget(self._build_measurement_group())
@@ -218,6 +227,7 @@ class ControlPane(QWidget):
         home.setFixedSize(command_width, 46)
         home.clicked.connect(lambda: self._run_command("home"))
         commands.addWidget(home)
+        self._control_buttons.append(home)
 
         if show_rehome:
             rehome = QPushButton("REHOME")
@@ -228,6 +238,7 @@ class ControlPane(QWidget):
             rehome.clicked.connect(lambda: self._run_command("rehome"))
             commands.addWidget(rehome)
             self._set_home_button_state(self.home_ok)
+            self._control_buttons.append(rehome)
 
         zero = QPushButton("ZERO")
         primary_button(zero)
@@ -236,6 +247,7 @@ class ControlPane(QWidget):
         zero.setFixedSize(command_width, 46)
         zero.clicked.connect(lambda: self._run_command("set_as_zero"))
         commands.addWidget(zero)
+        self._control_buttons.append(zero)
 
         clear = QPushButton("CLEAR\nALARM")
         primary_button(clear)
@@ -244,6 +256,7 @@ class ControlPane(QWidget):
         clear.setFixedSize(command_width, 46)
         clear.clicked.connect(lambda: self._run_command("clear_alarm"))
         commands.addWidget(clear)
+        self._control_buttons.append(clear)
 
         reset = QPushButton("RESET")
         danger_button(reset)
@@ -252,6 +265,7 @@ class ControlPane(QWidget):
         reset.setFixedSize(command_width, 46)
         reset.clicked.connect(lambda: self._run_command("softreset"))
         commands.addWidget(reset)
+        self._control_buttons.append(reset)
 
         hold = QPushButton("HOLD")
         danger_button(hold)
@@ -260,6 +274,7 @@ class ControlPane(QWidget):
         hold.setFixedSize(command_width, 46)
         hold.clicked.connect(lambda: self._run_command("hold"))
         commands.addWidget(hold)
+        self._control_buttons.append(hold)
 
         layout.addLayout(commands)
 
@@ -442,13 +457,55 @@ class ControlPane(QWidget):
         layout.addWidget(self.coord_readout)
         return group
 
-    def _set_home_button_state(self, homed: bool) -> None:
-        color = "#22c55e" if homed else "#f4c542"
-        hover = "#16a34a" if homed else "#e5b834"
+    def _set_home_button_state(self, homed: bool, homing: bool = False) -> None:
+        if homing:
+            self._start_homing_glow()
+        else:
+            self._stop_homing_glow()
+            color = "#22c55e" if homed else "#f4c542"
+            hover = "#16a34a" if homed else "#e5b834"
+            style = (
+                f"QPushButton {{ background: {color}; border: 1px solid {color}; "
+                "border-radius: 4px; color: #ffffff; font-weight: 800; padding: 7px 11px; }"
+                f"QPushButton:hover {{ background: {hover}; border-color: {hover}; }}"
+            )
+            self.home_button.setStyleSheet(style)
+            rehome_button = getattr(self, "rehome_button", None)
+            if rehome_button is not None:
+                rehome_button.setStyleSheet(style)
+
+    def _start_homing_glow(self) -> None:
+        if self._homing_glow_timer is not None:
+            return
+        self._homing_glow_phase = 0.0
+        self._homing_glow_timer = QTimer(self)
+        self._homing_glow_timer.setInterval(50)
+        self._homing_glow_timer.timeout.connect(self._tick_homing_glow)
+        self._homing_glow_timer.start()
+
+    def _stop_homing_glow(self) -> None:
+        if self._homing_glow_timer is not None:
+            self._homing_glow_timer.stop()
+            self._homing_glow_timer.deleteLater()
+            self._homing_glow_timer = None
+
+    def _tick_homing_glow(self) -> None:
+        self._homing_glow_phase += 0.2
+        pulse = (math.sin(self._homing_glow_phase) + 1.0) / 2.0
+        # Calm pulse: deep green to bright lime-green
+        base_r, base_g, base_b = 22, 163, 74        # vibrant green
+        glow_r, glow_g, glow_b = 187, 247, 135      # bright lime-green
+        r = int(base_r + (glow_r - base_r) * pulse)
+        g = int(base_g + (glow_g - base_g) * pulse)
+        b = int(base_b + (glow_b - base_b) * pulse)
+        border_width = 2 + int(pulse * 4)           # 2px to 6px border
+        color = f"#{r:02x}{g:02x}{b:02x}"
+        shadow_color = f"#{max(0,r-60):02x}{max(0,g-60):02x}{max(0,b-60):02x}"
         style = (
-            f"QPushButton {{ background: {color}; border: 1px solid {color}; "
-            "border-radius: 4px; color: #ffffff; font-weight: 800; padding: 7px 11px; }"
-            f"QPushButton:hover {{ background: {hover}; border-color: {hover}; }}"
+            f"QPushButton {{ background: {color}; "
+            f"border: {border_width}px solid {shadow_color}; "
+            "border-radius: 6px; color: #ffffff; font-weight: 800; padding: 7px 11px; "
+            f"outline: 2px solid {color}; outline-offset: -{border_width + 2}px; }}"
         )
         self.home_button.setStyleSheet(style)
         rehome_button = getattr(self, "rehome_button", None)
@@ -484,36 +541,15 @@ class ControlPane(QWidget):
     def _run_command(self, method: str) -> None:
         if method == "set_as_zero":
             self._run_backend(self.backend.set_as_zero)
-        elif method == "home":
-            self._homing_in_progress = True
-            self._set_home_ok(False)
-            worker = Worker(self._home_blocking)
-            worker.signals.finished.connect(self._home_finished)
-            worker.signals.failed.connect(self._home_failed)
-            self.pool.start(worker)
-        elif method == "rehome":
-            self._homing_in_progress = True
-            self._set_home_ok(False)
-            worker = Worker(self._rehome_blocking)
-            worker.signals.finished.connect(self._home_finished)
+        elif method in ("home", "rehome"):
+            blocking_method = self._rehome_blocking if method == "rehome" else self._home_blocking
+            worker = Worker(blocking_method)
             worker.signals.failed.connect(self._home_failed)
             self.pool.start(worker)
         else:
-            if method == "softreset":
-                self._set_home_ok(False)
             self._run_backend(self.backend.scanner_command, method)
 
-    def _set_home_ok(self, ok: bool) -> None:
-        self.home_ok = bool(ok)
-        self._set_home_button_state(self.home_ok)
-
-    def _home_finished(self) -> None:
-        self._homing_in_progress = False
-        self._set_home_ok(True)
-
     def _home_failed(self, message: str) -> None:
-        self._homing_in_progress = False
-        self._set_home_ok(False)
         QMessageBox.warning(self, "Backend Error", message)
 
     def _rehome_blocking(self) -> None:
@@ -558,6 +594,10 @@ class ControlPane(QWidget):
     def _set_jog_buttons_enabled(self, enabled: bool) -> None:
         self._jog_in_progress = not enabled
         for btn in self._jog_buttons:
+            btn.setEnabled(enabled)
+
+    def _set_control_buttons_enabled(self, enabled: bool) -> None:
+        for btn in self._control_buttons:
             btn.setEnabled(enabled)
 
     def toggle_sine(self) -> None:
@@ -690,9 +730,14 @@ class ControlPane(QWidget):
         pos = self.backend.get_position()
         state = self.backend.get_state()
         machine_pos = self.backend.get_machine_position() if self.mcs_labels else None
-        state_name = str(state).split(".")[-1] if state is not None else ""
-        if state_name.upper() == "ALARM" and not self._homing_in_progress:
-            self._set_home_ok(False)
+        homed = self.backend.is_homed()
+        homing = state is not None and state == GrblMachineState.HOME
+        self._set_home_button_state(homed, homing)
+        # Enable all scanner-dependent buttons when the scanner is loaded
+        if self.backend.is_scanner_loaded():
+            self._set_control_buttons_enabled(True)
+            if not self._jog_in_progress:
+                self._set_jog_buttons_enabled(True)
         self._set_position_labels(self.wcs_labels, pos, state)
         if self.mcs_labels:
             self._set_position_labels(self.mcs_labels, machine_pos, state)

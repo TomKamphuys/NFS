@@ -111,3 +111,18 @@ def test_factory_opt_in(tmp_path, monkeypatch, enabled):
     manager = MotionManagerFactory.create(str(config), 'motion_manager', Mock())
     assert isinstance(manager._measurement_points, OptimizedMeasurementPoints) == enabled
     assert 'optimize_point_order' not in create.call_args.args[0]
+
+
+def test_factory_fallback_when_optimization_fails(tmp_path, monkeypatch):
+    """When OptimizedMeasurementPoints raises ValueError, the factory falls back to raw points."""
+    # Points that lie inside the no-fly zone will cause OptimizedMeasurementPoints to fail
+    bad_source = Points([Point(5, 0, 5)])  # inside no-fly zone (radius 10, z 0-10)
+    create = Mock(return_value=bad_source)
+    monkeypatch.setattr('nfs.motion_manager.factory.create', create)
+    config = tmp_path / 'config.ini'
+    config.write_text('[motion_manager]\ntype = FastCylindricalMeasurementMotionManager\n'
+                      'no_fly_radius = 10\nno_fly_z_min = 0\nno_fly_z_max = 10\n'
+                      'optimize_point_order = True\n', encoding='utf-8')
+    manager = MotionManagerFactory.create(str(config), 'motion_manager', Mock())
+    # Should fall back to raw (unoptimized) measurement points
+    assert not isinstance(manager._measurement_points, OptimizedMeasurementPoints)

@@ -331,9 +331,20 @@ class MainWindow(QMainWindow):
         else:
             self._mark_active(self.audio_button, self.live_button)
 
-    def on_settings_applied(self) -> None:
-        self.backend.load()
-        self._rebuild_control_pane()
+    def on_settings_applied(self, changed_sections: set[str]) -> None:
+        from .settings_dialog import SCANNER_RELATED_SECTIONS
+
+        scanner_changed = bool(changed_sections & SCANNER_RELATED_SECTIONS)
+        ui_changed = "app" in changed_sections
+
+        if scanner_changed:
+            self.backend.load()
+        else:
+            self.backend.reload_nfs()
+
+        if ui_changed or scanner_changed:
+            self._rebuild_control_pane()
+
         self._apply_menu_auto_hide()
         self._refresh_motion_preview_visibility()
         self.grid_pane.refresh_from_config()

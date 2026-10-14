@@ -147,6 +147,14 @@ class Scanner:
         """
         return self.get_state() == GrblMachineState.ALARM
 
+    def is_homed(self) -> bool:
+        """
+        Return whether the machine has completed a homing cycle.
+
+        :return: True if homed, False otherwise.
+        """
+        return self._grbl_controller.is_homed()
+
     def set_as_zero(self) -> None:
         """Reset scanner Work Coordinate System (Persistent)."""
         # G10 L20 P2 sets the CURRENT position as the zero point for G55 (P2).
