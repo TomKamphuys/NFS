@@ -26,9 +26,6 @@ DISPLAY_LABELS = {
     "default_project_dir": "Default session folder",
     "cal_tool_height": "Calibration tool height (mm)",
     "feed_rate": "Feed rate (mm/min)",
-    "no_fly_radius": "No-fly radius (mm)",
-    "no_fly_z_min": "No-fly bottom Z (mm)",
-    "no_fly_z_max": "No-fly top Z (mm)",
     "homing_gap": "Homing gap (degrees)",
     "pole_gap": "Pole gap (mm)",
     "cap_spacing": "Cap spacing (mm)",
@@ -75,9 +72,6 @@ MOTION_MANAGER_TYPES: Dict[str, List[SchemaEntry]] = {
     ],
     "SphericalMeasurementMotionManager": [
         ("optimize_point_order", "bool", "Reduce physical travel distance while preserving every point and safety detours.", None),
-        ("no_fly_radius", "float",
-         "Radius (mm) of the spherical no-fly (keep-out) zone around the device "
-         "under test.", None),
         ("unsafe_point_policy", "choice",
          "What to do if a measurement point lies inside the no-fly zone: "
          "'abort' stops the scan (safest); 'skip' logs a warning and moves on "

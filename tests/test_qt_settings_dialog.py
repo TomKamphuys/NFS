@@ -45,7 +45,6 @@ def test_settings_dialog_fixes_motion_manager_and_measurement_points_type(tmp_pa
 
 
 def test_motion_setting_labels_include_normalized_units():
-    assert DISPLAY_LABELS["no_fly_radius"] == "No-fly radius (mm)"
     assert DISPLAY_LABELS["homing_gap"] == "Homing gap (degrees)"
     assert DISPLAY_LABELS["pole_gap"] == "Pole gap (mm)"
 
@@ -243,9 +242,6 @@ def test_settings_dialog_can_inline_measurement_points_fields(tmp_path):
     config_file.write_text(
         "[motion_manager]\n"
         "type = CylindricalMeasurementMotionManager\n"
-        "no_fly_radius = 100.0\n"
-        "no_fly_z_min = 0.0\n"
-        "no_fly_z_max = 400.0\n"
         "measurement_points = points\n"
         "[points]\n"
         "type = FileMeasurementPoints\n"
