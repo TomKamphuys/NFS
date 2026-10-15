@@ -1,4 +1,6 @@
 import configparser
+from typing import Callable
+
 from loguru import logger
 from .logging_config import setup_logging
 
@@ -14,7 +16,7 @@ class Scanner:
     def __init__(
         self,
         grbl_controller: IGrblController,
-        feed_rate,
+        feed_rate: float,
         cal_tool_height: float = 0.0,
     ):
         """
@@ -32,7 +34,7 @@ class Scanner:
         if self.get_position().r() != r:
             self._grbl_controller.send_and_wait_for_move_ready(f'G0 Y{r:.4f}')
 
-    def planar_move_to(self, r: float, z: float):
+    def planar_move_to(self, r: float, z: float) -> None:
         """
         Move to a specified planar position (radial and vertical).
 
@@ -119,7 +121,9 @@ class Scanner:
         """Return the raw mode string last reported by GRBL/FluidNC (e.g. 'Hold:0')."""
         return self._grbl_controller.get_state_raw()
 
-    def set_on_state_update_callback(self, callback) -> None:
+    def set_on_state_update_callback(
+        self, callback: Callable[[CylindricalPosition, GrblMachineState, CylindricalPosition | None], None]
+    ) -> None:
         """Register a callback for state and position updates."""
         self._grbl_controller.set_on_state_update_callback(callback)
 
@@ -211,11 +215,16 @@ class Scanner:
         """Shutdown the scanner's movers."""
         self._grbl_controller.shutdown()
 
-    def __enter__(self):
+    def __enter__(self) -> 'Scanner':
         """Context manager enter."""
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: object | None,
+    ) -> None:
         """Context manager exit, ensures shutdown is called."""
         self.shutdown()
 

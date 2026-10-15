@@ -1,19 +1,27 @@
 """Weighted travel ordering without changing the motion manager's safe paths."""
 import math
+from typing import Any, Protocol
 
 from loguru import logger
+
+from .datatypes import CylindricalPosition
 
 
 ROTATION_MM_PER_DEGREE = 300.0 / 90.0
 
 
-def linear_distance(start, end):
+def linear_distance(start: tuple[float, float, float], end: tuple[float, float, float]) -> float:
     """Linear R/Z travel plus a radius-independent azimuth penalty."""
     r, t, z = start
     return math.hypot(end[0] - r, end[2] - z) + abs(end[1] - t) * ROTATION_MM_PER_DEGREE
 
 
-def travel_distance(start, end, manager_type, zone):
+def travel_distance(
+    start: CylindricalPosition,
+    end: CylindricalPosition,
+    manager_type: str,
+    zone: Any,
+) -> float:
     r, t, z = start.r(), start.t(), start.z()
     R, T, Z = end.r(), end.t(), end.z()
     angular = abs(T - t) * ROTATION_MM_PER_DEGREE
@@ -40,7 +48,7 @@ class OptimizedMeasurementPoints:
     entries (including duplicates) survive; invalid grids fail before movement.
     """
 
-    def __init__(self, source, manager_type, zone):
+    def __init__(self, source: Any, manager_type: str, zone: Any):
         self._points = []
         source.reset()
         while not source.ready():
@@ -71,16 +79,16 @@ class OptimizedMeasurementPoints:
         logger.info(f'Measurement ordering: {original_length:.1f} -> '
                     f'{min(original_length, candidate_length):.1f} mm-equivalent weighted travel')
 
-    def next(self):
+    def next(self) -> CylindricalPosition:
         point = self._points[self._index]
         self._index += 1
         return point
 
-    def ready(self):
+    def ready(self) -> bool:
         return self._index >= len(self._points)
 
-    def reset(self):
+    def reset(self) -> None:
         self._index = 0
 
-    def total_points(self):
+    def total_points(self) -> int:
         return len(self._points)

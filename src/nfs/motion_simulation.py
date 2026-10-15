@@ -23,6 +23,7 @@ from __future__ import annotations
 import configparser
 import math
 from dataclasses import dataclass, field
+from typing import Any
 
 from loguru import logger
 
@@ -298,7 +299,7 @@ def simulate_motion(
     return simulation
 
 
-def _collect_unsafe_points(manager) -> list[CylindricalPosition]:
+def _collect_unsafe_points(manager: Any) -> list[CylindricalPosition]:
     """
     Return every measurement point that lies inside the manager's no-fly zone.
 
@@ -330,7 +331,7 @@ def _collect_unsafe_points(manager) -> list[CylindricalPosition]:
     return unsafe
 
 
-def _capture_zone(manager, simulation: MotionSimulation) -> None:
+def _capture_zone(manager: Any, simulation: MotionSimulation) -> None:
     """Read the no-fly zone geometry off the built manager, if any."""
     zone = getattr(manager, "_no_fly_zone", None)
     if isinstance(zone, CylindricalNoFlyZone):

@@ -1,3 +1,5 @@
+from typing import Any
+
 from loguru import logger
 
 from nfs.datatypes import CylindricalPosition
@@ -14,13 +16,13 @@ class CylindricalMeasurementPoints:
     """
 
     def __init__(self,
-                 nr_of_angular_points,
-                 nr_of_radial_cap_points,
-                 nr_of_vertical_points,
-                 cap_spacing,
-                 wall_spacing,
-                 radius,
-                 height):
+                 nr_of_angular_points: int,
+                 nr_of_radial_cap_points: int,
+                 nr_of_vertical_points: int,
+                 cap_spacing: float,
+                 wall_spacing: float,
+                 radius: float,
+                 height: float):
         """
         Initialize the cylindrical measurement-point generator.
 
@@ -190,7 +192,7 @@ class CylindricalMeasurementPoints:
         return self._nr_of_angular_points * 2 * (2 * self._nr_of_radial_cap_points + self._nr_of_vertical_points)
 
 
-def register(factory) -> None:
+def register(factory: Any) -> None:
     """
     Register :class:`CylindricalMeasurementPoints` with the given factory.
 

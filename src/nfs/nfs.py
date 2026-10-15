@@ -3,14 +3,17 @@ import shutil
 import threading
 import time
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .datatypes import CylindricalPosition
 
 from .logging_config import setup_logging, log_version_info
 from loguru import logger
 
 from . import loader
 from .audio import AudioFactory, IAudio
-from .motion_manager import MotionManagerFactory
+from .motion_manager import MotionManagerFactory, IMotionManager
 from .scanner import Scanner
 
 
@@ -34,7 +37,7 @@ class NearFieldScanner:
     def __init__(self,
                  scanner: Scanner,
                  audio: IAudio,
-                 measurement_motion_manager,
+                 measurement_motion_manager: IMotionManager,
                  position_log_file: str = 'measurement_positions.csv'):
         """
         Initialize the NearFieldScanner.
@@ -106,7 +109,7 @@ class NearFieldScanner:
             f.write('r_xy_mm,phi_deg,z_mm\n')
         logger.info(f'Position log file cleared: {self._position_log_file}')
 
-    def _append_position_to_file(self, position) -> None:
+    def _append_position_to_file(self, position: 'CylindricalPosition') -> None:
         """
         Appends the measurement position to the log file as CSV with numeric values only.
         :param position: The position to be logged (CylindricalPosition)
@@ -126,7 +129,7 @@ class NearFieldScanner:
             self._audio.set_session_directory(self._single_measurements_dir())
         self._audio.measure_ir(self._scanner.get_position())
 
-    def test_sweep(self):
+    def test_sweep(self) -> dict[str, Any]:
         """
         Run the current sweep settings at the current position without saving files.
 
@@ -445,7 +448,7 @@ class NearFieldScanner:
             logger.warning(f"Error stopping sine during shutdown: {e}")
         self._scanner.shutdown()  # turn off stuff and tidy
 
-    def __enter__(self):
+    def __enter__(self) -> 'NearFieldScanner':
         """
         Context manager enter.
 
@@ -453,7 +456,12 @@ class NearFieldScanner:
         """
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: object | None,
+    ) -> None:
         """
         Context manager exit, ensures shutdown is called.
 

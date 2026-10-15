@@ -162,7 +162,7 @@ class CylindricalPosition:
         self._t = t
         self._z = z
 
-    def __eq__(self, other) -> bool:
+    def __eq__(self, other: object) -> bool:
         """
         Compares the current object with another object for equality. The comparison
         is performed by comparing the results of `r()`, `t()`, and `z()` methods from

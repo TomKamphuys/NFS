@@ -5,7 +5,7 @@ import sys
 import threading
 import time
 from abc import ABC, abstractmethod
-from typing import Optional
+from typing import Any, Callable, Optional
 
 from grbl_streamer import GrblStreamer  # type: ignore
 from loguru import logger
@@ -110,7 +110,9 @@ class IGrblController(ABC):
         pass
 
     @abstractmethod
-    def set_on_state_update_callback(self, callback) -> None:
+    def set_on_state_update_callback(
+        self, callback: Callable[[CylindricalPosition, GrblMachineState, Optional[CylindricalPosition]], None]
+    ) -> None:
         """
         Register a callback for state and position updates.
 
@@ -130,7 +132,7 @@ class IGrblController(ABC):
         """
         return getattr(self, "_homed", False)
 
-    def force_position_update(self):
+    def force_position_update(self) -> None:
         """
         Force a position update from the controller.
         """
@@ -198,13 +200,15 @@ class GrblControllerMock(IGrblController):
     def get_state_raw(self) -> str:
         return "Idle"
 
-    def set_on_state_update_callback(self, callback) -> None:
+    def set_on_state_update_callback(
+        self, callback: Callable[[CylindricalPosition, GrblMachineState, Optional[CylindricalPosition]], None]
+    ) -> None:
         pass
 
     def is_homed(self) -> bool:
         return getattr(self, "_homed", False)
 
-    def force_position_update(self):
+    def force_position_update(self) -> None:
         logger.trace(f'Mocking force position update')
         pass
 
@@ -332,11 +336,13 @@ class GrblControllerMockSimulatedDRO(IGrblController):
         with self._lock:
             return self._state_raw
 
-    def set_on_state_update_callback(self, callback) -> None:
+    def set_on_state_update_callback(
+        self, callback: Callable[[CylindricalPosition, GrblMachineState, Optional[CylindricalPosition]], None]
+    ) -> None:
         self._on_state_update_callback = callback
         self._emit_state_update()
 
-    def force_position_update(self):
+    def force_position_update(self) -> None:
         logger.trace(f'Mocking force position update')
         self._emit_state_update()
 
@@ -458,7 +464,9 @@ class EventHandler:
         self._on_state_update_callback = None
         self._debug_serial = debug_serial
 
-    def set_on_state_update_callback(self, callback):
+    def set_on_state_update_callback(
+        self, callback: Callable[[CylindricalPosition, GrblMachineState, Optional[CylindricalPosition]], None]
+    ) -> None:
         """
         Set the callback function for state updates.
 
@@ -466,7 +474,7 @@ class EventHandler:
         """
         self._on_state_update_callback = callback
 
-    def get_received_message(self):
+    def get_received_message(self) -> str:
         """
         Get the last received message.
 
@@ -474,7 +482,7 @@ class EventHandler:
         """
         return self._received_message
 
-    def set_received_message(self, value):
+    def set_received_message(self, value: str) -> None:
         """
         Set the received message.
 
@@ -536,7 +544,7 @@ class EventHandler:
         """
         return self._homed
 
-    def on_grbl_event(self, event, *data) -> None:
+    def on_grbl_event(self, event: str, *data: Any) -> None:
         """
         Callback for GRBL events from the streamer.
 
@@ -841,7 +849,7 @@ class GrblStreamerClientConnection:
             logger.debug("GRBL serial TX: {!r}", message)
         self._grbl_streamer.send_immediately(message)
 
-    def receive(self):
+    def receive(self) -> str:
         """
         Receive the last message from the event handler.
 
@@ -893,7 +901,9 @@ class GrblStreamerClientConnection:
         """
         return self._event_handler.get_state_raw()
 
-    def set_on_state_update_callback(self, callback) -> None:
+    def set_on_state_update_callback(
+        self, callback: Callable[[CylindricalPosition, GrblMachineState, Optional[CylindricalPosition]], None]
+    ) -> None:
         """
         Set the state update callback on the event handler.
 
@@ -1135,7 +1145,9 @@ class ESP32Duino(IGrblController):
         """
         return self._connection.get_state_raw()
 
-    def set_on_state_update_callback(self, callback) -> None:
+    def set_on_state_update_callback(
+        self, callback: Callable[[CylindricalPosition, GrblMachineState, Optional[CylindricalPosition]], None]
+    ) -> None:
         """
         Set the state update callback.
 

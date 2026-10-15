@@ -642,7 +642,7 @@ class DSPVerificationTool:
     Provides automated verification of SNR, THD, and Timing Jitter.
     """
 
-    def __init__(self, fs: int):
+    def __init__(self, fs: int) -> None:
         """
         Initialize the DSP verification tool.
 
@@ -716,7 +716,7 @@ class MarkerGenerator:
     superior to simple pulses for synchronization in noisy environments.
     """
 
-    def __init__(self, fs: int, dur_ms: float, bw_hz: Tuple[float, float], level_dbfs: float):
+    def __init__(self, fs: int, dur_ms: float, bw_hz: Tuple[float, float], level_dbfs: float) -> None:
         """
         Initialize the marker generator.
 
@@ -776,7 +776,7 @@ class SweepGenerator:
       3. A 'clean' Inverse Filter using Time Reversal of the fundamental.
     """
 
-    def __init__(self, fs: int, duration_s: float, f1: float, level_dbfs: float):
+    def __init__(self, fs: int, duration_s: float, f1: float, level_dbfs: float) -> None:
         """
         Initialize the sweep generator.
 
@@ -822,7 +822,7 @@ class SweepGenerator:
 class HarmonicInjector:
     """Injects H2/H3 distortions using the sweep's phase array."""
 
-    def __init__(self, h2_db: Optional[float] = None, h3_db: Optional[float] = None):
+    def __init__(self, h2_db: Optional[float] = None, h3_db: Optional[float] = None) -> None:
         """
         Initialize the harmonic injector.
 
@@ -853,7 +853,7 @@ class HarmonicInjector:
 class ProtectionFilter:
     """Applies MIN phase HPF to protect drivers, and generates an inverse correction mask."""
 
-    def __init__(self, fs: int, freq_hz: float, order: int, hpf_correction: bool = False, hpf_corr_db_cap: float = 12.0):
+    def __init__(self, fs: int, freq_hz: float, order: int, hpf_correction: bool = False, hpf_corr_db_cap: float = 12.0) -> None:
         """
         Initialize the protection filter.
 
@@ -1083,7 +1083,7 @@ class AlignmentEngine:
 class DeconvolutionEngine:
     """Handles FFT deconvolution, spectral masking, and Farina separation."""
 
-    def __init__(self, fs: int):
+    def __init__(self, fs: int) -> None:
         """
         Initialize the deconvolution engine.
 
@@ -1210,7 +1210,7 @@ class DeconvolutionEngine:
 
 class IAudio(ABC):
     @abstractmethod
-    def measure_ir(self, position: CylindricalPosition, order_id: str = "NA", save: bool = True):
+    def measure_ir(self, position: CylindricalPosition, order_id: str = "NA", save: bool = True) -> dict[str, Any]:
         pass
 
     @abstractmethod
@@ -1271,7 +1271,7 @@ class Audio(IAudio):
 
         self._log_config()
 
-    def _ensure_directories(self):
+    def _ensure_directories(self) -> None:
         self.rec_dir.mkdir(parents=True, exist_ok=True)
         self.dist_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1281,14 +1281,14 @@ class Audio(IAudio):
         else:
             self.debug_dir = None
 
-    def set_session_directory(self, session_path: Path):
+    def set_session_directory(self, session_path: Path) -> None:
         """Updates internal recording and debug directories to a measurement session path."""
         self.rec_dir = Path(session_path)
         self.dist_dir = self.rec_dir / "Distortion"
         self._ensure_directories()
         logger.debug(f"Audio session directory updated to: {session_path}")
 
-    def _log_config(self):
+    def _log_config(self) -> None:
         """Log the current hardware and capture configuration."""
         logger.info(
             f"Audio Config: FS={self.hw['fs']}, Sweeps={self.cap['num_sweeps']}, Dur={self.cap['sweep_dur_s']}s")
@@ -1479,7 +1479,7 @@ class Audio(IAudio):
             "psr": psr
         }
 
-    def measure_ir(self, position: CylindricalPosition, order_id: str = "NA", save: bool = True):
+    def measure_ir(self, position: CylindricalPosition, order_id: str = "NA", save: bool = True) -> dict[str, Any]:
         """
         Public entry point. Coordinates capture, processing, and file saving.
         """
@@ -1894,7 +1894,7 @@ class MockInterfaceAudio(Audio):
 class AudioMock(IAudio):
     """Simulation class for when hardware is unavailable."""
 
-    def measure_ir(self, position: CylindricalPosition, order_id: str = "NA", save: bool = True) -> None:
+    def measure_ir(self, position: CylindricalPosition, order_id: str = "NA", save: bool = True) -> dict[str, Any]:
         """
         Measure the impulse response at a given position.
 
@@ -1903,6 +1903,7 @@ class AudioMock(IAudio):
         """
         logger.info(f"[MOCK] Measured {position}, ID={order_id}")
         # time.sleep(1.0)  # Simulate sweep duration
+        return {}
 
     def play_sine(self, frequency: float, level_dbfs: float, duration_s: Optional[float] = 1.0) -> None:
         """
@@ -1933,7 +1934,7 @@ class AudioFactory:
         return value.replace(",", ".")
 
     @staticmethod
-    def _get_required_config(config: configparser.ConfigParser, section: str, key: str, type_func):
+    def _get_required_config(config: configparser.ConfigParser, section: str, key: str, type_func: Any) -> Any:
         if not config.has_option(section, key):
             raise KeyError(f"Missing required config: [{section}] {key}")
         val = config.get(section, key).split('#')[0].split(';')[0].strip()
