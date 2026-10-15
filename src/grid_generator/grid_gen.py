@@ -8,6 +8,9 @@ strict Cylindrical Expansion (XY walls, Z caps) to protect gradients.
 Note: This one
 """
 
+import json
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 
@@ -303,52 +306,47 @@ def generate_measurement_grid(
         cleaned = "_".join(part for part in cleaned.split("_") if part)
         return cleaned or f"point_{index}"
 
-    settings_list = [
-        f"cyl_radius_internal={cyl_radius:.3f}",
-        f"cyl_radius_external={cyl_radius_working:.3f}",
-        f"cyl_height_internal={cyl_height:.3f}",
-        f"cyl_height_external={cyl_height_working:.3f}",
-        f"num_points={num_points}",
-        f"cap_fraction={cap_fraction}",
-        f"cap_fraction_eff={cap_fraction_eff:.4f}",
-        f"wall_thickness_mm={wall_thickness_mm}",
-        f"P_side={P_side}",
-        f"P_caps={P_caps}",
-        f"generate_reverse_spiral={generate_reverse_spiral}",
-        f"z_rotation_deg={z_rotation_deg}",
-        f"flip_poles={flip_poles}",
-        f"bottom_cutoff_mm={bottom_cutoff_mm}",
-        f"z_midpoint_zero={z_midpoint_zero}",
-        f"phi_min_deg={phi_min_deg}",
-        f"phi_max_deg={phi_max_deg}",
-        f"azimuth_density_ratio={azimuth_density_ratio}",
-        f"azimuth_weight_center_deg={azimuth_weight_center_deg}",
-        f"tweeter_pos={tweeter_pos}",
-        f"ref_origin_pos={ref_origin_pos}",
-        f"baffle_bot_l_pos={baffle_bot_l_pos}",
-        f"baffle_top_l_pos={baffle_top_l_pos}",
-        f"baffle_top_r_pos={baffle_top_r_pos}",
-        *[
-            f"user_position_{safe_position_name(name, index)}={pos}"
-            for index, (name, pos) in enumerate(additional_positions, start=1)
-        ],
-        f"top_crit_pos={top_crit_pos}",
-        f"bot_crit_pos={bot_crit_pos}",
-        f"z_offset_mm={z_offset_mm}",
-        f"r_min_mm={cyl_df['r_xy_mm'].min():.1f}",
-        f"r_max_mm={cyl_df['r_xy_mm'].max():.1f}",
-        f"p_min_deg={cyl_df['phi_deg'].min():.1f}",
-        f"p_max_deg={cyl_df['phi_deg'].max():.1f}",
-        f"z_min_mm={cyl_df['z_mm'].min():.1f}",
-        f"z_max_mm={cyl_df['z_mm'].max():.1f}"
-    ]
+    gen_settings = {
+        "cyl_radius_internal": round(cyl_radius, 3),
+        "cyl_radius_external": round(cyl_radius_working, 3),
+        "cyl_height_internal": round(cyl_height, 3),
+        "cyl_height_external": round(cyl_height_working, 3),
+        "num_points": num_points,
+        "cap_fraction": cap_fraction,
+        "cap_fraction_eff": round(cap_fraction_eff, 4),
+        "wall_thickness_mm": wall_thickness_mm,
+        "P_side": P_side,
+        "P_caps": P_caps,
+        "generate_reverse_spiral": generate_reverse_spiral,
+        "z_rotation_deg": z_rotation_deg,
+        "flip_poles": flip_poles,
+        "bottom_cutoff_mm": bottom_cutoff_mm,
+        "z_midpoint_zero": z_midpoint_zero,
+        "phi_min_deg": phi_min_deg,
+        "phi_max_deg": phi_max_deg,
+        "azimuth_density_ratio": azimuth_density_ratio,
+        "azimuth_weight_center_deg": azimuth_weight_center_deg,
+        "tweeter_pos": list(tweeter_pos) if tweeter_pos is not None else None,
+        "ref_origin_pos": list(ref_origin_pos) if ref_origin_pos is not None else None,
+        "baffle_bot_l_pos": list(baffle_bot_l_pos) if baffle_bot_l_pos is not None else None,
+        "baffle_top_l_pos": list(baffle_top_l_pos) if baffle_top_l_pos is not None else None,
+        "baffle_top_r_pos": list(baffle_top_r_pos) if baffle_top_r_pos is not None else None,
+        "top_crit_pos": list(top_crit_pos) if top_crit_pos is not None else None,
+        "bot_crit_pos": list(bot_crit_pos) if bot_crit_pos is not None else None,
+        "z_offset_mm": z_offset_mm,
+        "r_min_mm": round(float(cyl_df["r_xy_mm"].min()), 1),
+        "r_max_mm": round(float(cyl_df["r_xy_mm"].max()), 1),
+        "p_min_deg": round(float(cyl_df["phi_deg"].min()), 1),
+        "p_max_deg": round(float(cyl_df["phi_deg"].max()), 1),
+        "z_min_mm": round(float(cyl_df["z_mm"].min()), 1),
+        "z_max_mm": round(float(cyl_df["z_mm"].max()), 1),
+    }
 
-    cyl_df['gen_settings'] = ""
-    for i, setting in enumerate(settings_list):
-        if i < len(cyl_df):
-            cyl_df.loc[i, 'gen_settings'] = setting
+    for index, (name, pos) in enumerate(additional_positions, start=1):
+        key = f"user_position_{safe_position_name(name, index)}"
+        gen_settings[key] = list(pos)
 
-    return cyl_df
+    return cyl_df, gen_settings
 
 
 if __name__ == "__main__":
@@ -380,7 +378,7 @@ if __name__ == "__main__":
         bot_crit_pos
     )
 
-    grid_dict = generate_measurement_grid(
+    cyl_df, gen_settings = generate_measurement_grid(
         cyl_radius_mm=cyl_radius_mm,
         cyl_height_mm=cyl_height_mm,
         num_points=num_points,
@@ -406,10 +404,12 @@ if __name__ == "__main__":
         top_crit_pos=top_crit_pos,
         bot_crit_pos=bot_crit_pos
     )
-
-    cyl_df = pd.DataFrame(grid_dict)
-    cyl_df.to_csv(OUTPUT_GRID_GEN, index=False)
+    output_path = Path(OUTPUT_GRID_GEN)
+    cyl_df.to_csv(output_path, index=False)
+    sidecar_path = output_path.with_suffix('.json')
+    sidecar_path.write_text(json.dumps(gen_settings, indent=2), encoding='utf-8')
     print(
         f"Saved {OUTPUT_GRID_GEN} "
         f"(phi {phi_min_deg:.1f}…{phi_max_deg:.1f}°, mm units)"
     )
+    print(f"Saved sidecar metadata: {sidecar_path}")

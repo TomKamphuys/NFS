@@ -165,11 +165,11 @@ def plan_path(
     out.loc[order_indices, "order_idx"] = np.arange(N)
     out = out.sort_values("order_idx").reset_index(drop=True)
 
-    # Ensure 'order_idx' is placed before 'gen_settings'
+    # Ensure 'order_idx' is placed at the end
     cols = list(out.columns)
-    if "gen_settings" in cols:
+    if "order_idx" in cols:
         cols.remove("order_idx")
-        cols.insert(cols.index("gen_settings"), "order_idx")
+        cols.append("order_idx")
         out = out[cols]
 
     if output_path is not None:

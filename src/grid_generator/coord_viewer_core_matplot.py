@@ -24,9 +24,9 @@ import matplotlib.pyplot as plt  # Core plotting library to create figures and a
 import matplotlib.colors as mcolors  # Used to create custom color gradients
 import matplotlib.animation as animation  # Used to create background loops for playback
 import pandas as pd  # Used for handling tabular data (DataFrames)
-import json  # Used for parsing settings embedded in columns
-import ast
+import json  # Used for loading sidecar JSON metadata
 import colorsys
+from pathlib import Path
 
 
 def _hsv_slider_to_hex(value):
@@ -184,13 +184,17 @@ class CoordViewerEngine:
             except TypeError:
                 self.ax.view_init(elev=elev, azim=azim)
 
-    def load_data(self, input_data):
+    def load_data(self, input_data, csv_path=None):
         # Determine what type of data was passed in and standardize it into a Pandas DataFrame
+        effective_path: str | None = None
         if isinstance(input_data, pd.DataFrame):
             df = input_data
+            if csv_path is not None:
+                effective_path = str(csv_path)
         elif isinstance(input_data, dict):
             df = pd.DataFrame(input_data)
         elif isinstance(input_data, str) and input_data.lower().endswith('.csv'):
+            effective_path = input_data
             df = pd.read_csv(input_data)
         else:
             raise TypeError("Engine load_data expects a pandas DataFrame, dict, or CSV file path.")
@@ -201,7 +205,7 @@ class CoordViewerEngine:
         self.r_m = df["r_xy_mm"].to_numpy() / 1000.0  # Convert mm to meters
         self.z_m = df["z_mm"].to_numpy() / 1000.0  # Convert mm to meters
         self.phi_rad = np.radians(self.phi_arr)  # Convert degrees to radians for math functions
-        
+
         # Convert polar coordinates (radius, angle) into cartesian coordinates (X, Y)
         self.x = self.r_m * np.cos(self.phi_rad)
         self.y = self.r_m * np.sin(self.phi_rad)
@@ -211,27 +215,15 @@ class CoordViewerEngine:
         self.base_pts.set_data(self.x, self.y)
         self.base_pts.set_3d_properties(self.z)
 
-        # Determine bounds from CSV columns or JSON gen_settings if possible
-        gen_settings = {}
-        if "gen_settings" in df.columns:
-            # Scan rows for a valid gen_settings entry (in case row 0 is NaN)
-            # The gen_settings column contains key=value pairs, one per row.
-            # We need to iterate through the column and build a dictionary.
-            for item in df["gen_settings"].dropna():
-                item_str = str(item).strip()
-                if not item_str or "=" not in item_str:
-                    continue
-                
-                key, value = item_str.split("=", 1)
-                key = key.strip()
-                value = value.strip()
-
+        # Determine bounds from sidecar JSON file
+        gen_settings: dict = {}
+        if effective_path is not None:
+            sidecar = Path(effective_path).with_suffix('.json')
+            if sidecar.is_file():
                 try:
-                    # ast.literal_eval is a safe way to evaluate Python literals
-                    gen_settings[key] = ast.literal_eval(value)
-                except (ValueError, SyntaxError, MemoryError, TypeError):
-                    # If it's not a valid literal (e.g., just a string like 'Auto'), keep it as a string.
-                    gen_settings[key] = value
+                    gen_settings = json.loads(sidecar.read_text(encoding='utf-8'))
+                except (json.JSONDecodeError, OSError):
+                    gen_settings = {}
         
         def get_val(key, default=None):
             val = None

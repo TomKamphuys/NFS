@@ -22,6 +22,7 @@ Optional column:
 from __future__ import annotations
 
 import colorsys
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Union
@@ -69,35 +70,25 @@ def _safe_float(value, default: float = 0.0) -> float:
         return default
 
 
-def _settings_from_df(df: pd.DataFrame) -> dict[str, str]:
-    """Extract key=value strings from optional gen_settings column.
+def _load_sidecar_settings(csv_path: str | Path) -> dict:
+    """Load generation metadata from a sidecar JSON file next to the CSV.
 
-    Supports:
-      - one setting per row: cyl_radius_internal=0.2
-      - multiple settings in one cell separated by comma/semicolon/newline
-      - dict-like values, if the DataFrame was constructed programmatically
+    Returns an empty dict if the sidecar file is missing or invalid.
     """
-    settings: dict[str, str] = {}
+    sidecar = Path(csv_path).with_suffix('.json')
+    if not sidecar.is_file():
+        return {}
+    try:
+        return json.loads(sidecar.read_text(encoding='utf-8'))
+    except (json.JSONDecodeError, OSError):
+        return {}
 
-    if "gen_settings" not in df.columns:
-        return settings
 
-    for item in df["gen_settings"].dropna().tolist():
-        if isinstance(item, dict):
-            for key, value in item.items():
-                settings[str(key).strip()] = str(value).strip()
-            continue
-
-        text = str(item)
-        normalized = text.replace(";", "\n").replace(",", "\n")
-        for chunk in normalized.splitlines():
-            chunk = chunk.strip()
-            if "=" not in chunk:
-                continue
-            key, value = chunk.split("=", 1)
-            settings[key.strip()] = value.strip()
-
-    return settings
+def _settings_from_df(df: pd.DataFrame, csv_path: str | Path | None = None) -> dict:
+    """Load generation metadata from the sidecar JSON file next to the CSV."""
+    if csv_path is None:
+        return {}
+    return _load_sidecar_settings(csv_path)
 
 
 def _polyline_from_points(points: np.ndarray) -> pv.PolyData:
@@ -424,12 +415,15 @@ class CoordViewerPyVista(QtWidgets.QWidget):
     # Data loading and bounds creation
     # ------------------------------------------------------------------
 
-    def load_data(self, input_data: DataLike) -> None:
+    def load_data(self, input_data: DataLike, csv_path: str | Path | None = None) -> None:
+        effective_path: str | None = None
         if isinstance(input_data, pd.DataFrame):
             df = input_data.copy()
+            effective_path = str(csv_path) if csv_path is not None else None
         elif isinstance(input_data, dict):
             df = pd.DataFrame(input_data)
         elif isinstance(input_data, str) and input_data.lower().endswith(".csv"):
+            effective_path = input_data
             df = pd.read_csv(input_data)
         else:
             raise TypeError("load_data expects a pandas DataFrame, dict, or CSV file path.")
@@ -468,7 +462,7 @@ class CoordViewerPyVista(QtWidgets.QWidget):
             self.curr_idx = 0
             self.exact_idx = 0.0
 
-        self._build_bounds_from_settings(df)
+        self._build_bounds_from_settings(df, effective_path)
         self._set_axes_equal()
         self.update_plot()
         self.plotter.render()
@@ -510,11 +504,11 @@ class CoordViewerPyVista(QtWidgets.QWidget):
         except Exception:
             pass
 
-    def _build_bounds_from_settings(self, df: pd.DataFrame) -> None:
+    def _build_bounds_from_settings(self, df: pd.DataFrame, csv_path: str | None = None) -> None:
         self._remove_bounds_actors()
         self.bounds = BoundsInfo()
 
-        settings = _settings_from_df(df)
+        settings = _settings_from_df(df, csv_path)
         if not settings:
             logger.debug("No gen_settings found; skipping cylinder bounds.")
             self._update_bounds_readout(settings)
@@ -540,10 +534,14 @@ class CoordViewerPyVista(QtWidgets.QWidget):
         else:
             h_ext = _safe_float(h_ext_value, 0.0)
 
-        z_offset_str = settings.get("z_offset_mm", "None")
-        if str(z_offset_str).strip().lower() != "none":
-            z_center = _safe_float(z_offset_str, 0.0) / 1000.0
-        elif settings.get("z_midpoint_zero", "False") == "True":
+        z_offset_raw = settings.get("z_offset_mm")
+        if z_offset_raw is not None and z_offset_raw is not False:
+            z_offset_val = z_offset_raw if not isinstance(z_offset_raw, bool) else None
+            if z_offset_val is not None:
+                z_center = _safe_float(z_offset_val, 0.0) / 1000.0
+            else:
+                z_center = 0.0
+        elif settings.get("z_midpoint_zero") is True:
             z_center = 0.0
         else:
             z_center = _safe_float(settings.get("cyl_height_external"), h_int) / 2.0
@@ -575,7 +573,7 @@ class CoordViewerPyVista(QtWidgets.QWidget):
                 direction=(0.0, 0.0, 1.0),
                 radius=r_int,
                 height=h_int,
-                resolution=96,
+                resolution=48,
                 capping=True,
             )
             self.inner_actor = self.plotter.add_mesh(
@@ -584,6 +582,7 @@ class CoordViewerPyVista(QtWidgets.QWidget):
                 opacity=0.2,
                 smooth_shading=True,
                 name="inner_translucent_cylinder",
+                render=False,
             )
             try:
                 self.inner_actor.SetPickable(False)
@@ -627,7 +626,7 @@ class CoordViewerPyVista(QtWidgets.QWidget):
                 (float(xy[0]), float(xy[1]), z_min),
                 (float(xy[0]), float(xy[1]), z_max),
                 tube_radius,
-                resolution=8,
+                resolution=6,
             )
             if mesh is not None:
                 meshes.append(mesh)
@@ -642,6 +641,7 @@ class CoordViewerPyVista(QtWidgets.QWidget):
             opacity=0.85,
             smooth_shading=True,
             name="outer_wireframe_cylinder",
+            render=False,
         )
         self.outer_actor.SetVisibility(self.show_bounds)
         try:
@@ -660,21 +660,26 @@ class CoordViewerPyVista(QtWidgets.QWidget):
         opacity: float,
         name: str,
     ):
+        """Create two circular rim tubes at the top and bottom caps using TubeFilter."""
         z_min = z_center - height / 2.0
         z_max = z_center + height / 2.0
-        theta = np.linspace(0.0, 2.0 * np.pi, 97)
+        theta = np.linspace(0.0, 2.0 * np.pi, 49)
         rim_radius = max(radius * 0.006, 0.0012)
         meshes: list[pv.PolyData] = []
 
         for z_val in (z_min, z_max):
-            points = [
-                np.array([radius * np.cos(t), radius * np.sin(t), z_val], dtype=float)
-                for t in theta
-            ]
-            for p0, p1 in zip(points[:-1], points[1:]):
-                mesh = self._segment_cylinder(p0, p1, rim_radius, resolution=6)
-                if mesh is not None:
-                    meshes.append(mesh)
+            # Build a closed circle polyline
+            circle_points = np.column_stack([
+                radius * np.cos(theta),
+                radius * np.sin(theta),
+                np.full_like(theta, z_val),
+            ])
+            circle = pv.PolyData(circle_points)
+            n = len(circle_points)
+            circle.lines = np.concatenate(([n], np.arange(n, dtype=np.int64)))
+            # TubeFilter creates a single tube mesh around the polyline
+            tube = circle.tube(radius=rim_radius, n_sides=6)
+            meshes.append(tube)
 
         combined = self._combine_meshes(meshes)
         if combined is None:
@@ -686,6 +691,7 @@ class CoordViewerPyVista(QtWidgets.QWidget):
             opacity=opacity,
             smooth_shading=True,
             name=name,
+            render=False,
         )
         actor.SetVisibility(self.show_bounds)
         try:
@@ -746,6 +752,7 @@ class CoordViewerPyVista(QtWidgets.QWidget):
                 opacity=0.95,
                 smooth_shading=True,
                 name="bottom_front_back_ticks",
+                render=False,
             )
             self.front_back_marker_actor.SetVisibility(self.show_bounds)
             try:
@@ -762,6 +769,7 @@ class CoordViewerPyVista(QtWidgets.QWidget):
                 smooth_shading=False,
                 lighting=False,
                 name="bottom_front_back_labels",
+                render=False,
             )
             self.front_back_label_actor.SetVisibility(self.show_bounds)
             try:

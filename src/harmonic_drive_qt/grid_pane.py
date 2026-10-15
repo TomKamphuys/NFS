@@ -13,6 +13,9 @@ from matplotlib.backends.backend_qtagg import NavigationToolbar2QT as Navigation
 
 from . import project
 from grid_generator.coord_viewer_core_matplot import CoordViewerEngine
+import json
+from pathlib import Path
+
 from grid_generator.grid_gen import (
     calculate_geometry_from_cylindrical_waypoints,
     generate_measurement_grid,
@@ -1086,7 +1089,7 @@ class GridGeneratorPane(QWidget):
         if cap_tol is None:
             cap_tol = self.wall_thickness.value() + 1.0
 
-        generated = generate_measurement_grid(
+        generated_df, gen_settings = generate_measurement_grid(
             cyl_radius_mm=self.cyl_radius.value(),
             cyl_height_mm=self.cyl_height.value(),
             num_points=int(self.num_points.value()),
@@ -1115,13 +1118,15 @@ class GridGeneratorPane(QWidget):
         output_path = self._output_path()
         output_path.parent.mkdir(parents=True, exist_ok=True)
         planned = plan_path(
-            generated,
+            generated_df,
             cap_tol_mm=cap_tol,
             output_path=str(output_path),
             delta_theta_deg=self.delta_theta.value(),
             side_snake_start=self.snake_start.currentText(),
             show_replay=False,
         )
+        sidecar_path = Path(str(output_path)).with_suffix('.json')
+        sidecar_path.write_text(json.dumps(gen_settings, indent=2), encoding='utf-8')
         grid_vars = self._grid_vars(output_path.name, effective_geometry)
         project.update_grid_vars(grid_vars)
         project.apply_to_config(self.config_file)
@@ -1201,7 +1206,7 @@ class GridGeneratorPane(QWidget):
         path = Path(path_text)
         self.current_viewer_input = df.copy()
         try:
-            self.engine.load_data(self.current_viewer_input)
+            self.engine.load_data(self.current_viewer_input, csv_path=str(path))
         except Exception as exc:
             if not self._fallback_to_matplotlib_viewer(exc, "generated grid load"):
                 logger.exception("Could not load generated grid into viewer")
