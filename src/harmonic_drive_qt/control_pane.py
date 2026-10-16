@@ -563,8 +563,9 @@ class ControlPane(QWidget):
         self.backend.scanner_command("home")
 
     def _run_jog(self, method: str, value: float) -> None:
-        if self._jog_in_progress:
+        if self._jog_in_progress or not self.backend.is_scanner_loaded():
             return
+        self._jog_in_progress = True
         self._jog_done = False
         self._jog_error = None
         self._set_jog_buttons_enabled(False)
@@ -586,13 +587,13 @@ class ControlPane(QWidget):
             return
         self.jog_timer.stop()
         self._jog_thread = None
-        self._set_jog_buttons_enabled(True)
+        self._jog_in_progress = False
+        self._set_jog_buttons_enabled(self.backend.is_scanner_loaded())
         message, self._jog_error = self._jog_error, None
         if message:
             QMessageBox.warning(self, "Backend Error", message)
 
     def _set_jog_buttons_enabled(self, enabled: bool) -> None:
-        self._jog_in_progress = not enabled
         for btn in self._jog_buttons:
             btn.setEnabled(enabled)
 
@@ -734,10 +735,9 @@ class ControlPane(QWidget):
         homing = state is not None and state == GrblMachineState.HOME
         self._set_home_button_state(homed, homing)
         # Enable all scanner-dependent buttons when the scanner is loaded
-        if self.backend.is_scanner_loaded():
-            self._set_control_buttons_enabled(True)
-            if not self._jog_in_progress:
-                self._set_jog_buttons_enabled(True)
+        loaded = self.backend.is_scanner_loaded()
+        self._set_control_buttons_enabled(loaded)
+        self._set_jog_buttons_enabled(loaded and not self._jog_in_progress)
         self._set_position_labels(self.wcs_labels, pos, state)
         if self.mcs_labels:
             self._set_position_labels(self.mcs_labels, machine_pos, state)
