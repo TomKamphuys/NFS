@@ -1,4 +1,35 @@
 --------
+17/10/26
+--------
+Fixed Windows ASIO stream lifetime and repeated-capture failures. Initialize
+COM on the stream owner, close continuous sine before capture/reload/shutdown,
+and keep Qt audio creation and cleanup on its persistent worker.
+
+**Device lookup no longer restarts shared PortAudio; restart the app if newly
+attached devices are not listed.**
+
+Added COM ownership, channel routing and backend regressions.
+
+Files touched:
+audio.py
+Makes COM initialization follow the thread that owns each ASIO stream, removes
+PortAudio restarts from device lookup, and closes streams before replacing them.
+
+backend.py
+The Qt backend creates and controls the audio objects, so it must keep creation,
+playback, capture and cleanup on one persistent worker thread. It now initializes
+COM on that worker, stops any continuous sine before a sweep, reload or scan,
+and waits for stream cleanup during shutdown. No measurement DSP or scanner
+behaviour was changed here.
+
+test_audio_asio.py
+Adds focused COM, ASIO routing, discovery and stream lifetime regressions.
+
+test_qt_backend.py
+Confirms that Qt audio operations stay on the owner thread and that active
+playback is stopped before capture, reload and shutdown.
+
+--------
 09/10/26
 --------
 Added Reflection Free Time (ms) to the SCANNER settings, with an inline
