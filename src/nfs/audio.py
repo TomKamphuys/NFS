@@ -650,7 +650,8 @@ class DSPVerificationTool:
         """
         self.fs = fs
 
-    def calculate_metrics(self, h_full: np.ndarray, h_linear: np.ndarray, psr: float) -> Dict[str, float]:
+    def calculate_metrics(self, h_full: np.ndarray, h_linear: np.ndarray, psr: float,
+                          psr_reference: Optional[float] = None) -> Dict[str, float]:
         """
         Calculates a suite of DSP quality metrics.
         
@@ -685,6 +686,15 @@ class DSPVerificationTool:
 
         # 3. Alignment Quality
         metrics['psr'] = float(psr)
+        metrics['psr_db'] = float(20.0 * np.log10(psr)) if psr > 0 else 0.0
+        if psr_reference is not None and psr_reference > 1.0:
+            reference_db = float(20.0 * np.log10(psr_reference))
+            metrics['psr_reference_db'] = reference_db
+            # This is a relative clarity score, not a probability that the
+            # alignment is correct. The raw PSR remains in the saved metrics.
+            metrics['alignment_score_10'] = round(float(np.clip(
+                10.0 * metrics['psr_db'] / reference_db, 0.0, 10.0
+            )), 1)
 
         # 4. Crest Factor of IR (Indicates impulsive vs smeared)
         # Ratio of peak amplitude to RMS value. A high crest factor means a sharp, clean impulse.
@@ -700,7 +710,16 @@ class DSPVerificationTool:
         if metrics.get('thd_pct', 0) > 10:
             warnings.append(f"HIGH DISTORTION: {metrics['thd_pct']:.2f}%. Check for clipping or transducer stress.")
         if metrics.get('psr', 10) < 3.0:
-            warnings.append(f"POOR ALIGNMENT: PSR is {metrics['psr']:.1f}. Possible clock drift or phase smear.")
+            if 'alignment_score_10' in metrics:
+                warnings.append(
+                    f"POOR ALIGNMENT: Marker clarity is {metrics['psr_db']:.1f} dB / "
+                    f"{metrics['psr_reference_db']:.1f} dB reference "
+                    f"({metrics['alignment_score_10']:.1f}/10)."
+                )
+            else:
+                warnings.append(
+                    f"POOR ALIGNMENT: Marker clarity is {metrics.get('psr_db', 0.0):.1f} dB."
+                )
 
         return warnings
 
@@ -948,6 +967,38 @@ class AlignmentEngine:
         self.align_to_first_marker = align_to_first_marker
         self.mic_tail_taper_ms = mic_tail_taper_ms
         self.marker_dur_ms = marker_dur_ms
+        self.last_psr_reference = 0.0
+
+    def _calculate_psr(self, lags: np.ndarray, corr: np.ndarray, peak_lag: int,
+                       peak_val: float, ref_len: int) -> float:
+        """Compare a selected peak with the marker's surrounding correlation peaks."""
+        chip_dur_s = (self.marker_dur_ms / 1000.0) / 13.0
+        exclusion_samps = int((chip_dur_s * 2.0) * self.fs)
+        quality_start = max(0, peak_lag - ref_len)
+        quality_end = min(int(lags[-1]), peak_lag + ref_len)
+        sidelobe_windows = (
+            (lags >= quality_start) & (lags <= quality_end)
+            & (np.abs(lags - peak_lag) > exclusion_samps)
+        )
+        sidelobe_val = float(np.max(corr[sidelobe_windows], initial=0.0))
+        return peak_val / (sidelobe_val + 1e-12) if sidelobe_val > 0 else 0.0
+
+    def reference_psr(self, ref: np.ndarray) -> float:
+        """Return the ideal digital-loopback PSR for the current marker waveform."""
+        marker_start = len(ref)
+        ideal_recording = np.pad(ref, (marker_start, marker_start))
+        lags, corr = DSPUtils.rfft_xcorr(ideal_recording, ref)
+        peak_val = float(corr[lags == marker_start][0])
+        return self._calculate_psr(lags, corr, marker_start, peak_val, len(ref))
+
+    def _format_marker_clarity(self, psr: float) -> str:
+        """Format the internal ratio as the user-facing dB and relative score."""
+        measured_db = float(20.0 * np.log10(psr)) if psr > 0 else 0.0
+        if self.last_psr_reference > 1.0:
+            reference_db = float(20.0 * np.log10(self.last_psr_reference))
+            score = float(np.clip(10.0 * measured_db / reference_db, 0.0, 10.0))
+            return f"{measured_db:.1f} dB / {reference_db:.1f} dB reference ({score:.1f}/10)"
+        return f"{measured_db:.1f} dB"
 
     def _matched_filter_detect(self, x: np.ndarray, ref: np.ndarray, search_start: int = None,
                                search_end: int = None) -> Tuple[int, float, float]:
@@ -970,34 +1021,15 @@ class AlignmentEngine:
         peak_val = float(corr_sel[i])
 
         # --- BEGIN QUALITY / PSR CHECK ---
-        # Barker-13 autocorrelation main lobe is 2 chips wide.
-        # We dynamically calculate this width to mask only the main peak.
-        chip_dur_s = (self.marker_dur_ms / 1000.0) / 13.0
-        exclusion_samps = int((chip_dur_s * 2.0) * self.fs)
-        # Cap the exclusion zone so it never covers the entire search window —
-        # we must leave enough samples on each side for sidelobe measurement.
-        # Use at most 1/3 of the window on each side, guaranteeing 2/3 remains.
-        max_exclusion = max(1, len(corr_sel) // 3)
-        exclusion_samps = min(exclusion_samps, max_exclusion, i, len(corr_sel) - 1 - i)
-        mask_start = max(0, i - exclusion_samps)
-        mask_end = min(len(corr_sel), i + exclusion_samps)
+        peak_lag = int(lags_sel[i])
+        psr = self._calculate_psr(lags, corr, peak_lag, peak_val, len(ref))
 
-        corr_masked = corr_sel.copy()
-        corr_masked[mask_start:mask_end] = 0.0  # Zero out the main lobe
-
-        sidelobe_val = float(np.max(corr_masked))
-        if sidelobe_val > 0:
-            psr = peak_val / (sidelobe_val + 1e-12)
-        else:
-            # No sidelobes detected — this can happen when the search window is
-            # narrower than the marker's main lobe, so the exclusion zone covers
-            # all samples with meaningful correlation. A sharp peak in a narrow
-            # window is itself evidence of good alignment.
-            psr = float('inf')
-
-        # If the peak is less than 2.5x the height of the sidelobes, alignment is dangerously smeared.
+        # A small ratio warns that the chosen marker is not clearly isolated.
+        # It does not by itself prove phase smearing in the acoustic path.
         if psr < 2.5:
-            logger.warning(f"POOR MARKER ALIGNMENT: Correlation Peak Sharpness is {psr:.1f}. Phase smearing detected.")
+            logger.warning(
+                f"Marker clarity is {self._format_marker_clarity(psr)}; check alignment quality."
+            )
         # --- END QUALITY / PSR CHECK ---
 
         # --- BEGIN DEBUG DATA SAVE BLOCK ---
@@ -1041,25 +1073,34 @@ class AlignmentEngine:
         # --- Alignment & Averaging ---
         mic_slices = []
         loop_slices = []
+        self.last_psr_reference = self.reference_psr(marker_single)
         capture_len = sweep_len + int(round(self.mic_tail_taper_ms / 1000.0 * self.fs))
 
         # --- FIXED ALIGNMENT LOGIC ---
         # 1. Find a global anchor (first marker) using Matched Filter
-        search_limit = pre_samps_settle + slot_len
+        # The first marker must be inside the first half of its sweep slot.
+        # Stopping here keeps the following marker (and its correlation peak)
+        # out of the initial search, even in a zero-latency loopback.
+        search_limit = pre_samps_settle + (slot_len // 2)
         k_first_marker, _, psr = self._matched_filter_detect(rec_loop, marker_single, search_end=search_limit)
 
         # The correlation peak IS the start.
         t0_first_sweep = k_first_marker
-        logger.debug(f"Marker found at {k_first_marker}. Using this as T0. PSR={psr:.1f}")
+        logger.debug(
+            f"Marker found at {k_first_marker}. Using this as T0. "
+            f"Clarity={self._format_marker_clarity(psr)}"
+        )
 
         window_samps = int(0.005 * self.fs)  # 5ms search window for re-sync
 
+        repeat_psrs = []
         for i in range(self.num_sweeps):
             expected_t0 = t0_first_sweep + (i * slot_len)
 
             if self.align_to_first_marker:
                 # Sample-based cut: Rely on the first marker and constant sample rate
                 start_idx = expected_t0
+                psr_local = psr
             else:
                 # Per-sweep alignment: Re-sync to the marker for *every* sweep
                 # Corrects for minor clock drift in very long sequences
@@ -1068,17 +1109,18 @@ class AlignmentEngine:
                 k_local, _, psr_local = self._matched_filter_detect(rec_loop, marker_single, search_start=s_start,
                                                                     search_end=s_end)
                 start_idx = k_local
-                if i == 0:
-                    psr = psr_local  # Use first sweep PSR as representative if per-sweep
 
             end_idx = start_idx + capture_len
             # Stores aligned capture window copies into accumulation lists
             if end_idx <= len(rec_mic) and start_idx >= 0:
+                repeat_psrs.append(psr_local)
                 mic_slices.append(rec_mic[start_idx: end_idx].copy())
                 loop_slices.append(rec_loop[start_idx: end_idx].copy())
 
         if not mic_slices:
             raise RuntimeError("No valid sweeps captured (Alignment failed).")
+
+        psr = float(min(repeat_psrs))
 
         # Synchronous Averaging to lower the noise floor
         # By averaging multiple sweeps, the correlated signal (the sweep) adds coherently,
@@ -1488,7 +1530,8 @@ class Audio(IAudio):
             "rx_mic_conditioned": avg_mic,
             "rx_loop_aligned": avg_loop,
             "debug_mic_slices": mic_slices,
-            "psr": psr
+            "psr": psr,
+            "psr_reference": self.alignment_engine.last_psr_reference
         }
 
     def measure_ir(self, position: CylindricalPosition, order_id: str = "NA", save: bool = True):
@@ -1538,9 +1581,14 @@ class Audio(IAudio):
         )
 
         # 5. DSP Verification
-        metrics = self.verifier.calculate_metrics(ir_full, ir_linear, result.get("psr", 0.0))
+        metrics = self.verifier.calculate_metrics(
+            ir_full, ir_linear, result.get("psr", 0.0), result.get("psr_reference")
+        )
         logger.info(
-            f"DSP Metrics: SNR={metrics['snr_db']:.1f}dB, THD={metrics['thd_pct']:.2f}%, PSR={metrics['psr']:.1f}")
+            f"DSP Metrics: SNR={metrics['snr_db']:.1f}dB, THD={metrics['thd_pct']:.2f}%, "
+            f"marker clarity={metrics['psr_db']:.1f}dB / "
+            f"{metrics.get('psr_reference_db', 0.0):.1f}dB reference "
+            f"({metrics.get('alignment_score_10', 0.0):.1f}/10)")
 
         warnings = self.verifier.verify(metrics)
         for w in warnings:
@@ -1875,7 +1923,8 @@ class MockInterfaceAudio(Audio):
             "rx_mic_conditioned": avg_mic,
             "rx_loop_aligned": avg_loop,
             "debug_mic_slices": mic_slices,
-            "psr": psr
+            "psr": psr,
+            "psr_reference": self.alignment_engine.last_psr_reference
         }
 
     def play_sine(self, frequency: float, level_dbfs: float, duration_s: Optional[float] = 1.0) -> None:

@@ -252,92 +252,105 @@ def test_alignment_engine_functional(fs):
     assert len(avg_mic) == fs // 4 + int(round(taper_ms / 1000.0 * fs))
 
 
-def test_alignment_engine_narrow_search_window_psr(fs):
-    """
-    Regression test: when the search window is narrower than the exclusion zone
-    around the correlation peak, the PSR must still be computed from the remaining
-    sidelobes instead of falling back to the sentinel value 99.
+def _psr_marker_recording(fs):
+    marker = MarkerGenerator(fs, 100, (500, 5000), -6).generate()
+    raw = np.zeros(fs)
+    raw[fs // 2:fs // 2 + len(marker)] = marker
+    return raw, marker, AlignmentEngine(fs, 1, False, 20, 100)
 
-    The bug was that the exclusion zone (±738 samples for a 100ms Barker-13 marker
-    at 48kHz) was wider than the search window (e.g. ±240 samples for per-sweep
-    re-sync), so the entire correlation array was zeroed out and np.max returned 0,
-    triggering the fallback psr = 99.
-    """
-    marker_dur_ms = 100.0
-    taper_ms = 10.0
-    engine = AlignmentEngine(fs, 1, True, taper_ms, marker_dur_ms)
 
-    gen = MarkerGenerator(fs, marker_dur_ms, (500.0, 5000.0), -6.0)
-    marker = gen.generate()
+def test_first_marker_search_stops_before_zero_latency_second_marker(fs, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    marker = MarkerGenerator(fs, 100, (500, 5000), -6).generate()
+    pre, slot, length = 2400, 12000, 6000
+    loop = np.zeros(pre + 2 * slot + len(marker))
+    loop[pre:pre + len(marker)] = 0.5 * marker
+    # A stronger marker at the next slot boundary would win the old search,
+    # whose inclusive end point reached this zero-latency second marker.
+    loop[pre + slot:pre + slot + len(marker)] = marker
+    mic = np.zeros_like(loop)
+    mic[pre + 100] = 1.0
+    engine = AlignmentEngine(fs, 1, True, 20, 100)
 
-    # Build a recording with the marker embedded near the center
-    rec_len = fs  # 1 second of audio
-    marker_center = rec_len // 2
-    rec_loop = np.zeros(rec_len)
-    rec_loop[marker_center:marker_center + len(marker)] = marker
+    _, _, slices, _ = engine.sync_and_average(mic, loop, marker, pre, slot, length)
 
-    # Add small noise so sidelobes are non-zero
-    rec_loop += np.random.normal(0, 1e-4, rec_len)
+    assert int(np.argmax(slices[0])) == 100
 
-    # Use a narrow search window (±240 samples ≈ ±5ms at 48kHz)
-    # This is narrower than the exclusion zone (±738 samples)
-    window_half = 240
-    search_start = marker_center - window_half
-    search_end = marker_center + window_half
 
-    lag, peak_val, psr = engine._matched_filter_detect(
-        rec_loop, marker, search_start=search_start, search_end=search_end
+def test_psr_preserves_lag_at_both_search_boundaries(fs, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)  # Existing diagnostic dump belongs in test storage.
+    raw, marker, engine = _psr_marker_recording(fs)
+    results = [engine._matched_filter_detect(raw, marker, a, b)
+               for a, b in ((23760, 24240), (24000, 24480), (23520, 24000),
+                            (0, len(raw) - len(marker)))]
+    assert [r[0] for r in results] == [24000] * 4
+    assert 2.5 < results[0][2] < 99
+    np.testing.assert_allclose([r[2] for r in results], results[0][2], rtol=1e-12)
+
+
+def test_psr_competing_marker_changes_quality_not_timing(fs, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    raw, marker, engine = _psr_marker_recording(fs)
+    clean = engine._matched_filter_detect(raw, marker, 23760, 24240)
+    raw[24900:24900 + len(marker)] += .65 * marker
+    ambiguous = engine._matched_filter_detect(raw, marker, 23760, 24240)
+    assert clean[0] == ambiguous[0] == 24000
+    assert 1 < ambiguous[2] < 2.5 < clean[2]
+
+
+def test_psr_without_comparison_data_warns(fs):
+    engine = AlignmentEngine(fs, 1, False, 20, 100)
+    psr = engine._calculate_psr(
+        np.array([0]), np.array([1.0]), peak_lag=0, peak_val=1.0, ref_len=1
     )
+    assert psr == 0
+    metrics = audio_module.DSPVerificationTool(fs)
+    assert any('ALIGNMENT' in warning for warning in metrics.verify({'psr': psr}))
 
-    # The peak should be found near the marker center
-    assert abs(lag - marker_center) < 10, f"Peak at {lag}, expected near {marker_center}"
 
-    # PSR should NOT be the fallback value 99 — it should be a real computed value
-    # or infinity (when no sidelobes are detectable in a narrow window)
-    assert psr != 99.0, (
-        f"PSR fell back to 99 — the exclusion zone likely zeroed out the entire "
-        f"search window, leaving no sidelobes to measure (peak_val={peak_val}, psr={psr})"
+@pytest.mark.parametrize('marker_fs', [44100, 48000, 96000, 192000])
+def test_generated_marker_reference_scores_ten(marker_fs):
+    marker = MarkerGenerator(marker_fs, 100, (500, 5000), -6).generate()
+    engine = AlignmentEngine(marker_fs, 1, False, 20, 100)
+    reference_psr = engine.reference_psr(marker)
+    reference_db = 20 * np.log10(reference_psr)
+
+    impulse = np.zeros(marker_fs)
+    impulse[100] = 1.0
+    metrics = DSPVerificationTool(marker_fs).calculate_metrics(
+        impulse, impulse, reference_psr, reference_psr
     )
-    assert psr > 1.0, f"PSR ({psr}) should be > 1 for a clean marker in noise"
+    assert metrics['psr_db'] == pytest.approx(reference_db)
+    assert metrics['psr_reference_db'] == pytest.approx(reference_db)
+    assert metrics['alignment_score_10'] == 10.0
 
 
-def test_matched_filter_detect_narrow_window_returns_inf_psr(fs):
-    """
-    When the search window is narrower than the marker's main lobe, the PSR
-    should be infinity (no detectable sidelobes) rather than the fallback 99.
-    """
-    marker_dur_ms = 100.0
-    taper_ms = 10.0
-    engine = AlignmentEngine(fs, 1, True, taper_ms, marker_dur_ms)
-
-    gen = MarkerGenerator(fs, marker_dur_ms, (500.0, 5000.0), -6.0)
-    marker = gen.generate()
-
-    # Build a recording with the marker embedded
-    rec_len = fs
-    marker_center = rec_len // 2
-    rec_loop = np.zeros(rec_len)
-    rec_loop[marker_center:marker_center + len(marker)] = marker
-
-    # Narrow search window (±240 samples ≈ ±5ms at 48kHz)
-    window_half = 240
-    search_start = marker_center - window_half
-    search_end = marker_center + window_half
-
-    lag, peak_val, psr = engine._matched_filter_detect(
-        rec_loop, marker, search_start=search_start, search_end=search_end
-    )
-
-    # Peak should be found near the marker center
-    assert abs(lag - marker_center) < 10, f"Peak at {lag}, expected near {marker_center}"
-
-    # PSR should be infinity (no sidelobes in narrow window), not the fallback 99
-    assert psr != 99.0, (
-        f"PSR should not be the fallback 99 when sidelobes are undetectable (got {psr})"
-    )
-    assert psr == float('inf') or psr > 1.0, (
-        f"PSR ({psr}) should be inf or > 1 for a clean marker"
-    )
+@pytest.mark.parametrize('first_only', [False, True])
+def test_alignment_reports_weakest_assessed_repeat(fs, tmp_path, monkeypatch, first_only):
+    monkeypatch.chdir(tmp_path)
+    marker = MarkerGenerator(fs, 100, (500, 5000), -6).generate()
+    slot, pre, length, delay = 24000, 2400, 12000, 80
+    loop = np.zeros(pre + 3 * slot)
+    starts = [pre + delay + i * slot for i in range(3)]
+    for start in starts:
+        loop[start:start + len(marker)] = marker
+    # Add an ambiguous echo only to the final marker, outside its timing search.
+    competitor = starts[-1] + 900
+    loop[competitor:competitor + len(marker)] += .65 * marker
+    mic = np.zeros_like(loop)
+    for start in starts:
+        mic[start + 100] = 1
+    engine = AlignmentEngine(fs, 3, first_only, 20, 100)
+    expected_scores = [engine._matched_filter_detect(loop, marker, s - 240, s + 240)[2]
+                       for s in starts]
+    _, _, slices, psr = engine.sync_and_average(mic, loop, marker, pre, slot, length)
+    assert [int(np.argmax(x)) for x in slices] == [100, 100, 100]
+    if first_only:
+        first_score = engine._matched_filter_detect(loop, marker, search_end=pre + slot // 2)[2]
+        assert psr == first_score
+    else:
+        assert psr == min(expected_scores) == expected_scores[-1]
+        assert psr < 2.5 < expected_scores[0]
 
 
 def test_deconvolution_separation_functional(fs):
