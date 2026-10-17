@@ -1,4 +1,13 @@
 --------
+16/10/26
+--------
+Fixed audio configuration boolean parsing: False, off and 0 now disable
+options instead of being treated as true because they are nonempty strings.
+This restores per-repeat alignment when first-marker alignment is disabled,
+and lets users disable debug saves and WASAPI exclusive mode. Invalid boolean
+values now raise a configuration error. Added parsing and factory regressions.
+
+--------
 09/10/26
 --------
 Added Reflection Free Time (ms) to the SCANNER settings, with an inline
