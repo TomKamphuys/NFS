@@ -1937,6 +1937,13 @@ class AudioFactory:
         if not config.has_option(section, key):
             raise KeyError(f"Missing required config: [{section}] {key}")
         val = config.get(section, key).split('#')[0].split(';')[0].strip()
+        if type_func is bool:
+            # bool("False") is True in Python: nonempty text is truthy.
+            # Decode the configuration value so disabled options stay off.
+            value = val.casefold()
+            if value not in configparser.ConfigParser.BOOLEAN_STATES:
+                raise ValueError(f"Not a boolean: [{section}] {key} = {val}")
+            return configparser.ConfigParser.BOOLEAN_STATES[value]
         if type_func in (float, int):
             val = AudioFactory._normalize_decimal_text(val)
         return type_func(val)
