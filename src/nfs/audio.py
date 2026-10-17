@@ -31,6 +31,9 @@ Key Features:
 """
 
 import configparser
+import ctypes
+import sys
+from contextlib import contextmanager
 import os
 import threading
 import time
@@ -53,6 +56,30 @@ from .utils.dsp import DSPUtils
 # This environment variable triggers the loading of ASIO drivers if available.
 os.environ["SD_ENABLE_ASIO"] = "1"
 import sounddevice as sd  # noqa: E402
+
+
+@contextmanager
+def _asio_thread_context(enabled: bool):
+    """Keep Windows COM initialized on the calling thread until ASIO closes."""
+    # COM is thread-specific. The thread that opens an ASIO stream must set it
+    # up first, then keep it available until the stream has been closed.
+    if not enabled or sys.platform != "win32":
+        yield
+        return
+    ole32 = ctypes.windll.ole32
+    # COINIT_APARTMENTTHREADED = 2. Mask to unsigned so Windows error codes
+    # compare the same way whether ctypes returns a signed or unsigned value.
+    result = ole32.CoInitializeEx(None, 2) & 0xFFFFFFFF
+    # 0: new apartment; 1: already initialized here; RPC_E_CHANGED_MODE:
+    # another apartment model is active, and we do not own a COM reference.
+    if result not in (0, 1, 0x80010106):
+        raise RuntimeError(f"ASIO COM initialization failed (HRESULT 0x{result:08X})")
+    try:
+        yield
+    finally:
+        # Balance our own successful initialization, even if the stream fails.
+        if result in (0, 1):
+            ole32.CoUninitialize()
 
 
 _METER_EPS = 1e-12
@@ -487,9 +514,10 @@ def get_devices_and_channels() -> dict:
     Channel indices are 0-based because they are used directly as sounddevice
     stream buffer indices.
     """
-    # Hard refresh PortAudio state to catch any recent device changes
-    sd._terminate()
-    sd._initialize()
+    # Device lookup must be read-only: PortAudio is shared by every stream.
+    # Restarting it here can invalidate an active driver, or reload ASIO on
+    # a temporary UI worker that exits before the next capture. Restart the
+    # application after hot-plugging hardware if the catalog has not updated.
 
     apis = sd.query_hostapis()
     devs = sd.query_devices()
@@ -1252,6 +1280,8 @@ class Audio(IAudio):
         self.hw = hw_config
         self.cap = capture_config
         self._sine_stream = None
+        self._sine_com_context = None
+        self._sine_owner_thread = None
         self._sine_meter_worker: _AudioMeterWorker | None = None
         self._sine_level_lock = threading.Lock()
         self._sine_level_dbfs: float | None = None
@@ -1457,7 +1487,7 @@ class Audio(IAudio):
 
         # 7. Start Stream
         try:
-            with sd.Stream(device=(self.hw['dev_in'], self.hw['dev_out']), samplerate=self.hw['fs'],
+            with _asio_thread_context(use_asio_in or use_asio_out), sd.Stream(device=(self.hw['dev_in'], self.hw['dev_out']), samplerate=self.hw['fs'],
                            blocksize=self.hw['blocksize'],
                            dtype="float32", channels=(in_args[0], out_args[0]), dither_off=True,
                            extra_settings=(in_args[1], out_args[1]), callback=callback):
@@ -1657,7 +1687,7 @@ class Audio(IAudio):
                     done_evt.set()
 
             try:
-                with sd.Stream(
+                with _asio_thread_context(use_asio_in or use_asio_out), sd.Stream(
                     device=(in_dev, out_dev),
                     samplerate=fs,
                     blocksize=self.hw['blocksize'],
@@ -1717,6 +1747,12 @@ class Audio(IAudio):
                 out_args_extra = sd.WasapiSettings(exclusive=self.hw['wasapi_exclusive']) if "WASAPI" in out_api else None
 
             try:
+                # Continuous playback outlives this method. Keep the COM
+                # reference until stop_sine closes the stream on this thread.
+                context = _asio_thread_context(use_asio_in or use_asio_out)
+                context.__enter__()
+                self._sine_com_context = context
+                self._sine_owner_thread = threading.get_ident()
                 self._sine_stream = sd.Stream(
                     device=(in_dev, out_dev),
                     samplerate=fs,
@@ -1729,10 +1765,9 @@ class Audio(IAudio):
                 )
                 self._sine_stream.start()
             except Exception:
-                self._sine_stream = None
-                self._sine_meter_worker.stop()
-                self._sine_meter_worker = None
-                reset_audio_meter_state(active=False)
+                # Also close an allocated stream when start(), rather than
+                # construction, fails; release COM only after closing it.
+                self.stop_sine()
                 raise
 
     def update_sine_level(self, level_dbfs: float) -> None:
@@ -1741,15 +1776,25 @@ class Audio(IAudio):
             self._sine_level_dbfs = float(level_dbfs)
 
     def stop_sine(self) -> None:
-        """Stops any active sine wave playback."""
+        """Stop continuous playback on the same thread that started it."""
+        if (self._sine_com_context is not None
+                and self._sine_owner_thread != threading.get_ident()):
+            raise RuntimeError("Continuous audio must be stopped on its owning audio thread")
         if self._sine_stream is not None:
             logger.info("Stopping indefinite sine playback")
             try:
-                self._sine_stream.stop()
-                self._sine_stream.close()
+                try:
+                    self._sine_stream.stop()
+                finally:
+                    self._sine_stream.close()
             except Exception as e:
                 logger.debug(f"Error closing sine stream: {e}")
             self._sine_stream = None
+        if self._sine_com_context is not None:
+            context = self._sine_com_context
+            self._sine_com_context = None
+            self._sine_owner_thread = None
+            context.__exit__(None, None, None)
         if self._sine_meter_worker is not None:
             self._sine_meter_worker.stop()
             self._sine_meter_worker = None
