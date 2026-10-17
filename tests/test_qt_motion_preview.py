@@ -111,6 +111,32 @@ def test_trail_shows_latest_ten_measurement_points(monkeypatch):
         window.close()
 
 
+@pytest.mark.parametrize("has_motion", [False, True])
+def test_aborted_preview_explains_all_unsafe_markers(monkeypatch, has_motion):
+    app = QApplication.instance() or QApplication([])
+    scanner = RecordingScanner(CylindricalPosition(100, 0, 0))
+    if has_motion:
+        scanner.radial_move_to(200)
+    simulation = MotionSimulation(
+        segments=scanner.segments, aborted=True,
+        unsafe_points=[CylindricalPosition(10, 0, 0),
+                       CylindricalPosition(20, 0, 0)])
+    monkeypatch.setattr(MotionPreviewWindow, "_load_simulation", lambda self: simulation)
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: None)
+    window = MotionPreviewWindow("unused.ini")
+    try:
+        assert "Motion preview ABORTED" in window._warning_label.text()
+        assert "entire grid" in window._warning_label.text()
+        assert "not visited" in window._warning_label.text()
+        for view in (0, 1):
+            window._view_selector.setCurrentIndex(view)
+            window._slider.setValue(window._slider.maximum())
+            assert "ABORTED" in window._status.text()
+            assert window._unsafe_scatter is not None
+    finally:
+        window.close()
+
+
 def test_empty_preview_switches(monkeypatch):
     app = QApplication.instance() or QApplication([])
     monkeypatch.setattr(MotionPreviewWindow, "_load_simulation", lambda self: MotionSimulation())

@@ -36,7 +36,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest", "pylint", "mypy"]
+dev = ["pytest", "pytest-qt>=4.4", "pylint", "mypy"]
 native = ["PySide6>=6.8", "matplotlib>=3.9", "pyvista>=0.48.4", "pyvistaqt>=0.11.4"]
 
 [project.scripts]
@@ -71,6 +71,7 @@ grid_generator = ["images_grid_gen/*.png"]
 [dependency-groups]
 dev = [
     "pytest>=9.0.2",
+    "pytest-qt>=4.4",
     "sphinx>=9.1.0",
     "sphinx-autodoc-typehints>=3.9.11",
     "sphinx-rtd-theme>=3.1.0",
@@ -84,3 +85,5 @@ package-dir = {"" = "src"}
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+qt_api = "pyside6"
+markers = ["gui_smoke: real-window workflows using simulated hardware"]

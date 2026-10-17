@@ -291,20 +291,19 @@ class MotionPreviewWindow(QMainWindow):
         count = len(unsafe)
         noun = "point" if count == 1 else "points"
         if self._simulation.aborted:
-            consequence = (
-                "With the current settings the scan will be ABORTED before any "
-                "motion, to avoid a collision."
+            message = (
+                f"Motion preview ABORTED — {count} measurement {noun} lie inside "
+                f"the no-fly zone. The entire grid was not visited because the scan "
+                f"will be stopped before any motion to avoid a collision. Review the "
+                f"no-fly zone settings and the measurement grid."
             )
         else:
-            consequence = (
+            message = (
+                f"{count} measurement {noun} lie inside the no-fly zone. "
                 f"With the current settings {'this' if count == 1 else 'these'} "
-                f"{noun} will be SKIPPED during the scan."
+                f"{noun} will be SKIPPED during the scan. Review the no-fly zone "
+                f"settings and the measurement grid."
             )
-        message = (
-            f"{count} measurement {noun} lie inside the no-fly zone. "
-            f"{consequence} Review the no-fly zone settings and the measurement "
-            f"grid."
-        )
         self._warning_label.setText(f"\u26a0  {message}")
         self._warning_label.setVisible(True)
         QMessageBox.warning(self, "Unsafe measurement points", message)
@@ -358,7 +357,10 @@ class MotionPreviewWindow(QMainWindow):
 
     def _update_position(self, index: int) -> None:
         if not self._path:
-            self._status.setText("No motion")
+            if self._simulation.aborted:
+                self._status.setText("No motion — ABORTED")
+            else:
+                self._status.setText("No motion")
             return
         index = max(0, min(index, len(self._path) - 1))
         arrivals = self._simulation.measurement_sample_indices
@@ -376,10 +378,13 @@ class MotionPreviewWindow(QMainWindow):
             self._arm_marker.set_data([rs[-1]], [zs[-1]])
         cur_r, cur_z = self._path[index]
         theta = self._cylindrical_path[index][1]
-        self._status.setText(
+        status_text = (
             f"Sample {index + 1}/{len(self._path)}   r={cur_r:.1f} mm  "
             f"θ={theta:.1f}°  z={cur_z:.1f} mm"
         )
+        if self._simulation.aborted and index >= len(self._path) - 1:
+            status_text += "  — ABORTED"
+        self._status.setText(status_text)
         self._canvas.draw_idle()
 
     def closeEvent(self, event) -> None:  # noqa: N802 (Qt naming)
