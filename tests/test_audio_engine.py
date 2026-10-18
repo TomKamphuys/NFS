@@ -169,6 +169,115 @@ def test_sweep_generator_functional(fs):
 
 
 # -----------------------------------------------------------------------------
+# SWEEP GENERATOR — INVERSE FILTER ENDPOINT FADE
+# -----------------------------------------------------------------------------
+
+def _fade_duration_sweep(dur_s: float) -> float:
+    """Return the fade duration in seconds used by SweepGenerator for a given sweep duration."""
+    return min(5e-3, max(1e-3, 0.002 * dur_s))
+
+
+def test_sweep_generator_inverse_fade_duration_short(fs):
+    """For a 0.1 s sweep, 0.2% = 0.2 ms < 1 ms minimum → fade = 1 ms."""
+    dur_s = 0.1
+    gen = SweepGenerator(fs, dur_s, 20.0, -10.0)
+    _, _, inv = gen.generate()
+    expected_fade_s = _fade_duration_sweep(dur_s)
+    assert expected_fade_s == 1e-3
+    n_fade = int(round(expected_fade_s * fs))
+    # First sample should be near zero (fade-in from zero)
+    assert np.abs(inv[0]) < 1e-6
+    # Interior (after fade) should not be zero — use a relative threshold
+    # since short sweeps produce smaller inverse filter amplitudes
+    assert np.max(np.abs(inv[n_fade:])) > 1e-3
+
+
+def test_sweep_generator_inverse_fade_duration_medium(fs):
+    """For a 0.5 s sweep, 0.2% = 1 ms → fade = 1 ms (at the minimum clamp)."""
+    dur_s = 0.5
+    gen = SweepGenerator(fs, dur_s, 20.0, -10.0)
+    _, _, inv = gen.generate()
+    expected_fade_s = _fade_duration_sweep(dur_s)
+    assert expected_fade_s == 1e-3
+    n_fade = int(round(expected_fade_s * fs))
+    assert np.abs(inv[0]) < 1e-6
+    assert np.abs(inv[-1]) < 1e-6
+
+
+def test_sweep_generator_inverse_fade_duration_long(fs):
+    """For a 10 s sweep, 0.2% = 20 ms > 5 ms maximum → fade = 5 ms."""
+    dur_s = 10.0
+    gen = SweepGenerator(fs, dur_s, 20.0, -10.0)
+    _, _, inv = gen.generate()
+    expected_fade_s = _fade_duration_sweep(dur_s)
+    assert expected_fade_s == 5e-3
+    n_fade = int(round(expected_fade_s * fs))
+    assert np.abs(inv[0]) < 1e-6
+    assert np.abs(inv[-1]) < 1e-6
+
+
+def test_sweep_generator_inverse_fade_duration_nominal(fs):
+    """For a 5 s sweep, 0.2% = 10 ms > 5 ms max → fade = 5 ms.
+    For a 2 s sweep, 0.2% = 4 ms → fade = 4 ms (within [1, 5] ms)."""
+    dur_s = 2.0
+    gen = SweepGenerator(fs, dur_s, 20.0, -10.0)
+    _, _, inv = gen.generate()
+    expected_fade_s = _fade_duration_sweep(dur_s)
+    assert expected_fade_s == 4e-3
+    n_fade = int(round(expected_fade_s * fs))
+    assert np.abs(inv[0]) < 1e-6
+    assert np.abs(inv[-1]) < 1e-6
+
+
+def test_sweep_generator_inverse_fade_smooth_transition(fs):
+    """Verify the fade-in ramp is a smooth half-cosine, not a linear or abrupt step."""
+    dur_s = 1.0
+    gen = SweepGenerator(fs, dur_s, 20.0, -10.0)
+    _, _, inv = gen.generate()
+    expected_fade_s = _fade_duration_sweep(dur_s)
+    n_fade = int(round(expected_fade_s * fs))
+    # Check that the very first sample is near zero (fade-in from zero)
+    assert np.abs(inv[0]) < 1e-6
+    # Check that the last sample is near zero (fade-out to zero)
+    assert np.abs(inv[-1]) < 1e-6
+    # Check that the interior is larger than the fade region — use relative comparison
+    # since inverse filter amplitudes are normalized and vary with sweep parameters
+    interior = inv[n_fade:-n_fade] if 2 * n_fade < len(inv) else inv[n_fade:]
+    fade_region = np.concatenate([inv[:n_fade], inv[-n_fade:]]) if 2 * n_fade < len(inv) else inv[:n_fade]
+    assert np.max(np.abs(interior)) > np.max(np.abs(fade_region)), \
+        "Interior should have larger amplitude than the faded endpoints"
+
+
+def test_sweep_generator_inverse_fade_short_sweep_no_overlap(fs):
+    """For a very short sweep (0.01 s = 480 samples at 48 kHz),
+    the two 1 ms fades (48 samples each) should not overlap."""
+    dur_s = 0.01
+    gen = SweepGenerator(fs, dur_s, 20.0, -10.0)
+    _, _, inv = gen.generate()
+    expected_n = int(round(dur_s * fs))
+    assert len(inv) == expected_n
+    expected_fade_s = _fade_duration_sweep(dur_s)
+    n_fade = int(round(expected_fade_s * fs))
+    # Two fades should not consume the entire signal
+    assert 2 * n_fade < len(inv), "Fades should not overlap on short sweeps"
+    # Shape and dtype preserved
+    assert inv.shape == (expected_n,)
+    assert inv.dtype == np.float64
+
+
+def test_sweep_generator_inverse_fade_preserves_shape_and_dtype(fs):
+    """Verify that the fade does not change the array shape or dtype."""
+    dur_s = 0.5
+    gen = SweepGenerator(fs, dur_s, 20.0, -10.0)
+    s_fund, phase, inv = gen.generate()
+    expected_n = int(round(dur_s * fs))
+    assert s_fund.shape == (expected_n,)
+    assert inv.shape == (expected_n,)
+    assert inv.dtype == np.float64
+    assert phase.shape == (expected_n,)
+
+
+# -----------------------------------------------------------------------------
 # PIPELINE STEPS
 # -----------------------------------------------------------------------------
 

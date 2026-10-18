@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .styles import value_spin_style as _output_level_spin_style
+
 import configparser
 import math
 from pathlib import Path
@@ -196,45 +198,6 @@ def _qt_icon_path(name: str) -> str:
     return (Path(__file__).resolve().parent / "icons" / name).as_posix()
 
 
-def _output_level_spin_style() -> str:
-    up_icon = _qt_icon_path("spin-chevron-up.svg")
-    down_icon = _qt_icon_path("spin-chevron-down.svg")
-    return (
-        "QDoubleSpinBox#OutputLevelSpin {"
-        "background: #ffffff;"
-        "border: 1px solid #bfc8d4;"
-        "border-radius: 4px;"
-        "color: #111827;"
-        "font-size: 10pt;"
-        "min-height: 22px;"
-        "padding: 2px 54px 2px 8px;"
-        "}"
-        "QDoubleSpinBox#OutputLevelSpin::up-button {"
-        "subcontrol-origin: border;"
-        "subcontrol-position: center right;"
-        "width: 22px;"
-        "height: 20px;"
-        "right: 28px;"
-        "border: none;"
-        "background: transparent;"
-        "}"
-        "QDoubleSpinBox#OutputLevelSpin::down-button {"
-        "subcontrol-origin: border;"
-        "subcontrol-position: center right;"
-        "width: 22px;"
-        "height: 20px;"
-        "right: 5px;"
-        "border: none;"
-        "background: transparent;"
-        "}"
-        "QDoubleSpinBox#OutputLevelSpin::up-button:hover,"
-        "QDoubleSpinBox#OutputLevelSpin::down-button:hover {"
-        "background: #f3f4f6;"
-        "border-radius: 3px;"
-        "}"
-        f"QDoubleSpinBox#OutputLevelSpin::up-arrow {{ image: url({up_icon}); width: 13px; height: 13px; }}"
-        f"QDoubleSpinBox#OutputLevelSpin::down-arrow {{ image: url({down_icon}); width: 13px; height: 13px; }}"
-    )
 
 
 class AudioSetupPane(QWidget):

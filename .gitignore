@@ -15,6 +15,14 @@ build/
 
 # Test / tooling caches
 .pytest_cache/
+.uv-cache/
+.mypy_cache/
+.ruff_cache/
+# Local pytest scratch directories (including calculator verification runs)
+/.test_tmp*/
+/.rft_*/
+/.pytest_tmp*/
+/pytest-of-*/
 .coverage
 htmlcov/
 

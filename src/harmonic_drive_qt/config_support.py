@@ -25,6 +25,7 @@ DISPLAY_LABELS = {
     "show_height_offset_controls": "Show height offset controls",
     "default_project_dir": "Default session folder",
     "cal_tool_height": "Calibration tool height (mm)",
+    "reflection_free_time_ms": "Reflection Free Time (ms)",
     "feed_rate": "Feed rate (mm/min)",
     "homing_gap": "Homing gap (degrees)",
     "pole_gap": "Pole gap (mm)",
@@ -181,6 +182,8 @@ EDITABLE_SCHEMA: Dict[str, List[SchemaEntry]] = {
          "Inject 3rd harmonic at this dB level for distortion tests. 'None' to disable.", None),
     ],
     "scanner": [
+        ("reflection_free_time_ms", "float",
+         "Delay between the direct sound and the first boundary reflection, in milliseconds.", None),
         ("verify_controller_on_connect", "bool",
          "Require a GRBL acknowledgement when opening the scanner. Disable temporarily to diagnose reconnect/probe failures; an open port does not guarantee motion commands will work.", None),
         ("feed_rate", "int",

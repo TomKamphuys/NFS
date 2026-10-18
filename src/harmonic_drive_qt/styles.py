@@ -309,3 +309,46 @@ def warning_button(button) -> None:
         "border-radius: 4px; color: #ffffff; font-weight: 800; padding: 7px 11px; }"
         "QPushButton:hover { background: #e5b834; border-color: #e5b834; }"
     )
+
+
+def value_spin_style(object_name: str = "OutputLevelSpin") -> str:
+    up_icon = (Path(__file__).resolve().parent / "icons" / "spin-chevron-up.svg").as_posix()
+    down_icon = (Path(__file__).resolve().parent / "icons" / "spin-chevron-down.svg").as_posix()
+    style = (
+        "QDoubleSpinBox#OutputLevelSpin {"
+        "background: #ffffff;"
+        "border: 1px solid #bfc8d4;"
+        "border-radius: 4px;"
+        "color: #111827;"
+        "font-size: 10pt;"
+        "min-height: 22px;"
+        "padding: 2px 54px 2px 8px;"
+        "}"
+        "QDoubleSpinBox#OutputLevelSpin::up-button {"
+        "subcontrol-origin: border;"
+        "subcontrol-position: center right;"
+        "width: 22px;"
+        "height: 20px;"
+        "right: 28px;"
+        "border: none;"
+        "background: transparent;"
+        "}"
+        "QDoubleSpinBox#OutputLevelSpin::down-button {"
+        "subcontrol-origin: border;"
+        "subcontrol-position: center right;"
+        "width: 22px;"
+        "height: 20px;"
+        "right: 5px;"
+        "border: none;"
+        "background: transparent;"
+        "}"
+        "QDoubleSpinBox#OutputLevelSpin::up-button:hover,"
+        "QDoubleSpinBox#OutputLevelSpin::down-button:hover {"
+        "background: #f3f4f6;"
+        "border-radius: 3px;"
+        "}"
+        f"QDoubleSpinBox#OutputLevelSpin::up-arrow {{ image: url({up_icon}); width: 13px; height: 13px; }}"
+        f"QDoubleSpinBox#OutputLevelSpin::down-arrow {{ image: url({down_icon}); width: 13px; height: 13px; }}"
+    )
+
+    return style.replace("#OutputLevelSpin", f"#{object_name}")
