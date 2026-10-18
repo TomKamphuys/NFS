@@ -284,29 +284,56 @@ class MotionPreviewWindow(QMainWindow):
         self._canvas.draw_idle()
 
     def _announce_unsafe_points(self) -> None:
-        """Show the warning banner and a pop-up when unsafe points were found."""
+        """Show the warning banner and a pop-up when unsafe points or paths were found."""
         unsafe = self._simulation.unsafe_points
-        if not unsafe:
+        unsafe_paths = self._simulation.unsafe_path_samples
+        if not unsafe and not unsafe_paths:
             return
-        count = len(unsafe)
-        noun = "point" if count == 1 else "points"
-        if self._simulation.aborted:
-            message = (
-                f"Motion preview ABORTED — {count} measurement {noun} lie inside "
-                f"the no-fly zone. The entire grid was not visited because the scan "
-                f"will be stopped before any motion to avoid a collision. Review the "
-                f"no-fly zone settings and the measurement grid."
+        parts = []
+        if unsafe:
+            count = len(unsafe)
+            noun = "point" if count == 1 else "points"
+            if self._simulation.aborted:
+                parts.append(
+                    f"Motion preview ABORTED — {count} measurement {noun} lie inside "
+                    f"the no-fly zone. The entire grid was not visited because the scan "
+                    f"will be stopped before any motion to avoid a collision."
+                )
+            else:
+                parts.append(
+                    f"{count} measurement {noun} lie inside the no-fly zone. "
+                    f"With the current settings {'this' if count == 1 else 'these'} "
+                    f"{noun} will be SKIPPED during the scan."
+                )
+        if unsafe_paths:
+            # Deduplicate by rounding to avoid reporting the same sample multiple times
+            # due to floating-point repetition across consecutive segments.
+            unique_paths = self._deduplicate_path_samples(unsafe_paths)
+            path_count = len(unique_paths)
+            parts.append(
+                f"Additionally, {path_count} sampled path positions cross the no-fly zone "
+                f"(motion paths between safe measurement points pass through the keep-out area)."
             )
-        else:
-            message = (
-                f"{count} measurement {noun} lie inside the no-fly zone. "
-                f"With the current settings {'this' if count == 1 else 'these'} "
-                f"{noun} will be SKIPPED during the scan. Review the no-fly zone "
-                f"settings and the measurement grid."
-            )
+        parts.append("Review the no-fly zone settings and the measurement grid.")
+        message = " ".join(parts)
         self._warning_label.setText(f"\u26a0  {message}")
         self._warning_label.setVisible(True)
-        QMessageBox.warning(self, "Unsafe measurement points", message)
+        title = "Unsafe measurement points" if not unsafe_paths else "Unsafe motion paths detected"
+        QMessageBox.warning(self, title, message)
+
+    @staticmethod
+    def _deduplicate_path_samples(samples: list[CylindricalPosition]) -> list[CylindricalPosition]:
+        """Remove consecutive duplicate path samples (rounded to 0.1mm / 0.1°)."""
+        if not samples:
+            return []
+        unique: list[CylindricalPosition] = [samples[0]]
+        for s in samples[1:]:
+            key = (round(s.r(), 1), round(s.t(), 1), round(s.z(), 1))
+            prev = unique[-1]
+            prev_key = (round(prev.r(), 1), round(prev.t(), 1), round(prev.z(), 1))
+            if key != prev_key:
+                unique.append(s)
+        return unique
 
     def _draw_zone(self, axes) -> None:
         kind = self._simulation.zone_kind

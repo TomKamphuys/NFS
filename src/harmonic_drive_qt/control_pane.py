@@ -17,6 +17,7 @@ from .backend import BackendManager, Worker, format_duration, format_measurement
 from .icons import ui_icon
 from .styles import danger_button, primary_button, warning_button
 from nfs.datatypes import GrblMachineState
+from nfs.motion_simulation import simulate_motion
 
 from .qt_compat import (
     QDoubleSpinBox,
@@ -627,6 +628,9 @@ class ControlPane(QWidget):
             if not self._loaded_grid_file_exists(project.get_project_dir()):
                 QMessageBox.warning(self, "Measurement Set", "No grid file loaded. Please generate one first.")
                 return
+            # Pre-measurement check: simulate motion to detect unsafe points
+            if not self._check_unsafe_points_before_measurement():
+                return
             overwrite = False
             if self._measurement_outputs_exist(project.get_project_dir()):
                 result = QMessageBox.question(
@@ -651,6 +655,78 @@ class ControlPane(QWidget):
                 overwrite=overwrite,
             )
         self.refresh_progress()
+
+    def _check_unsafe_points_before_measurement(self) -> bool:
+        """Run motion simulation to check for unsafe points and paths before starting measurement.
+        
+        Returns True if the user chooses to proceed (or no unsafe points found),
+        False if the user cancels.
+        """
+        try:
+            simulation = simulate_motion(self.backend.config_file)
+        except Exception:
+            # If simulation fails, allow the measurement to proceed
+            # The motion manager will still check at runtime
+            return True
+        
+        unsafe = simulation.unsafe_points
+        unsafe_paths = simulation.unsafe_path_samples
+        if not unsafe and not unsafe_paths:
+            return True
+        
+        parts = []
+        if unsafe:
+            count = len(unsafe)
+            noun = "point" if count == 1 else "points"
+            if simulation.aborted:
+                parts.append(
+                    f"{count} measurement {noun} lie inside the no-fly zone. "
+                    f"With the current settings the scan will ABORT before any motion "
+                    f"to avoid a collision."
+                )
+            else:
+                parts.append(
+                    f"{count} measurement {noun} lie inside the no-fly zone. "
+                    f"With the current settings {'this' if count == 1 else 'these'} "
+                    f"{noun} will be SKIPPED during the scan."
+                )
+        if unsafe_paths:
+            # Deduplicate by rounding to avoid reporting the same sample multiple times
+            unique_paths = self._deduplicate_path_samples(unsafe_paths)
+            path_count = len(unique_paths)
+            parts.append(
+                f"Additionally, {path_count} sampled path positions cross the no-fly zone "
+                f"(motion paths between safe measurement points pass through the keep-out area)."
+            )
+        parts.append("Review the no-fly zone settings and the measurement grid.")
+        message = " ".join(parts) + "\n\nDo you want to cancel or continue anyway?"
+        
+        title = "Unsafe measurement points" if not unsafe_paths else "Unsafe motion paths detected"
+        msg_box = QMessageBox(
+            QMessageBox.Icon.Question,
+            title,
+            message,
+            QMessageBox.StandardButton.Cancel,
+            self,
+        )
+        continue_btn = msg_box.addButton("Continue", QMessageBox.ButtonRole.ActionRole)
+        msg_box.exec()
+        
+        return msg_box.clickedButton() == continue_btn
+
+    @staticmethod
+    def _deduplicate_path_samples(samples):
+        """Remove consecutive duplicate path samples (rounded to 0.1mm / 0.1°)."""
+        if not samples:
+            return []
+        unique = [samples[0]]
+        for s in samples[1:]:
+            key = (round(s.r(), 1), round(s.t(), 1), round(s.z(), 1))
+            prev = unique[-1]
+            prev_key = (round(prev.r(), 1), round(prev.t(), 1), round(prev.z(), 1))
+            if key != prev_key:
+                unique.append(s)
+        return unique
 
     def _save_measurement_project_snapshot(self) -> None:
         title = project.get_project_name() or project.DEFAULT_PROJECT_NAME

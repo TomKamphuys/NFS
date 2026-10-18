@@ -38,8 +38,8 @@ from .motion_manager import (
 
 
 # Sampling resolution used to reconstruct a move as a polyline.
-_MM_PER_SAMPLE = 5.0        # one sample every 5 mm of straight travel
-_ARC_DEG_PER_SAMPLE = 2.0   # one sample every 2 degrees of arc travel
+_MM_PER_SAMPLE = 1.0        # one sample every 1 mm of straight travel
+_ARC_DEG_PER_SAMPLE = 1.0   # one sample every 1 degree of arc travel
 _MIN_SAMPLES = 2
 
 
@@ -76,6 +76,9 @@ class MotionSimulation:
     :ivar zone: A dictionary with the zone geometry (keys depend on ``zone_kind``).
     :ivar unsafe_points: Measurement points that lie inside the no-fly zone and
         would therefore cause a collision. These are what a viewer should flag.
+    :ivar unsafe_path_samples: Sampled path points (intermediate positions between
+        measurement points) that lie inside the no-fly zone. These indicate motion
+        paths that cross the keep-out area even though the endpoints are safe.
     :ivar unsafe_point_policy: The configured policy for unsafe points
         (``'abort'`` or ``'skip'``), so the viewer can explain the consequence.
     :ivar aborted: True when the configured policy is ``abort`` and at least one
@@ -87,6 +90,7 @@ class MotionSimulation:
     zone_kind: str = "none"
     zone: dict = field(default_factory=dict)
     unsafe_points: list[CylindricalPosition] = field(default_factory=list)
+    unsafe_path_samples: list[CylindricalPosition] = field(default_factory=list)
     unsafe_point_policy: str = UNSAFE_POINT_ABORT
     aborted: bool = False
     measurement_sample_indices: list[int] = field(default_factory=list)
@@ -257,6 +261,8 @@ def simulate_motion(
         simulation.unsafe_points
         and simulation.unsafe_point_policy == UNSAFE_POINT_ABORT
     )
+    # After motion recording, also check all sampled path points against the zone.
+    simulation.unsafe_path_samples = _collect_unsafe_path_samples(manager, scanner.segments)
 
     manager.move_to_safe_starting_radius()
     measurement_segment_ends = []
@@ -346,3 +352,29 @@ def _capture_zone(manager: Any, simulation: MotionSimulation) -> None:
         if zone.radius > 0.0:
             simulation.zone_kind = "spherical"
             simulation.zone = {"radius": zone.radius}
+
+
+def _collect_unsafe_path_samples(manager: Any, segments: list[MotionSegment]) -> list[CylindricalPosition]:
+    """
+    Return every sampled path point that lies inside the manager's no-fly zone.
+
+    This checks all intermediate positions recorded during motion simulation,
+    not just the measurement endpoints. Two safe endpoints can still have an
+    unsafe path between them if the motion crosses the keep-out area.
+
+    :param manager: The built motion manager.
+    :param segments: The recorded motion segments from the RecordingScanner.
+    :return: The unsafe path samples, in traversal order.
+    """
+    zone = getattr(manager, "_no_fly_zone", None)
+    if zone is None:
+        return []
+
+    unsafe: list[CylindricalPosition] = []
+    for segment in segments:
+        angles = segment.theta if segment.theta else [0.0] * len(segment.r)
+        for r_val, t_val, z_val in zip(segment.r, angles, segment.z):
+            position = CylindricalPosition(r_val, t_val, z_val)
+            if zone.contains(position):
+                unsafe.append(position)
+    return unsafe

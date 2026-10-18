@@ -17,11 +17,11 @@ def test_rotation_samples_do_not_wrap():
     scanner.angular_move_to(180)
     simulation = MotionSimulation(segments=scanner.segments)
     path = simulation.flatten_cylindrical()
-    assert len(path) == 181
-    assert path[90] == (100, 0, 20)
+    assert len(path) == 361
+    assert path[180] == (100, 0, 20)
     assert path[-1] == (100, 180, 20)
     xyz = MotionPreviewWindow._cartesian(path)
-    np.testing.assert_allclose(xyz[:, 90], [100, 0, 20])
+    np.testing.assert_allclose(xyz[:, 180], [100, 0, 20])
     assert simulation.flatten() == [(100, 20)]
 
 
