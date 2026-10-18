@@ -33,7 +33,7 @@ def test_rft_settings_apply_and_project_roundtrip(tmp_path, monkeypatch):
     monkeypatch.setattr(project, '_project_data', {'project_name': 'RFT'})
     config = tmp_path / 'config.ini'
     config.write_text('[scanner]\nfeed_rate=1000\n')
-    settings = SettingsDialog(str(config), lambda: None)
+    settings = SettingsDialog(str(config), lambda _: None)
     field, _ = settings.inputs[('scanner', 'reflection_free_time_ms')]
     button = next(b for b in settings.findChildren(QPushButton) if b.text() == 'RFT Calculator')
     monkeypatch.setattr(RFTDialog, 'exec', lambda self: QDialog.DialogCode.Accepted)
@@ -93,14 +93,14 @@ def test_rft_system_default_and_foreign_project(tmp_path, monkeypatch):
     project.apply_to_config(str(config))
     assert project.get_project_data()['stage1_vars']['fdw_rft_ms'] == '5.0'
     app = QApplication.instance() or QApplication([])
-    settings = SettingsDialog(str(config), lambda: None)
+    settings = SettingsDialog(str(config), lambda _: None)
     field, _ = settings.inputs[('scanner', 'reflection_free_time_ms')]
     field.setText('6.5')
     button = next(b for b in settings.findChildren(QPushButton) if b.text() == 'Set as system default')
     button.click()
     settings.save()
     assert project.get_system_rft_default(str(config)) == 6.5
-    field_settings = SettingsDialog(str(config), lambda: None)
+    field_settings = SettingsDialog(str(config), lambda _: None)
     field_settings.inputs[('scanner', 'reflection_free_time_ms')][0].setText('7.0')
     field_settings.save()
     assert project.get_system_rft_default(str(config)) == 6.5
