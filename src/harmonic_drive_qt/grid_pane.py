@@ -557,6 +557,9 @@ class GridGeneratorPane(QWidget):
         for k, v in dut_vars.items():
             if v:
                 parser.set("dut_volume", k, v)
+            elif parser.has_option("dut_volume", k):
+                # Remove the option so stale values don't persist when a field is cleared
+                parser.remove_option("dut_volume", k)
         try:
             with open(self.config_file, "w", encoding="utf-8") as f:
                 parser.write(f)

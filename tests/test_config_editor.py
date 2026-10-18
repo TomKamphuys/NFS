@@ -1,10 +1,13 @@
+import os
+import tempfile
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from harmonic_drive_qt.config_support import (
     _coerce, _format_for_ini, _strip_inline_comment, _parse_bool,
-    _serial_port_options,
+    _serial_port_options, validate_dut_volume,
 )
 
 # --- Unit tests for helper functions ---
@@ -85,3 +88,123 @@ def test_serial_port_options_preserves_configured_missing_port():
 
     assert list(options) == ["COM5", "COM7"]
     assert options["COM5"] == "COM5 (configured, not currently detected)"
+
+
+# --- Unit tests for validate_dut_volume ---
+
+def _write_config(content: str) -> str:
+    """Write *content* to a temporary config file and return its path."""
+    fd, path = tempfile.mkstemp(suffix=".ini")
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(content)
+    return path
+
+
+def test_validate_dut_volume_complete():
+    cfg = _write_config(
+        "[dut_volume]\n"
+        "top_r = 290.0\ntop_phi = 45.0\ntop_z = 350.0\n"
+        "bot_r = 39.0\nbot_phi = 0.0\nbot_z = -50.0\n"
+    )
+    try:
+        assert validate_dut_volume(cfg) == []
+    finally:
+        os.unlink(cfg)
+
+
+def test_validate_dut_volume_missing_section():
+    cfg = _write_config("[motion_manager]\ntype = mock\n")
+    try:
+        missing = validate_dut_volume(cfg)
+        assert len(missing) == 6
+    finally:
+        os.unlink(cfg)
+
+
+def test_validate_dut_volume_empty_fields():
+    cfg = _write_config(
+        "[dut_volume]\n"
+        "top_r = 290.0\ntop_phi = 45.0\ntop_z = 350.0\n"
+        "bot_r = \nbot_phi = \nbot_z = \n"
+    )
+    try:
+        missing = validate_dut_volume(cfg)
+        assert "Bot Radius (mm)" in missing
+        assert "Bot Phi (deg)" in missing
+        assert "Bot Height (mm)" in missing
+        assert len(missing) == 3
+    finally:
+        os.unlink(cfg)
+
+
+def test_validate_dut_volume_non_numeric():
+    cfg = _write_config(
+        "[dut_volume]\n"
+        "top_r = abc\ntop_phi = 45.0\ntop_z = 350.0\n"
+        "bot_r = 39.0\nbot_phi = 0.0\nbot_z = -50.0\n"
+    )
+    try:
+        missing = validate_dut_volume(cfg)
+        assert "Top Radius (mm)" in missing
+        assert len(missing) == 1
+    finally:
+        os.unlink(cfg)
+
+
+def test_validate_dut_volume_none_value():
+    cfg = _write_config(
+        "[dut_volume]\n"
+        "top_r = None\ntop_phi = 45.0\ntop_z = 350.0\n"
+        "bot_r = 39.0\nbot_phi = 0.0\nbot_z = -50.0\n"
+    )
+    try:
+        missing = validate_dut_volume(cfg)
+        assert "Top Radius (mm)" in missing
+    finally:
+        os.unlink(cfg)
+
+
+def test_validate_dut_volume_nonexistent_file():
+    missing = validate_dut_volume("/nonexistent/path/config.ini")
+    assert len(missing) == 6
+
+
+def test_validate_dut_volume_negative_top_radius():
+    cfg = _write_config(
+        "[dut_volume]\n"
+        "top_r = -10.0\ntop_phi = 45.0\ntop_z = 350.0\n"
+        "bot_r = 39.0\nbot_phi = 0.0\nbot_z = -50.0\n"
+    )
+    try:
+        missing = validate_dut_volume(cfg)
+        assert "Top Radius (mm)" in missing
+        assert len(missing) == 1
+    finally:
+        os.unlink(cfg)
+
+
+def test_validate_dut_volume_negative_bot_radius():
+    cfg = _write_config(
+        "[dut_volume]\n"
+        "top_r = 290.0\ntop_phi = 45.0\ntop_z = 350.0\n"
+        "bot_r = -5.0\nbot_phi = 0.0\nbot_z = -50.0\n"
+    )
+    try:
+        missing = validate_dut_volume(cfg)
+        assert "Bot Radius (mm)" in missing
+        assert len(missing) == 1
+    finally:
+        os.unlink(cfg)
+
+
+def test_validate_dut_volume_negative_height_allowed():
+    cfg = _write_config(
+        "[dut_volume]\n"
+        "top_r = 290.0\ntop_phi = 45.0\ntop_z = 350.0\n"
+        "bot_r = 39.0\nbot_phi = 0.0\nbot_z = -50.0\n"
+    )
+    try:
+        # Negative height values are valid (e.g., below the reference plane)
+        assert validate_dut_volume(cfg) == []
+    finally:
+        os.unlink(cfg)

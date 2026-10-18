@@ -351,6 +351,48 @@ def _serial_port_options(current: str = "") -> Dict[str, str]:
 
 
 
+def validate_dut_volume(config_file: str) -> list[str]:
+    """
+    Validate that the [dut_volume] section contains all required numeric fields.
+
+    The motion preview and measurement scan both depend on a complete DUT volume
+    definition. If any field is missing or not a valid number, the no-fly zone
+    cannot be constructed and the operator must be warned before proceeding.
+
+    :param config_file: Path to the config.ini file.
+    :return: A list of human-readable field names that are missing or invalid.
+        An empty list means the DUT volume is complete and valid.
+    """
+    required = [
+        ("top_r", "Top Radius (mm)"),
+        ("top_phi", "Top Phi (deg)"),
+        ("top_z", "Top Height (mm)"),
+        ("bot_r", "Bot Radius (mm)"),
+        ("bot_phi", "Bot Phi (deg)"),
+        ("bot_z", "Bot Height (mm)"),
+    ]
+    missing: list[str] = []
+    parser = configparser.ConfigParser(inline_comment_prefixes=("#", ";"))
+    parser.read(config_file)
+    if not parser.has_section("dut_volume"):
+        return [label for _, label in required]
+    radius_keys = {"top_r", "bot_r"}
+    for key, label in required:
+        raw = parser.get("dut_volume", key, fallback="").strip()
+        if not raw or raw.lower() == "none":
+            missing.append(label)
+        else:
+            try:
+                val = float(raw)
+                if not __import__("math").isfinite(val):
+                    missing.append(label)
+                elif key in radius_keys and val < 0:
+                    missing.append(label)
+            except ValueError:
+                missing.append(label)
+    return missing
+
+
 def save_config_values(
     config_file: str,
     values: Dict[Tuple[str, str], object],

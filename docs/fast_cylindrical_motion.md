@@ -115,20 +115,23 @@ per-point detours dominate. The exact figures are printed by
 
 ## How to enable it
 
-In `config.ini`, set the motion-manager type:
+In `config.ini`, set the motion-manager type and define the protected DUT volume
+in a `[dut_volume]` section:
 
 ```ini
+[dut_volume]
+top_r = 290.0      # wall radius (mm) of the protected interior
+top_z = 350.0      # top cap plane (mm)
+bot_z = -50.0      # bottom cap plane (mm)
+
 [motion_manager]
 type = FastCylindricalMeasurementMotionManager
-no_fly_radius = 300.0   # wall radius (mm) of the protected interior
-no_fly_z_min = 0.0      # bottom cap plane (mm)
-no_fly_z_max = 400.0    # top cap plane (mm)
 unsafe_point_policy = abort   # 'abort' or 'skip' if a point is inside the zone
 ```
 
-The no-fly zone describes the keep-out volume around the device under test; the
-arm retracts to `no_fly_radius` (the wall radius) for evasive moves. Everything
-else (measurement-points configuration) is unchanged.
+The `[dut_volume]` section describes the keep-out volume around the device under
+test; the arm retracts to `top_r` (the wall radius) for evasive moves.
+Everything else (measurement-points configuration) is unchanged.
 
 ## Endpoint safety guard
 

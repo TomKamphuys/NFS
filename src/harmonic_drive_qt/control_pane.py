@@ -628,6 +628,22 @@ class ControlPane(QWidget):
             if not self._loaded_grid_file_exists(project.get_project_dir()):
                 QMessageBox.warning(self, "Measurement Set", "No grid file loaded. Please generate one first.")
                 return
+            # Check DUT volume is fully configured before allowing measurement
+            from .config_support import validate_dut_volume
+            missing = validate_dut_volume(self.backend.config_file)
+            if missing:
+                fields_text = "\n".join(f"  - {name}" for name in missing)
+                QMessageBox.warning(
+                    self,
+                    "Incomplete DUT Volume",
+                    (
+                        "The DUT Volume (no-fly zone) is not fully configured. "
+                        "Please fill in all missing fields before starting a measurement:\n\n"
+                        f"{fields_text}\n\n"
+                        "Go to the Grid Generation & Planning tab to set the values."
+                    ),
+                )
+                return
             # Pre-measurement check: simulate motion to detect unsafe points
             if not self._check_unsafe_points_before_measurement():
                 return

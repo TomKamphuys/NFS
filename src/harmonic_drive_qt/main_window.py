@@ -302,7 +302,23 @@ class MainWindow(QMainWindow):
         self._mark_active(self.machine_button, self.grid_button)
 
     def show_motion_preview(self) -> None:
+        from .config_support import validate_dut_volume
         from .motion_preview import MotionPreviewWindow
+
+        missing = validate_dut_volume(self.config_file)
+        if missing:
+            fields_text = "\n".join(f"  - {name}" for name in missing)
+            QMessageBox.warning(
+                self,
+                "Incomplete DUT Volume",
+                (
+                    "The DUT Volume (no-fly zone) is not fully configured. "
+                    "Please fill in all missing fields before running the motion preview:\n\n"
+                    f"{fields_text}\n\n"
+                    "Go to the Grid Generation & Planning tab to set the values."
+                ),
+            )
+            return
 
         # Start the previewed motion at the arm's current position (when known)
         # instead of the origin, which usually sits inside the no-fly zone and
