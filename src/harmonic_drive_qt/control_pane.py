@@ -891,6 +891,7 @@ class ControlPane(QWidget):
         self.progress.setValue(int(max(0.0, min(1.0, percent)) * 1000))
         self._update_grid_readout(max(0, current - 1 if current else 0))
         eta = format_duration(event.get("eta_seconds"))
+        elapsed = format_duration(event.get("elapsed_seconds"))
 
         if has_error:
             err_info = event.get("error_info") or format_measurement_error(
@@ -913,7 +914,7 @@ class ControlPane(QWidget):
                 msg_box.setStandardButtons(QMessageBox.StandardButton.Ok)
                 msg_box.exec()
         elif total:
-            self.progress.setFormat(f"{label_status} - {current} of {total} points - ETA {eta}")
+            self.progress.setFormat(f"{label_status} - {current} of {total} points - ETA {eta} - Elapsed {elapsed}")
         else:
             self.progress.setFormat(f"{label_status} - waiting for measurement points")
 

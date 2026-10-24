@@ -11,9 +11,11 @@ ROTATION_MM_PER_DEGREE = 300.0 / 90.0
 
 
 def linear_distance(start: tuple[float, float, float], end: tuple[float, float, float]) -> float:
-    """Linear R/Z travel plus a radius-independent azimuth penalty."""
+    """Linear R/Z travel plus a radius-independent azimuth penalty (max across independent axes)."""
     r, t, z = start
-    return math.hypot(end[0] - r, end[2] - z) + abs(end[1] - t) * ROTATION_MM_PER_DEGREE
+    linear = math.hypot(end[0] - r, end[2] - z)
+    angular = abs(end[1] - t) * ROTATION_MM_PER_DEGREE
+    return max(linear, angular)
 
 
 def travel_distance(
@@ -26,14 +28,15 @@ def travel_distance(
     R, T, Z = end.r(), end.t(), end.z()
     angular = abs(T - t) * ROTATION_MM_PER_DEGREE
     if manager_type == 'SphericalMeasurementMotionManager':
-        return (angular + abs(end.length() - start.length())
-                + end.length() * abs(math.atan2(Z, R) - math.atan2(z, r)))
+        linear = abs(end.length() - start.length()) + end.length() * abs(math.atan2(Z, R) - math.atan2(z, r))
+        return max(angular, linear)
     safe = zone.retract_radius
     if manager_type == 'CylindricalMeasurementMotionManager':
         if abs(Z - z) <= 0.1:
-            return angular + abs(R - r)
+            return max(angular, abs(R - r))
         outer = max(r, safe)
-        return angular + outer - r + abs(Z - z) + abs(R - outer)
+        linear = (outer - r) + abs(Z - z) + abs(R - outer)
+        return max(angular, linear)
     if not zone.blocks_move(start, end):
         return linear_distance((r, t, z), (R, T, Z))
     outer = max(r, safe)

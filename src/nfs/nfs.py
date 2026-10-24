@@ -62,6 +62,7 @@ class NearFieldScanner:
             "total": 0,
             "timestamp": time.monotonic(),
             "eta_seconds": None,
+            "elapsed_seconds": 0.0,
         }
         self._clear_position_log()
 
@@ -221,6 +222,7 @@ class NearFieldScanner:
         total = 0
         started_at = None
         eta_seconds = None
+        elapsed_seconds = 0.0
         stopped_early = False
         failure_exc: Exception | None = None
 
@@ -235,9 +237,10 @@ class NearFieldScanner:
         log_dir = self._project_dir / "logs"
         log_dir.mkdir(parents=True, exist_ok=True)
         log_file = log_dir / "Scanner.log"
+        from .logging_config import get_configured_level
         sink_id = logger.add(
             log_file,
-            level="DEBUG",
+            level=get_configured_level(),
             format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {name}:{function}:{line} - {message}"
         )
         logger.info(f"Starting measurement set {session_name} in: {self._project_dir}")
@@ -262,6 +265,7 @@ class NearFieldScanner:
                 total,
                 timestamp=started_at,
                 eta_seconds=eta_seconds,
+                elapsed_seconds=elapsed_seconds,
             )
             while not self._measurement_motion_manager.ready():
                 if not self._wait_while_measurement_paused():
@@ -287,6 +291,8 @@ class NearFieldScanner:
 
                 self._audio.measure_ir(position)
                 timestamp = time.monotonic()
+                if started_at is not None:
+                    elapsed_seconds = timestamp - started_at
                 if started_at is not None and total > 0 and current >= 2:
                     seconds_per_point = (timestamp - started_at) / current
                     eta_seconds = seconds_per_point * max(0, total - current)
@@ -297,6 +303,7 @@ class NearFieldScanner:
                     total,
                     timestamp=timestamp,
                     eta_seconds=eta_seconds,
+                    elapsed_seconds=elapsed_seconds,
                 )
 
             self._measurement_motion_manager.reset()
@@ -315,6 +322,7 @@ class NearFieldScanner:
                     current,
                     total,
                     eta_seconds=None,
+                    elapsed_seconds=elapsed_seconds,
                     error=str(failure_exc),
                     exception=failure_exc,
                 )
@@ -329,6 +337,7 @@ class NearFieldScanner:
                     final_current,
                     total,
                     eta_seconds=finished_eta,
+                    elapsed_seconds=elapsed_seconds,
                 )
             self._measurement_running = False
             self._measurement_pause_requested.clear()
@@ -337,7 +346,10 @@ class NearFieldScanner:
             if failure_exc is not None:
                 logger.error(f"Measurement set {session_name} failed: {failure_exc}")
             else:
-                logger.info(f"Measurement set {session_name} complete.")
+                if elapsed_seconds > 0:
+                    logger.info(f"Measurement set {session_name} complete in {elapsed_seconds:.1f}s.")
+                else:
+                    logger.info(f"Measurement set {session_name} complete.")
             logger.remove(sink_id)
 
     def _emit_measurement_progress(
@@ -348,6 +360,7 @@ class NearFieldScanner:
         total: int,
         timestamp: float | None = None,
         eta_seconds: float | None = None,
+        elapsed_seconds: float = 0.0,
         error: str | None = None,
         exception: Exception | None = None,
     ) -> None:
@@ -363,6 +376,7 @@ class NearFieldScanner:
         :param total: Total number of points in the measurement set.
         :param timestamp: Monotonic timestamp of the progress event (defaults to current monotonic time).
         :param eta_seconds: Estimated remaining time in seconds, or None if undetermined.
+        :param elapsed_seconds: Elapsed time in seconds since measurement started.
         :param error: Optional error description string if failed.
         :param exception: Optional Exception instance if failed.
         :return: None
@@ -373,6 +387,7 @@ class NearFieldScanner:
             "total": total,
             "timestamp": timestamp if timestamp is not None else time.monotonic(),
             "eta_seconds": eta_seconds,
+            "elapsed_seconds": elapsed_seconds,
         }
         if error is not None:
             event["error"] = error

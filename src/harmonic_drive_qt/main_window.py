@@ -350,7 +350,7 @@ class MainWindow(QMainWindow):
     def on_settings_applied(self, changed_sections: set[str]) -> None:
         from .settings_dialog import SCANNER_RELATED_SECTIONS
 
-        scanner_changed = bool(changed_sections & SCANNER_RELATED_SECTIONS)
+        scanner_changed = bool(changed_sections & SCANNER_RELATED_SECTIONS) or "logging" in changed_sections
         ui_changed = "app" in changed_sections
 
         if scanner_changed:

@@ -368,7 +368,7 @@ class BackendManager:
 
     def get_measurement_progress(self) -> dict[str, Any]:
         if self.nfs is None or not hasattr(self.nfs, "get_measurement_progress"):
-            return {"status": "ready", "current": 0, "total": 0, "eta_seconds": None}
+            return {"status": "ready", "current": 0, "total": 0, "eta_seconds": None, "elapsed_seconds": 0.0}
         return self.nfs.get_measurement_progress()
 
     def get_audio_meter_state(self) -> dict[str, Any]:

@@ -8,6 +8,7 @@ from typing import Any, Optional
 from loguru import logger
 
 _initialized = False
+_configured_level: str = "INFO"
 
 
 def get_git_info(repo_path: Optional[str] = None) -> Optional[dict[str, str]]:
@@ -95,7 +96,7 @@ def setup_logging(
     rotation = 10 MB
     retention = 1 week
     """
-    global _initialized
+    global _initialized, _configured_level
     was_initialized = _initialized
     if _initialized and not force:
         return
@@ -127,6 +128,8 @@ def setup_logging(
 
     if serial_comms_debug and level not in {"TRACE", "DEBUG"}:
         level = "DEBUG"
+
+    _configured_level = level
 
     # Add stderr handler. In a windowed (no-console) build - e.g. a PyInstaller
     # ``console=False`` executable - ``sys.stderr`` is ``None``. Passing ``None``
@@ -169,3 +172,8 @@ def setup_logging(
 def get_logger() -> Any:
     """Returns the loguru logger instance."""
     return logger
+
+
+def get_configured_level() -> str:
+    """Returns the log level currently configured by setup_logging()."""
+    return _configured_level

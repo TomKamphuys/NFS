@@ -60,8 +60,9 @@ def test_rotation_has_fixed_cost(manager, radius):
                            manager, zone) == pytest.approx(300)
 
 
-def test_combined_move_adds_linear_and_rotation_costs():
-    assert linear_distance((20, 0, 0), (50, 90, 40)) == pytest.approx(350)
+def test_combined_move_uses_max_of_linear_and_rotation_costs():
+    # linear = hypot(30, 40) = 50, angular = 90 * 300/90 = 300 -> max(50, 300) = 300
+    assert linear_distance((20, 0, 0), (50, 90, 40)) == pytest.approx(300)
 
 
 @pytest.mark.parametrize('manager', ['CylindricalMeasurementMotionManager',
