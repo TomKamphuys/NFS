@@ -363,6 +363,107 @@ def test_alignment_engine_functional(fs):
     assert len(avg_mic) == fs // 4 + int(round(taper_ms / 1000.0 * fs))
 
 
+def _psr_marker_recording(fs):
+    marker = MarkerGenerator(fs, 100, (500, 5000), -6).generate()
+    raw = np.zeros(fs)
+    raw[fs // 2:fs // 2 + len(marker)] = marker
+    return raw, marker, AlignmentEngine(fs, 1, False, 20, 100)
+
+
+def test_first_marker_search_stops_before_zero_latency_second_marker(fs, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    marker = MarkerGenerator(fs, 100, (500, 5000), -6).generate()
+    pre, slot, length = 2400, 12000, 6000
+    loop = np.zeros(pre + 2 * slot + len(marker))
+    loop[pre:pre + len(marker)] = 0.5 * marker
+    # A stronger marker at the next slot boundary would win the old search,
+    # whose inclusive end point reached this zero-latency second marker.
+    loop[pre + slot:pre + slot + len(marker)] = marker
+    mic = np.zeros_like(loop)
+    mic[pre + 100] = 1.0
+    engine = AlignmentEngine(fs, 1, True, 20, 100)
+
+    _, _, slices, _ = engine.sync_and_average(mic, loop, marker, pre, slot, length)
+
+    assert int(np.argmax(slices[0])) == 100
+
+
+def test_psr_preserves_lag_at_both_search_boundaries(fs, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)  # Existing diagnostic dump belongs in test storage.
+    raw, marker, engine = _psr_marker_recording(fs)
+    results = [engine._matched_filter_detect(raw, marker, a, b)
+               for a, b in ((23760, 24240), (24000, 24480), (23520, 24000),
+                            (0, len(raw) - len(marker)))]
+    assert [r[0] for r in results] == [24000] * 4
+    assert 2.5 < results[0][2] < 99
+    np.testing.assert_allclose([r[2] for r in results], results[0][2], rtol=1e-12)
+
+
+def test_psr_competing_marker_changes_quality_not_timing(fs, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    raw, marker, engine = _psr_marker_recording(fs)
+    clean = engine._matched_filter_detect(raw, marker, 23760, 24240)
+    raw[24900:24900 + len(marker)] += .65 * marker
+    ambiguous = engine._matched_filter_detect(raw, marker, 23760, 24240)
+    assert clean[0] == ambiguous[0] == 24000
+    assert 1 < ambiguous[2] < 2.5 < clean[2]
+
+
+def test_psr_without_comparison_data_warns(fs):
+    engine = AlignmentEngine(fs, 1, False, 20, 100)
+    psr = engine._calculate_psr(
+        np.array([0]), np.array([1.0]), peak_lag=0, peak_val=1.0, ref_len=1
+    )
+    assert psr == 0
+    metrics = audio_module.DSPVerificationTool(fs)
+    assert any('ALIGNMENT' in warning for warning in metrics.verify({'psr': psr}))
+
+
+@pytest.mark.parametrize('marker_fs', [44100, 48000, 96000, 192000])
+def test_generated_marker_reference_scores_ten(marker_fs):
+    marker = MarkerGenerator(marker_fs, 100, (500, 5000), -6).generate()
+    engine = AlignmentEngine(marker_fs, 1, False, 20, 100)
+    reference_psr = engine.reference_psr(marker)
+    reference_db = 20 * np.log10(reference_psr)
+
+    impulse = np.zeros(marker_fs)
+    impulse[100] = 1.0
+    metrics = DSPVerificationTool(marker_fs).calculate_metrics(
+        impulse, impulse, reference_psr, reference_psr
+    )
+    assert metrics['psr_db'] == pytest.approx(reference_db)
+    assert metrics['psr_reference_db'] == pytest.approx(reference_db)
+    assert metrics['alignment_score_10'] == 10.0
+
+
+@pytest.mark.parametrize('first_only', [False, True])
+def test_alignment_reports_weakest_assessed_repeat(fs, tmp_path, monkeypatch, first_only):
+    monkeypatch.chdir(tmp_path)
+    marker = MarkerGenerator(fs, 100, (500, 5000), -6).generate()
+    slot, pre, length, delay = 24000, 2400, 12000, 80
+    loop = np.zeros(pre + 3 * slot)
+    starts = [pre + delay + i * slot for i in range(3)]
+    for start in starts:
+        loop[start:start + len(marker)] = marker
+    # Add an ambiguous echo only to the final marker, outside its timing search.
+    competitor = starts[-1] + 900
+    loop[competitor:competitor + len(marker)] += .65 * marker
+    mic = np.zeros_like(loop)
+    for start in starts:
+        mic[start + 100] = 1
+    engine = AlignmentEngine(fs, 3, first_only, 20, 100)
+    expected_scores = [engine._matched_filter_detect(loop, marker, s - 240, s + 240)[2]
+                       for s in starts]
+    _, _, slices, psr = engine.sync_and_average(mic, loop, marker, pre, slot, length)
+    assert [int(np.argmax(x)) for x in slices] == [100, 100, 100]
+    if first_only:
+        first_score = engine._matched_filter_detect(loop, marker, search_end=pre + slot // 2)[2]
+        assert psr == first_score
+    else:
+        assert psr == min(expected_scores) == expected_scores[-1]
+        assert psr < 2.5 < expected_scores[0]
+
+
 def test_deconvolution_separation_functional(fs):
     dur_s = 0.5
     f1 = 20.0

@@ -1,4 +1,20 @@
 --------
+17/10/26
+--------
+Fixed marker alignment quality reporting (#43). PSR now uses the same
+marker-length comparison region in both alignment modes, including when the
+marker is at the edge of its timing search. If there is not enough data to
+calculate a score, it reports zero instead of 99 or infinity. Per-sweep
+alignment reports the lowest value among repeats.
+
+PSR score replaced with marker clarity in dB,
+the ideal digital-loopback reference and a relative score out of 10. The initial
+search now stops halfway through the first sweep slot, keeping out the following
+marker even with zero latency.
+
+Added regression tests.
+
+--------
 25/10/26
 --------
 Follow-up to lazy audio backend (PR #59): keep hardware initialization and
