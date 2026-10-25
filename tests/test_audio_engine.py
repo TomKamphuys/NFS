@@ -566,6 +566,9 @@ def test_audio_factory_accepts_comma_decimal_config_values(tmp_path):
 
     audio = AudioFactory.create(str(config_path))
 
+    assert audio.hw["wasapi_exclusive"] is False
+    assert audio.cap["debug_saves"] is False
+    assert audio.alignment_engine.align_to_first_marker is True
     assert audio.cap["sweep_dur_s"] == 0.5
     assert audio.cap["sweep_level_dbfs"] == -10.5
     assert audio.cap["pre_sil_ms"] == 50.5
@@ -574,6 +577,7 @@ def test_audio_factory_accepts_comma_decimal_config_values(tmp_path):
     assert audio.protection_filter.freq_hz == 500.5
     assert audio.protection_filter.hpf_corr_db_cap == 6.5
 
+    config["sweep"]["align_to_first_marker"] = "False"
     config.remove_option("sweep", "protect_hpf_corr_db_cap")
     fallback_config_path = tmp_path / "comma_config_fallback.ini"
     with open(fallback_config_path, "w", encoding="utf-8") as f:
@@ -581,6 +585,7 @@ def test_audio_factory_accepts_comma_decimal_config_values(tmp_path):
 
     audio = AudioFactory.create(str(fallback_config_path))
 
+    assert audio.alignment_engine.align_to_first_marker is False
     assert audio.protection_filter.hpf_corr_db_cap == 12.0
 
 
@@ -734,3 +739,20 @@ def test_audio_factory_resolves_saved_identity_without_configured_ids(mock_catal
 
     assert audio.hw["dev_in"] == 20
     assert audio.hw["dev_out"] == 20
+
+
+@pytest.mark.parametrize('value,expected', [
+    ('False', False), ('false # disabled', False), ('0', False), ('off', False),
+    ('True', True), ('1', True), ('yes', True), ('ON ; enabled', True),
+])
+def test_audio_factory_parses_boolean_settings(value, expected):
+    config = configparser.ConfigParser()
+    config['sweep'] = {'debug_saves': value}
+    assert AudioFactory._get_required_config(config, 'sweep', 'debug_saves', bool) is expected
+
+
+def test_audio_factory_rejects_invalid_boolean():
+    config = configparser.ConfigParser()
+    config['sweep'] = {'debug_saves': 'perhaps'}
+    with pytest.raises(ValueError, match='Not a boolean'):
+        AudioFactory._get_required_config(config, 'sweep', 'debug_saves', bool)
