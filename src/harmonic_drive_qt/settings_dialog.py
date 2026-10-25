@@ -192,6 +192,8 @@ class SettingsDialog(QDialog):
 
     def _populate_tabs(self) -> None:
         self.tabs.clear()
+        if not self.parser.has_section("app"):
+            self.parser.add_section("app")
         for section in EDITABLE_SCHEMA:
             if self.parser.has_section(section) and section not in CONFIG_EDITOR_HIDDEN_SECTIONS:
                 self._add_tab(section)
@@ -334,8 +336,10 @@ class SettingsDialog(QDialog):
             if visible_keys is not None and key not in visible_keys:
                 continue
             is_rft = section == "scanner" and key == "reflection_free_time_ms"
-            if not self.parser.has_option(section, key) and not is_rft: continue
-            raw = _strip_inline_comment(self.parser.get(section, key, fallback="0"))
+            is_preview = section == "app" and key == "show_motion_preview"
+            if not self.parser.has_option(section, key) and not (is_rft or is_preview): continue
+            fallback = "True" if is_preview else "0"
+            raw = _strip_inline_comment(self.parser.get(section, key, fallback=fallback))
             label = DISPLAY_LABELS.get(key, key.replace('_', ' ').capitalize())
             field, row = self._add_field(layout, section, key, label, kind, raw, options)
             if is_rft:

@@ -3,6 +3,7 @@ from __future__ import annotations
 import configparser
 import math
 from abc import ABC, abstractmethod
+from pathlib import Path
 from loguru import logger
 from nfs import factory
 from nfs import registry
@@ -1054,8 +1055,19 @@ class MotionManagerFactory:
         config_parser = configparser.ConfigParser(inline_comment_prefixes="#")
         config_parser.read(config_file)
 
+        recovery = (
+            f" Configuration: {Path(config_file).resolve()}. Back up this file, then correct "
+            "the indicated section/key in Settings or the configuration file. "
+            "Verify keep-out geometry before scanning; legacy safe_radius is not a keep-out volume. "
+            "Do not restore factory defaults over machine calibration."
+        )
+
         # Try to get measurement points config from a referenced section OR directly from the current section
         measurement_points_section_name = config_parser.get(section, 'measurement_points', fallback=None)
+        if measurement_points_section_name and not config_parser.has_section(measurement_points_section_name):
+            raise SafetyConfigurationError(
+                f"[{section}] measurement_points references missing section "
+                f"[{measurement_points_section_name}]." + recovery)
 
         # Keys that belong to the motion manager itself (not to the measurement
         # points) and must never be forwarded to the measurement-points factory.
@@ -1075,7 +1087,20 @@ class MotionManagerFactory:
             for key in motion_manager_only_keys:
                 item.pop(key, None)
 
-        measurement_points = factory.create(item)
+        # safe_radius was a motion retract distance, not measurement-point data.
+        # Never translate it into guessed no-fly geometry or modify the source file.
+        if 'safe_radius' in item or config_parser.has_option(section, 'safe_radius'):
+            item.pop('safe_radius', None)
+            logger.warning(
+                f"Ignoring obsolete safe_radius in {config_file}; "
+                "explicit current keep-out settings are still required.")
+        try:
+            measurement_points = factory.create(item)
+        except (TypeError, ValueError, KeyError) as exc:
+            raise SafetyConfigurationError(
+                f"Invalid measurement-point configuration in "
+                f"[{measurement_points_section_name or section}]: {exc}." + recovery
+            ) from exc
 
         motion_manager_type = config_parser.get(section, 'type')
 
@@ -1089,22 +1114,22 @@ class MotionManagerFactory:
         def _read_required_float(key: str, sec: str = section) -> float:
             if not config_parser.has_option(sec, key):
                 raise SafetyConfigurationError(
-                    f"Missing required safety parameter '{key}' in section [{sec}]."
+                    f"Missing required safety parameter '{key}' in section [{sec}]." + recovery
                 )
             raw = config_parser.get(sec, key, fallback='').strip()
             if not raw or raw.lower() == 'none':
                 raise SafetyConfigurationError(
-                    f"Missing value for required safety parameter '{key}' in section [{sec}]."
+                    f"Missing value for required safety parameter '{key}' in section [{sec}]." + recovery
                 )
             try:
                 val = float(raw)
             except ValueError as err:
                 raise SafetyConfigurationError(
-                    f"Invalid non-numeric value for safety parameter '{key}' in section [{sec}]: {raw!r}"
+                    f"Invalid non-numeric value for safety parameter '{key}' in section [{sec}]: {raw!r}" + recovery
                 ) from err
             if not math.isfinite(val):
                 raise SafetyConfigurationError(
-                    f"Safety parameter '{key}' in section [{sec}] must be finite, got {val}."
+                    f"Safety parameter '{key}' in section [{sec}] must be finite, got {val}." + recovery
                 )
             return val
 
@@ -1118,15 +1143,27 @@ class MotionManagerFactory:
                 bot_z = _read_required_float('bot_z', sec='dut_volume')
                 z_min = min(top_z, bot_z)
                 z_max = max(top_z, bot_z)
-                return CylindricalNoFlyZone(top_r, z_min, z_max)
+                try:
+                    return CylindricalNoFlyZone(top_r, z_min, z_max)
+                except SafetyConfigurationError as exc:
+                    raise SafetyConfigurationError(
+                        f"Invalid [dut_volume] top_r/top_z/bot_z: {exc}." + recovery) from exc
             r_wall = _read_required_float('no_fly_radius')
             z_min = _read_required_float('no_fly_z_min')
             z_max = _read_required_float('no_fly_z_max')
-            return CylindricalNoFlyZone(r_wall, z_min, z_max)
+            try:
+                return CylindricalNoFlyZone(r_wall, z_min, z_max)
+            except SafetyConfigurationError as exc:
+                raise SafetyConfigurationError(
+                    f"Invalid [{section}] no_fly_radius/no_fly_z_min/no_fly_z_max: {exc}." + recovery) from exc
 
         def _read_spherical_no_fly_zone() -> SphericalNoFlyZone:
             radius = _read_required_float('no_fly_radius')
-            return SphericalNoFlyZone(radius)
+            try:
+                return SphericalNoFlyZone(radius)
+            except SafetyConfigurationError as exc:
+                raise SafetyConfigurationError(
+                    f"Invalid [{section}] no_fly_radius: {exc}." + recovery) from exc
 
         if config_parser.getboolean(section, 'optimize_point_order', fallback=False):
             from .point_ordering import OptimizedMeasurementPoints

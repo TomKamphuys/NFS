@@ -15,6 +15,47 @@ def _app():
     return QApplication.instance() or QApplication([])
 
 
+@pytest.mark.parametrize('app_config', ['', '[app]\nauto_hide_left_menu = False\n'])
+def test_missing_preview_option_is_accessible_without_writing_config(tmp_path, app_config):
+    _app()
+    config_file = tmp_path / 'config.ini'
+    config_file.write_text(app_config, encoding='utf-8')
+    dialog = SettingsDialog(str(config_file), lambda changed: None)
+    assert 'app' in dialog.tab_sections
+    checkbox, _kind = dialog.inputs[('app', 'show_motion_preview')]
+    assert checkbox.isChecked()
+    dialog.reject()
+    assert config_file.read_text(encoding='utf-8') == app_config
+
+
+@pytest.mark.parametrize('enabled', [False, True])
+def test_preview_setting_preserves_explicit_choice(tmp_path, enabled):
+    _app()
+    config_file = tmp_path / 'config.ini'
+    config_file.write_text(f'[app]\nshow_motion_preview = {enabled}\n', encoding='utf-8')
+    dialog = SettingsDialog(str(config_file), lambda changed: None)
+    checkbox, _kind = dialog.inputs[('app', 'show_motion_preview')]
+    assert checkbox.isChecked() == enabled
+    dialog.reject()
+
+
+@pytest.mark.parametrize('enabled', [False, True])
+def test_preview_can_be_enabled_and_saved_in_legacy_config(tmp_path, enabled):
+    _app()
+    config_file = tmp_path / 'config.ini'
+    config_file.write_text('[calibration]\ncustom_value = 123\n', encoding='utf-8')
+    callback = Mock()
+    dialog = SettingsDialog(str(config_file), callback)
+    checkbox, _kind = dialog.inputs[('app', 'show_motion_preview')]
+    checkbox.setChecked(enabled)
+    dialog.save()
+    reopened = SettingsDialog(str(config_file), lambda changed: None)
+    assert reopened.inputs[('app', 'show_motion_preview')][0].isChecked() == enabled
+    assert reopened.parser.get('calibration', 'custom_value') == '123'
+    assert 'app' in callback.call_args.args[0]
+    reopened.reject()
+
+
 def test_settings_dialog_fixes_motion_manager_and_measurement_points_type(tmp_path):
     _app()
     config_file = tmp_path / "config.ini"

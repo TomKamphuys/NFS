@@ -14,6 +14,75 @@ from nfs.plugins.file_measurement_points import FileMeasurementPoints
 from nfs import loader
 
 
+@pytest.mark.parametrize('referenced', [False, True])
+@pytest.mark.parametrize('valid_safety', [False, True])
+@pytest.mark.parametrize('manager_type', [
+    'CylindricalMeasurementMotionManager',
+    'FastCylindricalMeasurementMotionManager',
+    'SphericalMeasurementMotionManager',
+])
+def test_legacy_safe_radius_preserves_safety(tmp_path, referenced, valid_safety, manager_type):
+    config_file = tmp_path / 'legacy.ini'
+    config = configparser.ConfigParser()
+    config['plugins'] = {'file': 'nfs.plugins.file_measurement_points'}
+    config['motion_manager'] = {
+        'type': manager_type, 'safe_radius': '500',
+    }
+    if valid_safety:
+        config['motion_manager'].update({
+            'no_fly_radius': '101', 'no_fly_z_min': '0', 'no_fly_z_max': '400',
+        })
+    points = {
+        'measurement_points_type': 'FileMeasurementPoints',
+        'filename': str(tmp_path / 'points.csv'), 'safe_radius': '500',
+    }
+    if referenced:
+        config['motion_manager']['measurement_points'] = 'points'
+        config['points'] = points
+    else:
+        config['motion_manager'].update(points)
+    with config_file.open('w') as stream:
+        config.write(stream)
+    original = config_file.read_bytes()
+    loader.load_plugins(str(config_file), 'plugins')
+    scanner = Mock()
+    if valid_safety:
+        for _ in range(2):
+            manager = MotionManagerFactory.create(str(config_file), 'motion_manager', scanner)
+            assert manager._no_fly_zone.retract_radius == 101
+    else:
+        with pytest.raises(SafetyConfigurationError) as error:
+            MotionManagerFactory.create(str(config_file), 'motion_manager', scanner)
+        assert str(config_file) in str(error.value)
+        assert 'no_fly_radius' in str(error.value)
+        assert 'motion_manager' in str(error.value)
+    assert scanner.mock_calls == []
+    assert config_file.read_bytes() == original
+
+
+@pytest.mark.parametrize('options, expected_key', [
+    ('measurement_points = missing_section\n', 'measurement_points'),
+    ('unexpected_option = 12\n', 'unexpected_option'),
+    ('no_fly_radius = -1\n', 'no_fly_radius'),
+])
+def test_configuration_diagnostics_identify_file_and_key(tmp_path, options, expected_key):
+    config_file = tmp_path / 'project.ini'
+    config_file.write_text(
+        '[plugins]\nfile = nfs.plugins.file_measurement_points\n'
+        '[motion_manager]\ntype = CylindricalMeasurementMotionManager\n'
+        'measurement_points_type = FileMeasurementPoints\nfilename = absent.csv\n'
+        'no_fly_z_min = 0\nno_fly_z_max = 400\n' + options,
+        encoding='utf-8')
+    loader.load_plugins(str(config_file), 'plugins')
+    with pytest.raises(SafetyConfigurationError) as error:
+        MotionManagerFactory.create(str(config_file), 'motion_manager', Mock())
+    message = str(error.value)
+    assert str(config_file) in message
+    assert '[motion_manager]' in message
+    assert expected_key in message
+    assert 'Back up' in message
+
+
 def test_motion_manager_factory_direct_config(tmp_path):
     config_file = tmp_path / "test_config.ini"
     config = configparser.ConfigParser()

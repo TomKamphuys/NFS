@@ -219,7 +219,7 @@ class MainWindow(QMainWindow):
         self.motion_preview_button = self._menu_button(
             "Motion Preview", self.show_motion_preview)
         self.motion_preview_button.setVisible(
-            _config_bool(self.config_file, "app", "show_motion_preview", False))
+            _config_bool(self.config_file, "app", "show_motion_preview", True))
         buttons.append(self.motion_preview_button)
         buttons.extend((self.settings_button, self.shutdown_button))
         for button in buttons:
@@ -250,7 +250,7 @@ class MainWindow(QMainWindow):
     def _refresh_motion_preview_visibility(self) -> None:
         if hasattr(self, "motion_preview_button"):
             self.motion_preview_button.setVisible(
-                _config_bool(self.config_file, "app", "show_motion_preview", False))
+                _config_bool(self.config_file, "app", "show_motion_preview", True))
 
     def _apply_menu_auto_hide(self, initial: bool = False) -> None:
         self.menu_auto_hide = _config_bool(self.config_file, "app", "auto_hide_left_menu", False)
