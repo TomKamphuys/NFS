@@ -10,6 +10,7 @@ Note: This one
 
 import numpy as np
 import pandas as pd
+from loguru import logger
 
 def calculate_geometry_from_cylindrical_waypoints(top_crit_pos, bot_crit_pos):
     """
@@ -206,19 +207,19 @@ def generate_measurement_grid(
         side_area = 2.0 * np.pi * cyl_radius * cyl_height_working
         cap_area  = 2.0 * np.pi * cyl_radius**2
         cap_fraction_eff = cap_area / (side_area + cap_area)
-        print(f"cap_fraction = Auto (None) → computed cap fraction = {cap_fraction_eff:.4f}")
+        logger.info(f"cap_fraction = Auto (None) → computed cap fraction = {cap_fraction_eff:.4f}")
     elif isinstance(cap_fraction, (int, float)):
         cap_fraction_eff = float(cap_fraction)
         if not (0.0 <= cap_fraction_eff <= 1.0):
             raise ValueError("cap_fraction must be in [0, 1] or None")
-        print(f"cap_fraction (manual) = {cap_fraction_eff:.4f}")
+        logger.info(f"cap_fraction (manual) = {cap_fraction_eff:.4f}")
     else:
         raise TypeError("cap_fraction must be None (Auto) or a float in [0, 1]")
 
     # ===============================
     # Deterministic Generation
     # ===============================
-    print("Generating Variable Density Grid (Hash + Cylindrical Expansion)...")
+    logger.info("Generating Variable Density Grid (Hash + Cylindrical Expansion)...")
 
     if generate_reverse_spiral:
         pts_forward = (num_points + 1) // 2
@@ -409,7 +410,7 @@ if __name__ == "__main__":
 
     cyl_df = pd.DataFrame(grid_dict)
     cyl_df.to_csv(OUTPUT_GRID_GEN, index=False)
-    print(
+    logger.info(
         f"Saved {OUTPUT_GRID_GEN} "
         f"(phi {phi_min_deg:.1f}…{phi_max_deg:.1f}°, mm units)"
     )

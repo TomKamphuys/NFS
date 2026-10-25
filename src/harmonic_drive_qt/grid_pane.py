@@ -165,6 +165,14 @@ class GridGeneratorPane(QWidget):
         scroll.setWidget(content_widget)
         root.addWidget(scroll)
 
+        # We construct form inputs first
+        self._init_waypoint_inputs()
+        self.output_filename = QLineEdit(project.get_grid_filename())
+
+        # DUT Volume Card
+        dut_card = self._build_dut_volume_card()
+        content_layout.addWidget(dut_card)
+
         # Main Card for Generation
         gen_card = QFrame()
         gen_card.setObjectName("Card")
@@ -189,10 +197,6 @@ class GridGeneratorPane(QWidget):
         form_block.setSpacing(8)
         form_row = QHBoxLayout()
         form_row.setSpacing(4)
-        
-        # We need to construct the form groups first so we can place them
-        self._init_waypoint_inputs()
-        self.output_filename = QLineEdit(project.get_grid_filename())
         
         left_col = QVBoxLayout()
         right_col = QVBoxLayout()
@@ -319,9 +323,39 @@ class GridGeneratorPane(QWidget):
         self.viewer_widget = widget
 
     def _init_waypoint_inputs(self) -> None:
+        self.dut_inputs: dict[str, tuple[QLineEdit, QLineEdit, QLineEdit]] = {}
         self.waypoint_inputs: dict[str, tuple[QLineEdit, QLineEdit, QLineEdit]] = {}
+        self.slave_top = True
+        self.slave_bottom = True
+        self.slave_checkboxes: dict[str, QCheckBox] = {}
         self.extra_position_rows: list[dict[str, object]] = []
         self.pending_extra_positions: list[dict] = []
+
+        parser = configparser.ConfigParser(inline_comment_prefixes=("#", ";"))
+        parser.read(self.config_file)
+        has_dut_section = parser.has_section("dut_volume")
+        top_r = parser.get("dut_volume", "top_r", fallback="200.0") if has_dut_section else ""
+        top_phi = parser.get("dut_volume", "top_phi", fallback="45.0") if has_dut_section else ""
+        top_z = parser.get("dut_volume", "top_z", fallback="350.0") if has_dut_section else ""
+        bot_r = parser.get("dut_volume", "bot_r", fallback="40.0") if has_dut_section else ""
+        bot_phi = parser.get("dut_volume", "bot_phi", fallback="0.0") if has_dut_section else ""
+        bot_z = parser.get("dut_volume", "bot_z", fallback="-50.0") if has_dut_section else ""
+
+        self.dut_inputs["top"] = (
+            self._optional_coord(top_r),
+            self._optional_coord(top_phi),
+            self._optional_coord(top_z),
+        )
+        self.dut_inputs["bottom"] = (
+            self._optional_coord(bot_r),
+            self._optional_coord(bot_phi),
+            self._optional_coord(bot_z),
+        )
+
+        for dut_k in ("top", "bottom"):
+            for edit in self.dut_inputs[dut_k]:
+                edit.textEdited.connect(lambda _text, k=dut_k: self._on_dut_input_edited(k))
+
         rows = [
             ("Top", "top", "wp_top", 200.0, 45.0, 350.0),
             ("Bottom", "bottom", "wp_bot", 40.0, 0.0, -50.0),
@@ -334,16 +368,204 @@ class GridGeneratorPane(QWidget):
         grid_vars = project.get_project_data().get("grid_vars", {})
         grid_vars = grid_vars if isinstance(grid_vars, dict) else {}
         for (_label, key, saved_key, _r_default, _phi_default, _z_default) in rows:
-            r = self._optional_coord(grid_vars.get(f"{saved_key}_r"))
-            phi = self._optional_coord(grid_vars.get(f"{saved_key}_phi"))
-            z = self._optional_coord(grid_vars.get(f"{saved_key}_z"))
+            saved_r = grid_vars.get(f"{saved_key}_r")
+            saved_phi = grid_vars.get(f"{saved_key}_phi")
+            saved_z = grid_vars.get(f"{saved_key}_z")
+            if key in ("top", "bottom"):
+                if saved_r is not None or saved_phi is not None or saved_z is not None:
+                    r = self._optional_coord(saved_r)
+                    phi = self._optional_coord(saved_phi)
+                    z = self._optional_coord(saved_z)
+                    dut_r_txt = self.dut_inputs[key][0].text().strip()
+                    dut_phi_txt = self.dut_inputs[key][1].text().strip()
+                    dut_z_txt = self.dut_inputs[key][2].text().strip()
+                    if (r.text().strip() != dut_r_txt or
+                            phi.text().strip() != dut_phi_txt or
+                            z.text().strip() != dut_z_txt):
+                        if key == "top":
+                            self.slave_top = False
+                        else:
+                            self.slave_bottom = False
+                else:
+                    dut_r, dut_phi, dut_z = self.dut_inputs[key]
+                    r = self._optional_coord(dut_r.text())
+                    phi = self._optional_coord(dut_phi.text())
+                    z = self._optional_coord(dut_z.text())
+            else:
+                r = self._optional_coord(saved_r)
+                phi = self._optional_coord(saved_phi)
+                z = self._optional_coord(saved_z)
             self.waypoint_inputs[key] = (r, phi, z)
+            if key in ("top", "bottom"):
+                for edit in (r, phi, z):
+                    edit.textEdited.connect(lambda _text, k=key: self._break_slave(k))
             
         saved_positions = grid_vars.get("user_positions")
         if isinstance(saved_positions, list):
             for position in saved_positions:
                 if isinstance(position, dict):
                     self.pending_extra_positions.append(position)
+
+    def _build_dut_volume_card(self) -> QFrame:
+        dut_card = QFrame()
+        dut_card.setObjectName("Card")
+        dut_layout = QVBoxLayout(dut_card)
+        dut_layout.setContentsMargins(20, 20, 20, 20)
+
+        title = QLabel("DUT Volume")
+        title.setStyleSheet("font-size: 20px; font-weight: 800; color: #000000; border: none;")
+        dut_layout.addWidget(title)
+
+        subtitle = QLabel("DUT Critical Waypoints - Defines the Cylindrical No-Fly Zone")
+        subtitle.setStyleSheet("font-size: 14px; font-weight: bold; color: #1e293b; border: none; margin-top: 8px;")
+        dut_layout.addWidget(subtitle)
+
+        desc = QLabel(
+            "Jog to position and click 'SET' or enter coordinates. Top and Bottom waypoints determine "
+            "the cylindrical keep-out volume and are saved in the configuration."
+        )
+        desc.setStyleSheet("color: #64748b; font-size: 12px; border: none;")
+        desc.setWordWrap(True)
+        dut_layout.addWidget(desc)
+        dut_layout.addSpacing(12)
+
+        form_row = QHBoxLayout()
+        form_row.setSpacing(4)
+        left_col = QVBoxLayout()
+        right_col = QVBoxLayout()
+        left_col.setSpacing(6)
+        right_col.setSpacing(6)
+
+        left_col.addWidget(self._build_dut_waypoint_row("Top Waypoint:", "top", "waypoint_top.png"))
+        right_col.addWidget(self._build_dut_waypoint_row("Bot Waypoint:", "bottom", "waypoint_bottom.png"))
+
+        form_row.addLayout(left_col, 1)
+        form_row.addLayout(right_col, 1)
+        dut_layout.addLayout(form_row)
+        return dut_card
+
+    def _build_dut_waypoint_row(self, title: str, key: str, help_image: str | None = None) -> QWidget:
+        w = QWidget()
+        w.setStyleSheet("background: #fbfdff; border: 1px solid #e2e8f0; border-radius: 4px;")
+        layout = QHBoxLayout(w)
+        layout.setContentsMargins(8, 5, 8, 5)
+        layout.setSpacing(8)
+        w.setFixedHeight(58)
+
+        label_box = QVBoxLayout()
+        label_box.setSpacing(1)
+        lbl = QLabel(title.rstrip(":"))
+        lbl.setStyleSheet("font-weight: bold; font-size: 12px; color: #0f172a; border: none;")
+        lbl.setFixedWidth(104)
+        diagram = DiagramLabel("DIAGRAM", self._diagram_path(help_image))
+        diagram.setStyleSheet("font-weight: bold; font-size: 9px; color: #3978bd; border: none;")
+        diagram.setFixedWidth(104)
+        label_box.addWidget(lbl)
+        label_box.addWidget(diagram)
+        layout.addLayout(label_box)
+
+        r, phi, z = self.dut_inputs[key]
+
+        for name, spin in [("Radius (mm)", r), ("Phi (deg)", phi), ("Height (mm)", z)]:
+            sl = QVBoxLayout()
+            sl.setSpacing(0)
+            sl_lbl = QLabel(name)
+            sl_lbl.setStyleSheet("color: #64748b; font-size: 10px; font-weight: 800; border: none;")
+            spin.setMinimumWidth(72)
+            spin.setStyleSheet("border: none; border-bottom: 1px solid #cbd5e1; background: transparent; font-size: 12px;")
+            sl.addWidget(sl_lbl)
+            sl.addWidget(spin)
+            layout.addLayout(sl, 1)
+
+        btn = QPushButton("SET")
+        primary_button(btn)
+        btn.setFixedSize(62, 32)
+        btn.clicked.connect(lambda _=False, k=key: self._set_dut_waypoint_from_scanner(k))
+        layout.addWidget(btn)
+        return w
+
+    def _on_dut_input_edited(self, key: str) -> None:
+        self._save_dut_volume_to_config()
+        self._sync_slaved_grid_waypoint(key)
+
+    def _sync_slaved_grid_waypoint(self, key: str) -> None:
+        if key == "top" and self.slave_top:
+            dut_r, dut_phi, dut_z = self.dut_inputs["top"]
+            grid_r, grid_phi, grid_z = self.waypoint_inputs["top"]
+            grid_r.setText(dut_r.text())
+            grid_phi.setText(dut_phi.text())
+            grid_z.setText(dut_z.text())
+        elif key == "bottom" and self.slave_bottom:
+            dut_r, dut_phi, dut_z = self.dut_inputs["bottom"]
+            grid_r, grid_phi, grid_z = self.waypoint_inputs["bottom"]
+            grid_r.setText(dut_r.text())
+            grid_phi.setText(dut_phi.text())
+            grid_z.setText(dut_z.text())
+
+    def _on_slave_toggled(self, key: str, checked: bool) -> None:
+        if key == "top":
+            self.slave_top = checked
+            if checked:
+                self._sync_slaved_grid_waypoint("top")
+        elif key == "bottom":
+            self.slave_bottom = checked
+            if checked:
+                self._sync_slaved_grid_waypoint("bottom")
+
+    def _break_slave(self, key: str) -> None:
+        if key == "top":
+            self.slave_top = False
+            if "top" in self.slave_checkboxes:
+                self.slave_checkboxes["top"].blockSignals(True)
+                self.slave_checkboxes["top"].setChecked(False)
+                self.slave_checkboxes["top"].blockSignals(False)
+        elif key == "bottom":
+            self.slave_bottom = False
+            if "bottom" in self.slave_checkboxes:
+                self.slave_checkboxes["bottom"].blockSignals(True)
+                self.slave_checkboxes["bottom"].setChecked(False)
+                self.slave_checkboxes["bottom"].blockSignals(False)
+
+    def _set_dut_waypoint_from_scanner(self, key: str) -> None:
+        pos = self.backend.get_position()
+        if pos is None:
+            QMessageBox.warning(self, "Scanner", "No scanner position is available.")
+            return
+        r, phi, z = self.dut_inputs[key]
+        r.setText(f"{float(pos.r()):.1f}")
+        phi.setText(f"{float(pos.t()):.1f}")
+        z.setText(f"{float(pos.z()):.1f}")
+        self._save_dut_volume_to_config()
+        self._sync_slaved_grid_waypoint(key)
+
+    def _save_dut_volume_to_config(self) -> None:
+        parser = configparser.ConfigParser(inline_comment_prefixes=("#", ";"))
+        parser.optionxform = str  # type: ignore[assignment]
+        parser.read(self.config_file)
+        if not parser.has_section("dut_volume"):
+            parser.add_section("dut_volume")
+        top_r, top_phi, top_z = self.dut_inputs["top"]
+        bot_r, bot_phi, bot_z = self.dut_inputs["bottom"]
+        dut_vars = {
+            "top_r": top_r.text().strip(),
+            "top_phi": top_phi.text().strip(),
+            "top_z": top_z.text().strip(),
+            "bot_r": bot_r.text().strip(),
+            "bot_phi": bot_phi.text().strip(),
+            "bot_z": bot_z.text().strip(),
+        }
+        for k, v in dut_vars.items():
+            if v:
+                parser.set("dut_volume", k, v)
+            elif parser.has_option("dut_volume", k):
+                # Remove the option so stale values don't persist when a field is cleared
+                parser.remove_option("dut_volume", k)
+        try:
+            with open(self.config_file, "w", encoding="utf-8") as f:
+                parser.write(f)
+        except OSError:
+            pass
+        project.update_dut_volume(dut_vars)
                     
     def _diagram_path(self, image_name: str | None) -> Path | None:
         if not image_name:
@@ -385,6 +607,14 @@ class GridGeneratorPane(QWidget):
             sl.addWidget(sl_lbl)
             sl.addWidget(spin)
             layout.addLayout(sl, 1)
+
+        if key in ("top", "bottom"):
+            slave_cb = QCheckBox("Slave")
+            slave_cb.setStyleSheet("border: none; font-size: 11px; font-weight: bold; color: #475569;")
+            slave_cb.setChecked(self.slave_top if key == "top" else self.slave_bottom)
+            slave_cb.toggled.connect(lambda checked, k=key: self._on_slave_toggled(k, checked))
+            self.slave_checkboxes[key] = slave_cb
+            layout.addWidget(slave_cb)
             
         btn = QPushButton("SET")
         primary_button(btn)
@@ -765,6 +995,8 @@ class GridGeneratorPane(QWidget):
         r.setText(f"{float(pos.r()):.1f}")
         phi.setText(f"{float(pos.t()):.1f}")
         z.setText(f"{float(pos.z()):.1f}")
+        if key in ("top", "bottom"):
+            self._break_slave(key)
 
     def _set_extra_position_from_scanner(self, row: dict[str, object]) -> None:
         pos = self.backend.get_position()

@@ -52,7 +52,6 @@ from .utils.dsp import DSPUtils
 # Enable ASIO build of PortAudio in python-sounddevice (Windows).
 # This environment variable triggers the loading of ASIO drivers if available.
 os.environ["SD_ENABLE_ASIO"] = "1"
-import sounddevice as sd  # noqa: E402
 
 
 _METER_EPS = 1e-12
@@ -487,12 +486,18 @@ def get_devices_and_channels() -> dict:
     Channel indices are 0-based because they are used directly as sounddevice
     stream buffer indices.
     """
-    # Hard refresh PortAudio state to catch any recent device changes
-    sd._terminate()
-    sd._initialize()
+    try:
+        import sounddevice as sd  # noqa: E402
 
-    apis = sd.query_hostapis()
-    devs = sd.query_devices()
+        # Hard refresh PortAudio state to catch any recent device changes
+        sd._terminate()
+        sd._initialize()
+
+        apis = sd.query_hostapis()
+        devs = sd.query_devices()
+    except Exception as exc:
+        logger.warning("Unable to discover audio devices: {}", exc)
+        return {}
 
     device_catalog = {}
 
@@ -526,6 +531,12 @@ def get_supported_sample_rates(input_device_id: Optional[int], output_device_id:
     PortAudio does not expose a guaranteed exhaustive list for every host API, so
     probe standard audio rates and keep those accepted by all selected devices.
     """
+    try:
+        import sounddevice as sd  # noqa: E402
+    except Exception as exc:
+        logger.warning("Unable to discover supported audio sample rates: {}", exc)
+        return []
+
     common_rates = [44100, 48000, 88200, 96000, 176400, 192000]
     supported = []
 
@@ -642,7 +653,7 @@ class DSPVerificationTool:
     Provides automated verification of SNR, THD, and Timing Jitter.
     """
 
-    def __init__(self, fs: int):
+    def __init__(self, fs: int) -> None:
         """
         Initialize the DSP verification tool.
 
@@ -716,7 +727,7 @@ class MarkerGenerator:
     superior to simple pulses for synchronization in noisy environments.
     """
 
-    def __init__(self, fs: int, dur_ms: float, bw_hz: Tuple[float, float], level_dbfs: float):
+    def __init__(self, fs: int, dur_ms: float, bw_hz: Tuple[float, float], level_dbfs: float) -> None:
         """
         Initialize the marker generator.
 
@@ -776,7 +787,7 @@ class SweepGenerator:
       3. A 'clean' Inverse Filter using Time Reversal of the fundamental.
     """
 
-    def __init__(self, fs: int, duration_s: float, f1: float, level_dbfs: float):
+    def __init__(self, fs: int, duration_s: float, f1: float, level_dbfs: float) -> None:
         """
         Initialize the sweep generator.
 
@@ -829,7 +840,7 @@ class SweepGenerator:
 class HarmonicInjector:
     """Injects H2/H3 distortions using the sweep's phase array."""
 
-    def __init__(self, h2_db: Optional[float] = None, h3_db: Optional[float] = None):
+    def __init__(self, h2_db: Optional[float] = None, h3_db: Optional[float] = None) -> None:
         """
         Initialize the harmonic injector.
 
@@ -846,12 +857,12 @@ class HarmonicInjector:
         # Adds artificial distortion to verify that the Farina separation logic works.
         if self.h2_db is not None:
             amp_h2 = DSPUtils.db_to_lin(self.h2_db)
-            logger.info(f"► INJECTING H2 @ {self.h2_db} dB")
+            logger.debug(f"► INJECTING H2 @ {self.h2_db} dB")
             s_composite += amp_h2 * np.sin(2 * phase)
 
         if self.h3_db is not None:
             amp_h3 = DSPUtils.db_to_lin(self.h3_db)
-            logger.info(f"► INJECTING H3 @ {self.h3_db} dB")
+            logger.debug(f"► INJECTING H3 @ {self.h3_db} dB")
             s_composite += amp_h3 * np.sin(3 * phase)
 
         return s_composite
@@ -860,7 +871,7 @@ class HarmonicInjector:
 class ProtectionFilter:
     """Applies MIN phase HPF to protect drivers, and generates an inverse correction mask."""
 
-    def __init__(self, fs: int, freq_hz: float, order: int, hpf_correction: bool = False, hpf_corr_db_cap: float = 12.0):
+    def __init__(self, fs: int, freq_hz: float, order: int, hpf_correction: bool = False, hpf_corr_db_cap: float = 12.0) -> None:
         """
         Initialize the protection filter.
 
@@ -887,7 +898,7 @@ class ProtectionFilter:
         if self.sos is None:
             return sig
 
-        logger.info(f"► Applying Protection HPF: {self.freq_hz}Hz, Order={self.order} (Min Phase)")
+        logger.debug(f"► Applying Protection HPF: {self.freq_hz}Hz, Order={self.order} (Min Phase)")
         return scipy.signal.sosfilt(self.sos, sig).astype(np.float32)
 
     def get_correction_mask(self, n_bins: int) -> np.ndarray:
@@ -898,7 +909,7 @@ class ProtectionFilter:
         if self.sos is None or not self.hpf_correction:
             return np.ones(n_bins, dtype=np.complex64)
 
-        logger.info(f"► Generating HPF Correction Mask (Max Gain: +{self.hpf_corr_db_cap}dB)")
+        logger.debug(f"► Generating HPF Correction Mask (Max Gain: +{self.hpf_corr_db_cap}dB)")
 
         # 1. Calculate the exact complex frequency response of the applied IIR filter
         _, H = scipy.signal.sosfreqz(self.sos, worN=n_bins, fs=self.fs)
@@ -1090,7 +1101,7 @@ class AlignmentEngine:
 class DeconvolutionEngine:
     """Handles FFT deconvolution, spectral masking, and Farina separation."""
 
-    def __init__(self, fs: int):
+    def __init__(self, fs: int) -> None:
         """
         Initialize the deconvolution engine.
 
@@ -1217,7 +1228,7 @@ class DeconvolutionEngine:
 
 class IAudio(ABC):
     @abstractmethod
-    def measure_ir(self, position: CylindricalPosition, order_id: str = "NA", save: bool = True):
+    def measure_ir(self, position: CylindricalPosition, order_id: str = "NA", save: bool = True) -> dict[str, Any]:
         pass
 
     @abstractmethod
@@ -1278,7 +1289,7 @@ class Audio(IAudio):
 
         self._log_config()
 
-    def _ensure_directories(self):
+    def _ensure_directories(self) -> None:
         self.rec_dir.mkdir(parents=True, exist_ok=True)
         self.dist_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1288,14 +1299,14 @@ class Audio(IAudio):
         else:
             self.debug_dir = None
 
-    def set_session_directory(self, session_path: Path):
+    def set_session_directory(self, session_path: Path) -> None:
         """Updates internal recording and debug directories to a measurement session path."""
         self.rec_dir = Path(session_path)
         self.dist_dir = self.rec_dir / "Distortion"
         self._ensure_directories()
         logger.debug(f"Audio session directory updated to: {session_path}")
 
-    def _log_config(self):
+    def _log_config(self) -> None:
         """Log the current hardware and capture configuration."""
         logger.info(
             f"Audio Config: FS={self.hw['fs']}, Sweeps={self.cap['num_sweeps']}, Dur={self.cap['sweep_dur_s']}s")
@@ -1308,6 +1319,8 @@ class Audio(IAudio):
         :param dev_index: Device index.
         :return: API name.
         """
+        import sounddevice as sd  # noqa: E402
+
         try:
             d = sd.query_devices(dev_index)
             return sd.query_hostapis()[d['hostapi']]['name'].upper()
@@ -1335,6 +1348,8 @@ class Audio(IAudio):
         Executes the playback and recording of the composite signal.
         Handles stream synchronization, multiple sweep averaging, and loopback alignment.
         """
+        import sounddevice as sd  # noqa: E402
+
         # 1. Generate Signals
         s_fund, phase, inv_sweep = self.sweep_gen.generate()
 
@@ -1486,7 +1501,7 @@ class Audio(IAudio):
             "psr": psr
         }
 
-    def measure_ir(self, position: CylindricalPosition, order_id: str = "NA", save: bool = True):
+    def measure_ir(self, position: CylindricalPosition, order_id: str = "NA", save: bool = True) -> dict[str, Any]:
         """
         Public entry point. Coordinates capture, processing, and file saving.
         """
@@ -1580,6 +1595,8 @@ class Audio(IAudio):
         :param level_dbfs: Level in dBFS.
         :param duration_s: Duration in seconds. If None, plays until stop_sine() is called.
         """
+        import sounddevice as sd  # noqa: E402
+
         self.stop_sine()
         self.update_sine_level(level_dbfs)
 
@@ -1749,6 +1766,8 @@ class Audio(IAudio):
 
     def stop_sine(self) -> None:
         """Stops any active sine wave playback."""
+        import sounddevice as sd  # noqa: E402
+
         if self._sine_stream is not None:
             logger.info("Stopping indefinite sine playback")
             try:
@@ -1855,7 +1874,7 @@ class MockInterfaceAudio(Audio):
             noise = np.random.normal(0, 1e-5, len(y))
             return (y + noise).astype(np.float32)
 
-        logger.info("► Loopback Mode: Applying CS4272 FIR, 15Hz HPF, and 20ms delay.")
+        logger.debug("► Loopback Mode: Applying CS4272 FIR, 15Hz HPF, and 20ms delay.")
         rec_mic = apply_hardware_sim(tx_sweep)
         rec_loop = apply_hardware_sim(tx_ref)
 
@@ -1881,16 +1900,16 @@ class MockInterfaceAudio(Audio):
         :param level_dbfs: Level in dBFS.
         :param duration_s: Duration in seconds. If None, plays until stop_sine() is called.
         """
-        logger.info(
+        logger.debug(
             f"[MOCK-INTERFACE] Playing sine: {frequency} Hz, {level_dbfs} dBFS, {'until stopped' if duration_s is None else f'for {duration_s} s'}")
         self.update_sine_level(level_dbfs)
 
     def update_sine_level(self, level_dbfs: float) -> None:
-        logger.info(f"[MOCK-INTERFACE] Updated sine level: {level_dbfs} dBFS")
+        logger.debug(f"[MOCK-INTERFACE] Updated sine level: {level_dbfs} dBFS")
 
     def stop_sine(self) -> None:
         """Stops sine playback."""
-        logger.info("[MOCK-INTERFACE] Stopped sine playback")
+        logger.debug("[MOCK-INTERFACE] Stopped sine playback")
         reset_audio_meter_state(active=False)
 
 
@@ -1901,15 +1920,16 @@ class MockInterfaceAudio(Audio):
 class AudioMock(IAudio):
     """Simulation class for when hardware is unavailable."""
 
-    def measure_ir(self, position: CylindricalPosition, order_id: str = "NA", save: bool = True) -> None:
+    def measure_ir(self, position: CylindricalPosition, order_id: str = "NA", save: bool = True) -> dict[str, Any]:
         """
         Measure the impulse response at a given position.
 
         :param position: The scanner position.
         :param order_id: An optional order ID for file naming.
         """
-        logger.info(f"[MOCK] Measured {position}, ID={order_id}")
+        logger.debug(f"[MOCK] Measured {position}, ID={order_id}")
         # time.sleep(1.0)  # Simulate sweep duration
+        return {}
 
     def play_sine(self, frequency: float, level_dbfs: float, duration_s: Optional[float] = 1.0) -> None:
         """
@@ -1919,16 +1939,16 @@ class AudioMock(IAudio):
         :param level_dbfs: Level in dBFS.
         :param duration_s: Duration in seconds. If None, plays until stop_sine() is called.
         """
-        logger.info(
+        logger.debug(
             f"[MOCK] Playing sine: {frequency} Hz, {level_dbfs} dBFS, {'until stopped' if duration_s is None else f'for {duration_s} s'}")
         self.update_sine_level(level_dbfs)
 
     def update_sine_level(self, level_dbfs: float) -> None:
-        logger.info(f"[MOCK] Updated sine level: {level_dbfs} dBFS")
+        logger.debug(f"[MOCK] Updated sine level: {level_dbfs} dBFS")
 
     def stop_sine(self) -> None:
         """Stops sine playback."""
-        logger.info("[MOCK] Stopped sine playback")
+        logger.debug("[MOCK] Stopped sine playback")
         reset_audio_meter_state(active=False)
 
 
@@ -1940,7 +1960,7 @@ class AudioFactory:
         return value.replace(",", ".")
 
     @staticmethod
-    def _get_required_config(config: configparser.ConfigParser, section: str, key: str, type_func):
+    def _get_required_config(config: configparser.ConfigParser, section: str, key: str, type_func: Any) -> Any:
         if not config.has_option(section, key):
             raise KeyError(f"Missing required config: [{section}] {key}")
         val = config.get(section, key).split('#')[0].split(';')[0].strip()
@@ -2097,5 +2117,7 @@ class AudioFactory:
 
 if __name__ == "__main__":
     # Helper to list devices if run directly
+    import sounddevice as sd  # noqa: E402
+
     print("\nAvailable Audio Devices:")
     print(sd.query_devices())

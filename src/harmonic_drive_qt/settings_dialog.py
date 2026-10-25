@@ -6,6 +6,7 @@ import shutil
 from pathlib import Path
 from typing import Callable
 
+
 from .config_support import (
     DISPLAY_LABELS,
     EDITABLE_SCHEMA,
@@ -77,8 +78,11 @@ class _ComboWheelFilter(QObject):
         return super().eventFilter(obj, event)
 
 
+SCANNER_RELATED_SECTIONS = {"scanner", "grbl_streamer", "windows", "motion_manager"}
+
+
 class SettingsDialog(QDialog):
-    def __init__(self, config_file: str, on_apply: Callable[[], None], parent=None):
+    def __init__(self, config_file: str, on_apply: Callable[[set[str]], None], parent=None):
         super().__init__(parent)
         self.config_file = config_file
         self.on_apply = on_apply
@@ -86,11 +90,13 @@ class SettingsDialog(QDialog):
         self.parser.optionxform = str
         self._combo_wheel_filter = _ComboWheelFilter(self)
         self._reload_config_state()
+        self._initial_config = self._snapshot_config()
+
         if self.parser.has_option("scanner", "reflection_free_time_ms"):
             from . import project
             project.get_system_rft_default(config_file)
             self.parser.read(config_file)
-        
+
         self.setWindowTitle("Edit configuration")
         self.resize(760, 560)
         self.setMinimumSize(560, 360)
@@ -163,6 +169,27 @@ class SettingsDialog(QDialog):
         self.measurement_points_section_input = None
         self.measurement_points_type_input = None
 
+    def _snapshot_config(self) -> dict[str, dict[str, str]]:
+        """Return a snapshot of all config section/key/value pairs as strings."""
+        snapshot: dict[str, dict[str, str]] = {}
+        for section in self.parser.sections():
+            snapshot[section] = {
+                key: self.parser.get(section, key) for key in self.parser.options(section)
+            }
+        return snapshot
+
+    def _changed_sections(self) -> set[str]:
+        """Compare current parser state against the initial snapshot to find changed sections."""
+        current = self._snapshot_config()
+        changed: set[str] = set()
+        all_sections = set(self._initial_config.keys()) | set(current.keys())
+        for section in all_sections:
+            old_vals = self._initial_config.get(section, {})
+            new_vals = current.get(section, {})
+            if old_vals != new_vals:
+                changed.add(section)
+        return changed
+
     def _populate_tabs(self) -> None:
         self.tabs.clear()
         for section in EDITABLE_SCHEMA:
@@ -218,8 +245,9 @@ class SettingsDialog(QDialog):
             )
             return
 
-        self.on_apply()
+        self.on_apply(SCANNER_RELATED_SECTIONS | {"audio", "sweep", "logging", "app", "debug"})
         self._reload_config_state()
+        self._initial_config = self._snapshot_config()
         self._populate_tabs()
 
     def _add_tab(self, section: str) -> None:
@@ -358,7 +386,7 @@ class SettingsDialog(QDialog):
 
     def _build_motion_manager_fields(self, layout) -> None:
         raw_type = _strip_inline_comment(
-            self.parser.get("motion_manager", "type", fallback="")
+            self.parser.get("motion_manager", "type", fallback="FastCylindricalMeasurementMotionManager")
         )
         type_widget, _type_row = self._add_field(
             layout,
@@ -366,9 +394,11 @@ class SettingsDialog(QDialog):
             "type",
             "Motion Manager Type",
             "choice",
-            raw_type,
-            self._options_with_current(list(MOTION_MANAGER_TYPES.keys()), raw_type),
+            raw_type or "FastCylindricalMeasurementMotionManager",
+            ["FastCylindricalMeasurementMotionManager"],
         )
+        if isinstance(type_widget, QComboBox):
+            type_widget.setEnabled(False)
 
         for key, kind, tooltip, options in self._all_motion_manager_fields():
             raw = _strip_inline_comment(
@@ -437,9 +467,11 @@ class SettingsDialog(QDialog):
             "measurement_points_type",
             "Measurement Points Type",
             "choice",
-            current_type,
-            self._options_with_current(list(MEASUREMENT_POINTS_TYPES.keys()), current_type),
+            current_type or "FileMeasurementPoints",
+            ["FileMeasurementPoints"],
         )
+        if isinstance(self.measurement_points_type_input, QComboBox):
+            self.measurement_points_type_input.setEnabled(False)
 
         for key, kind, tooltip, options in self._all_measurement_points_fields():
             raw = self._measurement_points_raw_value(mp_section_name, key)
@@ -596,6 +628,7 @@ class SettingsDialog(QDialog):
                 )
                 return
 
+
         active_motion_manager_keys = set()
         if selected_motion_manager_type is not None:
             active_motion_manager_keys = {
@@ -641,13 +674,14 @@ class SettingsDialog(QDialog):
 
         if not self._save_measurement_points_fields():
             return
-                
+
         with open(self.config_file, "w") as f:
             self.parser.write(f)
             
         from . import project
         project.sync_rft_from_config(self.config_file)
-        self.on_apply()
+        changed = self._changed_sections()
+        self.on_apply(changed)
         self.accept()
 
     def _save_measurement_points_fields(self) -> bool:
@@ -703,7 +737,7 @@ class SettingsDialog(QDialog):
         ):
             if target_section == "motion_manager" and stale_key in {
                 "type",
-                "safe_radius",
+                "unsafe_point_policy",
                 "measurement_points",
                 "measurement_points_type",
             }:
