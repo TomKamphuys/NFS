@@ -210,6 +210,50 @@ def _load_grid_dataframe() -> pd.DataFrame | None:
         return None
 
 
+def _get_viewer_settings() -> dict[str, str] | None:
+    """Build a settings dict from project.json grid_vars for the 3D viewer."""
+    try:
+        from . import project
+
+        grid_vars = project.get_project_data().get("grid_vars")
+        if not isinstance(grid_vars, dict) or not grid_vars:
+            return None
+        settings: dict[str, str] = {}
+        cyl_radius = grid_vars.get("cyl_radius_mm")
+        cyl_height = grid_vars.get("cyl_height_mm")
+        wall_thickness = grid_vars.get("wall_thickness_mm")
+        if cyl_radius is not None:
+            settings["cyl_radius_mm"] = str(cyl_radius)
+        if cyl_height is not None:
+            settings["cyl_height_mm"] = str(cyl_height)
+        if wall_thickness is not None:
+            settings["wall_thickness_mm"] = str(wall_thickness)
+            try:
+                r = float(cyl_radius or 0)
+                wt = float(wall_thickness)
+                settings["cyl_radius_internal"] = f"{r / 1000.0:.3f}"
+                settings["cyl_radius_external"] = f"{(r + wt) / 1000.0:.3f}"
+                h = float(cyl_height or 0)
+                settings["cyl_height_internal"] = f"{h / 1000.0:.3f}"
+                settings["cyl_height_external"] = f"{(h + 2 * wt) / 1000.0:.3f}"
+            except (ValueError, TypeError):
+                pass
+        z_mid = grid_vars.get("z_midpoint_zero")
+        if z_mid is not None:
+            settings["z_midpoint_zero"] = str(z_mid).capitalize()
+        top_z = grid_vars.get("wp_top_z")
+        bot_z = grid_vars.get("wp_bot_z")
+        if top_z is not None and bot_z is not None:
+            try:
+                z_offset = (float(top_z) + float(bot_z)) / 2.0
+                settings["z_offset_mm"] = str(z_offset)
+            except (ValueError, TypeError):
+                pass
+        return settings if settings else None
+    except Exception:
+        return None
+
+
 def _find_latest_ir_file() -> Path | None:
     root = _project_dir()
     dirs = [
@@ -984,8 +1028,9 @@ class LiveCapturePane(QWidget):
 
     def refresh_progress_viewer(self, measured_count: int) -> None:
         try:
+            settings = _get_viewer_settings()
             if self.grid_df is not None and int(self.progress_engine.N) != len(self.grid_df):
-                self.progress_engine.load_data(self.grid_df)
+                self.progress_engine.load_data(self.grid_df, settings)
             elif self.grid_df is None and measured_count:
                 azimuth, _elevation, measured_points = _load_measurement_positions()
                 if measured_points:
@@ -994,7 +1039,7 @@ class LiveCapturePane(QWidget):
                         r = math.sqrt(x * x + y * y)
                         phi = math.degrees(math.atan2(y, x))
                         rows.append({"r_xy_mm": r, "phi_deg": phi, "z_mm": z})
-                    self.progress_engine.load_data(pd.DataFrame(rows))
+                    self.progress_engine.load_data(pd.DataFrame(rows), settings)
             if self.progress_engine.N > 0:
                 index = max(0, min(int(self.progress_engine.N) - 1, measured_count - 1))
                 self.progress_engine.curr_idx = index
@@ -1033,7 +1078,7 @@ class LiveCapturePane(QWidget):
         self._show_pyvista_fallback_message()
         try:
             if self.grid_df is not None:
-                self.progress_engine.load_data(self.grid_df)
+                self.progress_engine.load_data(self.grid_df, settings)
                 self.progress_engine.update_plot()
             if self.progress_canvas is not None:
                 self.progress_canvas.draw_idle()

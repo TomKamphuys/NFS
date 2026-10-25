@@ -310,9 +310,9 @@ class MainWindow(QMainWindow):
             fields_text = "\n".join(f"  - {name}" for name in missing)
             QMessageBox.warning(
                 self,
-                "Incomplete DUT Volume",
+                "Incomplete DUT Properties",
                 (
-                    "The DUT Volume (no-fly zone) is not fully configured. "
+                    "The DUT Properties (no-fly zone) is not fully configured. "
                     "Please fill in all missing fields before running the motion preview:\n\n"
                     f"{fields_text}\n\n"
                     "Go to the Grid Generation & Planning tab to set the values."

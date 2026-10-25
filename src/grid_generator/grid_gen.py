@@ -293,62 +293,6 @@ def generate_measurement_grid(
 
     cyl_df['phi_deg'] = np.round(cyl_df['phi_deg'], 1)
 
-    # ===============================
-    # Append Generation Settings
-    # ===============================
-    cyl_radius_working = cyl_radius + (wall_thickness_mm / 1000.0)
-    additional_positions = additional_positions or []
-
-    def safe_position_name(name, index):
-        cleaned = "".join(ch if ch.isalnum() else "_" for ch in str(name or "").strip().lower())
-        cleaned = "_".join(part for part in cleaned.split("_") if part)
-        return cleaned or f"point_{index}"
-
-    settings_list = [
-        f"cyl_radius_internal={cyl_radius:.3f}",
-        f"cyl_radius_external={cyl_radius_working:.3f}",
-        f"cyl_height_internal={cyl_height:.3f}",
-        f"cyl_height_external={cyl_height_working:.3f}",
-        f"num_points={num_points}",
-        f"cap_fraction={cap_fraction}",
-        f"cap_fraction_eff={cap_fraction_eff:.4f}",
-        f"wall_thickness_mm={wall_thickness_mm}",
-        f"P_side={P_side}",
-        f"P_caps={P_caps}",
-        f"generate_reverse_spiral={generate_reverse_spiral}",
-        f"z_rotation_deg={z_rotation_deg}",
-        f"flip_poles={flip_poles}",
-        f"bottom_cutoff_mm={bottom_cutoff_mm}",
-        f"z_midpoint_zero={z_midpoint_zero}",
-        f"phi_min_deg={phi_min_deg}",
-        f"phi_max_deg={phi_max_deg}",
-        f"azimuth_density_ratio={azimuth_density_ratio}",
-        f"azimuth_weight_center_deg={azimuth_weight_center_deg}",
-        f"tweeter_pos={tweeter_pos}",
-        f"ref_origin_pos={ref_origin_pos}",
-        f"baffle_bot_l_pos={baffle_bot_l_pos}",
-        f"baffle_top_l_pos={baffle_top_l_pos}",
-        f"baffle_top_r_pos={baffle_top_r_pos}",
-        *[
-            f"user_position_{safe_position_name(name, index)}={pos}"
-            for index, (name, pos) in enumerate(additional_positions, start=1)
-        ],
-        f"top_crit_pos={top_crit_pos}",
-        f"bot_crit_pos={bot_crit_pos}",
-        f"z_offset_mm={z_offset_mm}",
-        f"r_min_mm={cyl_df['r_xy_mm'].min():.1f}",
-        f"r_max_mm={cyl_df['r_xy_mm'].max():.1f}",
-        f"p_min_deg={cyl_df['phi_deg'].min():.1f}",
-        f"p_max_deg={cyl_df['phi_deg'].max():.1f}",
-        f"z_min_mm={cyl_df['z_mm'].min():.1f}",
-        f"z_max_mm={cyl_df['z_mm'].max():.1f}"
-    ]
-
-    cyl_df['gen_settings'] = ""
-    for i, setting in enumerate(settings_list):
-        if i < len(cyl_df):
-            cyl_df.loc[i, 'gen_settings'] = setting
-
     return cyl_df
 
 

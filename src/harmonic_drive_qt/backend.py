@@ -69,10 +69,10 @@ def format_measurement_error(exc: Exception | str) -> dict[str, str]:
         pos_match = re.search(r"Measurement point \(([^)]+)\)", msg)
         pos_text = pos_match.group(1) if pos_match else "A measurement point"
         return {
-            "title": "Safety Alert: Point Inside DUT Volume (No-Fly Zone)",
+            "title": "Safety Alert: Point Inside DUT Properties (No-Fly Zone)",
             "summary": (
                 f"Measurement scan aborted to prevent a physical collision:\n"
-                f"{pos_text} is located inside the configured DUT Volume / No-Fly Zone."
+                f"{pos_text} is located inside the configured DUT Properties / No-Fly Zone."
             ),
             "details": (
                 "What happened:\n"
@@ -81,14 +81,14 @@ def format_measurement_error(exc: Exception | str) -> dict[str, str]:
                 "• The scanner automatically enforces a safety keep-out zone around your loudspeaker (DUT) "
                 "to prevent the microphone or arm from colliding with the device under test.\n\n"
                 "How to fix:\n"
-                "1. Adjust DUT Volume: Check the 'DUT Volume' section and adjust Top & Bot waypoints (Radius, Height) "
+                "1. Adjust DUT Properties: Check the 'DUT Properties' section and adjust Top & Bot waypoints (Radius, Height) "
                 "so the boundary closely matches the actual speaker dimensions.\n"
                 "2. Regenerate Grid: In 'Grid Generation & Planning', generate or load measurement points with radii "
-                "and heights that remain outside the DUT Volume boundaries."
+                "and heights that remain outside the DUT Properties boundaries."
             ),
             "how_to_fix": (
-                "1. Check and adjust Top/Bot waypoints in the 'DUT Volume' section.\n"
-                "2. Regenerate your grid points in 'Grid Generation & Planning' to stay outside the DUT Volume."
+                "1. Check and adjust Top/Bot waypoints in the 'DUT Properties' section.\n"
+                "2. Regenerate your grid points in 'Grid Generation & Planning' to stay outside the DUT Properties."
             ),
         }
     return {
