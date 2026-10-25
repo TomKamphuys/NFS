@@ -45,6 +45,26 @@ def _window_shell(config_file: Path):
     return window
 
 
+@pytest.mark.parametrize(
+    "app_config, visible",
+    [
+        ("", True),
+        ("[app]\nshow_motion_preview = True\n", True),
+        ("[app]\nshow_motion_preview = False\n", False),
+    ],
+)
+def test_motion_preview_menu_defaults_on_and_respects_explicit_choice(tmp_path, app_config, visible):
+    _app()
+    config_file = tmp_path / "config.ini"
+    config_file.write_text(app_config, encoding="utf-8")
+    window = MainWindow.__new__(MainWindow)
+    window.config_file = str(config_file)
+
+    window.menu = window._build_menu()
+
+    assert window.motion_preview_button.isHidden() is not visible
+
+
 def test_qt_activating_session_folder_does_not_save_project_json(tmp_path):
     config_file = tmp_path / "config.ini"
     session_dir = tmp_path / "speaker_a"

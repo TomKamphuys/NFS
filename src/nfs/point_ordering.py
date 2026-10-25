@@ -1,0 +1,97 @@
+"""Weighted travel ordering without changing the motion manager's safe paths."""
+import math
+from typing import Any, Protocol
+
+from loguru import logger
+
+from .datatypes import CylindricalPosition
+
+
+ROTATION_MM_PER_DEGREE = 300.0 / 90.0
+
+
+def linear_distance(start: tuple[float, float, float], end: tuple[float, float, float]) -> float:
+    """Linear R/Z travel plus a radius-independent azimuth penalty (max across independent axes)."""
+    r, t, z = start
+    linear = math.hypot(end[0] - r, end[2] - z)
+    angular = abs(end[1] - t) * ROTATION_MM_PER_DEGREE
+    return max(linear, angular)
+
+
+def travel_distance(
+    start: CylindricalPosition,
+    end: CylindricalPosition,
+    manager_type: str,
+    zone: Any,
+) -> float:
+    r, t, z = start.r(), start.t(), start.z()
+    R, T, Z = end.r(), end.t(), end.z()
+    angular = abs(T - t) * ROTATION_MM_PER_DEGREE
+    if manager_type == 'SphericalMeasurementMotionManager':
+        linear = abs(end.length() - start.length()) + end.length() * abs(math.atan2(Z, R) - math.atan2(z, r))
+        return max(angular, linear)
+    safe = zone.retract_radius
+    if manager_type == 'CylindricalMeasurementMotionManager':
+        if abs(Z - z) <= 0.1:
+            return max(angular, abs(R - r))
+        outer = max(r, safe)
+        linear = (outer - r) + abs(Z - z) + abs(R - outer)
+        return max(angular, linear)
+    if not zone.blocks_move(start, end):
+        return linear_distance((r, t, z), (R, T, Z))
+    outer = max(r, safe)
+    return (outer - r + linear_distance((outer, t, z), (safe, T, Z))
+            + abs(R - safe))
+
+
+class OptimizedMeasurementPoints:
+    """Deterministic nearest-neighbour candidate, retained only if shorter.
+
+    Keep the original first point to preserve the scan's approach move. All
+    entries (including duplicates) survive; invalid grids fail before movement.
+    """
+
+    def __init__(self, source: Any, manager_type: str, zone: Any):
+        self._points = []
+        source.reset()
+        while not source.ready():
+            point = source.next()
+            if (not all(math.isfinite(v) for v in (point.r(), point.t(), point.z()))
+                    or point.r() < 0 or not -180 <= point.t() <= 180):
+                raise ValueError('Optimization requires finite points, R >= 0 and angles within [-180, 180].')
+            if zone.contains(point, tolerance=0):
+                raise ValueError('Cannot optimize: a measurement point is inside the safety zone. No points may be skipped.')
+            self._points.append(point)
+        source.reset()
+        self._index = 0
+        if len(self._points) < 3:
+            return
+        def cost(a, b):
+            return travel_distance(a, b, manager_type, zone)
+        def length(points):
+            return sum(cost(a, b) for a, b in zip(points, points[1:]))
+        remaining = list(range(1, len(self._points)))
+        candidate = [self._points[0]]
+        while remaining:
+            index = min(remaining, key=lambda i: cost(candidate[-1], self._points[i]))
+            candidate.append(self._points[index])
+            remaining.remove(index)
+        original_length, candidate_length = length(self._points), length(candidate)
+        if candidate_length < original_length:
+            self._points = candidate
+        logger.info(f'Measurement ordering: {original_length:.1f} -> '
+                    f'{min(original_length, candidate_length):.1f} mm-equivalent weighted travel')
+
+    def next(self) -> CylindricalPosition:
+        point = self._points[self._index]
+        self._index += 1
+        return point
+
+    def ready(self) -> bool:
+        return self._index >= len(self._points)
+
+    def reset(self) -> None:
+        self._index = 0
+
+    def total_points(self) -> int:
+        return len(self._points)

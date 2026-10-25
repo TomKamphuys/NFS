@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import configparser
+import math
 import shutil
 import threading
 import time
@@ -12,9 +13,12 @@ from pathlib import Path
 from . import project
 from .config_support import _parse_bool, _strip_inline_comment
 
-from .backend import BackendManager, Worker, format_duration
+from .backend import BackendManager, Worker, format_duration, format_measurement_error
 from .icons import ui_icon
 from .styles import danger_button, primary_button, warning_button
+from nfs.datatypes import GrblMachineState
+from nfs.motion_simulation import simulate_motion
+
 from .qt_compat import (
     QDoubleSpinBox,
     QFrame,
@@ -66,13 +70,16 @@ class ControlPane(QWidget):
         self.pool = QThreadPool.globalInstance()
         self.sine_running = False
         self.home_ok = False
-        self._homing_in_progress = False
         self.grid_readout_points: list[dict[str, float]] = []
         self._jog_buttons: list[QPushButton] = []
+        self._control_buttons: list[QPushButton] = []
         self._jog_in_progress = False
         self._jog_done = True
         self._jog_error: str | None = None
         self._jog_thread: threading.Thread | None = None
+        self._last_error_notified: str | None = None
+        self._homing_glow_phase: float = 0.0
+        self._homing_glow_timer: QTimer | None = None
         self.progress_event.connect(self._apply_progress_event)
         self._build_ui()
 
@@ -106,12 +113,23 @@ class ControlPane(QWidget):
         scroll.setWidget(content)
         root.addWidget(scroll)
 
-        layout.addWidget(self._build_position_group("WCS"))
+        position_frames = [self._build_position_group("WCS")]
         if _config_bool(self.backend.config_file, "app", "show_machine_coordinate_system", False):
-            layout.addWidget(self._build_position_group("MCS", machine=True))
+            position_frames.append(self._build_position_group("MCS", machine=True))
         else:
             self.mcs_labels = {}
-        layout.addWidget(self._build_motion_group())
+        for frame in position_frames:
+            layout.addWidget(frame, 0, Qt.AlignmentFlag.AlignLeft)
+        motion_frame = self._build_motion_group()
+        layout.addWidget(motion_frame, 0, Qt.AlignmentFlag.AlignLeft)
+        motion_frame.ensurePolished()
+        motion_frame.setFixedSize(motion_frame.sizeHint())
+        for frame in position_frames:
+            frame.setFixedWidth(motion_frame.width())
+
+        # Disable all scanner-dependent buttons until the scanner is loaded
+        self._set_jog_buttons_enabled(False)
+        self._set_control_buttons_enabled(False)
         if _config_bool(self.backend.config_file, "app", "show_height_offset_controls", True):
             layout.addWidget(self._build_height_offset_group())
         layout.addWidget(self._build_measurement_group())
@@ -121,7 +139,6 @@ class ControlPane(QWidget):
         frame = QFrame()
         frame.setObjectName("DroFrame")
         frame.setStyleSheet("QFrame#DroFrame { background-color: #000000; border-radius: 6px; border: 2px solid #1f2937; }")
-        frame.setMaximumWidth(780)
         frame.setMinimumHeight(72)
         frame.setMaximumHeight(86)
         grid = QGridLayout(frame)
@@ -173,7 +190,6 @@ class ControlPane(QWidget):
     def _build_motion_group(self) -> QFrame:
         frame = QFrame()
         frame.setStyleSheet("background-color: #000000; border-radius: 6px; border: 2px solid #1f2937;")
-        frame.setMaximumWidth(780)
         layout = QVBoxLayout(frame)
         layout.setContentsMargins(12, 10, 12, 10)
         layout.setSpacing(10)
@@ -191,8 +207,8 @@ class ControlPane(QWidget):
         jog_layout.setSpacing(4)
         for axis, left, right, unit, left_method, right_method in [
             ("PHI", "CW", "CCW", "deg", "rotate_cw", "rotate_ccw"),
-            ("RADIUS", "-", "+", "mm", "move_in", "move_out"),
-            ("HEIGHT", "-", "+", "mm", "move_down", "move_up"),
+            ("RADIUS", "IN", "OUT", "mm", "move_in", "move_out"),
+            ("HEIGHT", "DOWN", "UP", "mm", "move_down", "move_up"),
         ]:
             jog_layout.addLayout(self._jog_row(axis, left, right, unit, left_method, right_method))
         
@@ -212,6 +228,7 @@ class ControlPane(QWidget):
         home.setFixedSize(command_width, 46)
         home.clicked.connect(lambda: self._run_command("home"))
         commands.addWidget(home)
+        self._control_buttons.append(home)
 
         if show_rehome:
             rehome = QPushButton("REHOME")
@@ -222,6 +239,7 @@ class ControlPane(QWidget):
             rehome.clicked.connect(lambda: self._run_command("rehome"))
             commands.addWidget(rehome)
             self._set_home_button_state(self.home_ok)
+            self._control_buttons.append(rehome)
 
         zero = QPushButton("ZERO")
         primary_button(zero)
@@ -230,6 +248,7 @@ class ControlPane(QWidget):
         zero.setFixedSize(command_width, 46)
         zero.clicked.connect(lambda: self._run_command("set_as_zero"))
         commands.addWidget(zero)
+        self._control_buttons.append(zero)
 
         clear = QPushButton("CLEAR\nALARM")
         primary_button(clear)
@@ -238,6 +257,7 @@ class ControlPane(QWidget):
         clear.setFixedSize(command_width, 46)
         clear.clicked.connect(lambda: self._run_command("clear_alarm"))
         commands.addWidget(clear)
+        self._control_buttons.append(clear)
 
         reset = QPushButton("RESET")
         danger_button(reset)
@@ -246,6 +266,7 @@ class ControlPane(QWidget):
         reset.setFixedSize(command_width, 46)
         reset.clicked.connect(lambda: self._run_command("softreset"))
         commands.addWidget(reset)
+        self._control_buttons.append(reset)
 
         hold = QPushButton("HOLD")
         danger_button(hold)
@@ -254,6 +275,7 @@ class ControlPane(QWidget):
         hold.setFixedSize(command_width, 46)
         hold.clicked.connect(lambda: self._run_command("hold"))
         commands.addWidget(hold)
+        self._control_buttons.append(hold)
 
         layout.addLayout(commands)
 
@@ -280,9 +302,9 @@ class ControlPane(QWidget):
                 f"QPushButton:hover {{ background: {hover}; color: #ffffff; }}"
             )
 
-        left_btn = QPushButton(left)
-        left_btn.setStyleSheet("QPushButton { background: transparent; color: white; font-weight: bold; border: none; min-width: 32px; }")
-        left_btn.setFixedSize(32, 34)
+        left_btn = QPushButton(left, self)
+        direction_style = "QPushButton { background: transparent; color: white; font-weight: bold; border: none; min-width: 0px; padding: 0px; }"
+        left_btn.setStyleSheet(direction_style)
         row.addWidget(left_btn)
         left_btn.clicked.connect(lambda _checked=False, m=left_method, v=120: self._run_jog(m, v)) # Just an example default
         self._jog_buttons.append(left_btn)
@@ -309,12 +331,21 @@ class ControlPane(QWidget):
             row.addWidget(button)
             self._jog_buttons.append(button)
 
-        right_btn = QPushButton(right)
-        right_btn.setStyleSheet("QPushButton { background: transparent; color: white; font-weight: bold; border: none; min-width: 32px; }")
-        right_btn.setFixedSize(32, 34)
+        right_btn = QPushButton(right, self)
+        right_btn.setStyleSheet(direction_style)
         row.addWidget(right_btn)
         right_btn.clicked.connect(lambda _checked=False, m=right_method, v=120: self._run_jog(m, v))
         self._jog_buttons.append(right_btn)
+
+        for button in (left_btn, right_btn):
+            button.ensurePolished()
+        direction_width = max(
+            64,
+            *(button.fontMetrics().horizontalAdvance("DOWN") + 16 for button in (left_btn, right_btn)),
+        )
+        for button in (left_btn, right_btn):
+            button.setStyleSheet(direction_style.replace("min-width: 0px;", f"min-width: {direction_width}px; max-width: {direction_width}px;"))
+            button.setFixedSize(direction_width, 34)
         
         return row
 
@@ -427,13 +458,55 @@ class ControlPane(QWidget):
         layout.addWidget(self.coord_readout)
         return group
 
-    def _set_home_button_state(self, homed: bool) -> None:
-        color = "#22c55e" if homed else "#f4c542"
-        hover = "#16a34a" if homed else "#e5b834"
+    def _set_home_button_state(self, homed: bool, homing: bool = False) -> None:
+        if homing:
+            self._start_homing_glow()
+        else:
+            self._stop_homing_glow()
+            color = "#22c55e" if homed else "#f4c542"
+            hover = "#16a34a" if homed else "#e5b834"
+            style = (
+                f"QPushButton {{ background: {color}; border: 1px solid {color}; "
+                "border-radius: 4px; color: #ffffff; font-weight: 800; padding: 7px 11px; }"
+                f"QPushButton:hover {{ background: {hover}; border-color: {hover}; }}"
+            )
+            self.home_button.setStyleSheet(style)
+            rehome_button = getattr(self, "rehome_button", None)
+            if rehome_button is not None:
+                rehome_button.setStyleSheet(style)
+
+    def _start_homing_glow(self) -> None:
+        if self._homing_glow_timer is not None:
+            return
+        self._homing_glow_phase = 0.0
+        self._homing_glow_timer = QTimer(self)
+        self._homing_glow_timer.setInterval(50)
+        self._homing_glow_timer.timeout.connect(self._tick_homing_glow)
+        self._homing_glow_timer.start()
+
+    def _stop_homing_glow(self) -> None:
+        if self._homing_glow_timer is not None:
+            self._homing_glow_timer.stop()
+            self._homing_glow_timer.deleteLater()
+            self._homing_glow_timer = None
+
+    def _tick_homing_glow(self) -> None:
+        self._homing_glow_phase += 0.2
+        pulse = (math.sin(self._homing_glow_phase) + 1.0) / 2.0
+        # Calm pulse: deep green to bright lime-green
+        base_r, base_g, base_b = 22, 163, 74        # vibrant green
+        glow_r, glow_g, glow_b = 187, 247, 135      # bright lime-green
+        r = int(base_r + (glow_r - base_r) * pulse)
+        g = int(base_g + (glow_g - base_g) * pulse)
+        b = int(base_b + (glow_b - base_b) * pulse)
+        border_width = 2 + int(pulse * 4)           # 2px to 6px border
+        color = f"#{r:02x}{g:02x}{b:02x}"
+        shadow_color = f"#{max(0,r-60):02x}{max(0,g-60):02x}{max(0,b-60):02x}"
         style = (
-            f"QPushButton {{ background: {color}; border: 1px solid {color}; "
-            "border-radius: 4px; color: #ffffff; font-weight: 800; padding: 7px 11px; }"
-            f"QPushButton:hover {{ background: {hover}; border-color: {hover}; }}"
+            f"QPushButton {{ background: {color}; "
+            f"border: {border_width}px solid {shadow_color}; "
+            "border-radius: 6px; color: #ffffff; font-weight: 800; padding: 7px 11px; "
+            f"outline: 2px solid {color}; outline-offset: -{border_width + 2}px; }}"
         )
         self.home_button.setStyleSheet(style)
         rehome_button = getattr(self, "rehome_button", None)
@@ -469,36 +542,15 @@ class ControlPane(QWidget):
     def _run_command(self, method: str) -> None:
         if method == "set_as_zero":
             self._run_backend(self.backend.set_as_zero)
-        elif method == "home":
-            self._homing_in_progress = True
-            self._set_home_ok(False)
-            worker = Worker(self._home_blocking)
-            worker.signals.finished.connect(self._home_finished)
-            worker.signals.failed.connect(self._home_failed)
-            self.pool.start(worker)
-        elif method == "rehome":
-            self._homing_in_progress = True
-            self._set_home_ok(False)
-            worker = Worker(self._rehome_blocking)
-            worker.signals.finished.connect(self._home_finished)
+        elif method in ("home", "rehome"):
+            blocking_method = self._rehome_blocking if method == "rehome" else self._home_blocking
+            worker = Worker(blocking_method)
             worker.signals.failed.connect(self._home_failed)
             self.pool.start(worker)
         else:
-            if method == "softreset":
-                self._set_home_ok(False)
             self._run_backend(self.backend.scanner_command, method)
 
-    def _set_home_ok(self, ok: bool) -> None:
-        self.home_ok = bool(ok)
-        self._set_home_button_state(self.home_ok)
-
-    def _home_finished(self) -> None:
-        self._homing_in_progress = False
-        self._set_home_ok(True)
-
     def _home_failed(self, message: str) -> None:
-        self._homing_in_progress = False
-        self._set_home_ok(False)
         QMessageBox.warning(self, "Backend Error", message)
 
     def _rehome_blocking(self) -> None:
@@ -512,8 +564,9 @@ class ControlPane(QWidget):
         self.backend.scanner_command("home")
 
     def _run_jog(self, method: str, value: float) -> None:
-        if self._jog_in_progress:
+        if self._jog_in_progress or not self.backend.is_scanner_loaded():
             return
+        self._jog_in_progress = True
         self._jog_done = False
         self._jog_error = None
         self._set_jog_buttons_enabled(False)
@@ -535,14 +588,18 @@ class ControlPane(QWidget):
             return
         self.jog_timer.stop()
         self._jog_thread = None
-        self._set_jog_buttons_enabled(True)
+        self._jog_in_progress = False
+        self._set_jog_buttons_enabled(self.backend.is_scanner_loaded())
         message, self._jog_error = self._jog_error, None
         if message:
             QMessageBox.warning(self, "Backend Error", message)
 
     def _set_jog_buttons_enabled(self, enabled: bool) -> None:
-        self._jog_in_progress = not enabled
         for btn in self._jog_buttons:
+            btn.setEnabled(enabled)
+
+    def _set_control_buttons_enabled(self, enabled: bool) -> None:
+        for btn in self._control_buttons:
             btn.setEnabled(enabled)
 
     def toggle_sine(self) -> None:
@@ -571,6 +628,25 @@ class ControlPane(QWidget):
             if not self._loaded_grid_file_exists(project.get_project_dir()):
                 QMessageBox.warning(self, "Measurement Set", "No grid file loaded. Please generate one first.")
                 return
+            # Check DUT volume is fully configured before allowing measurement
+            from .config_support import validate_dut_volume
+            missing = validate_dut_volume(self.backend.config_file)
+            if missing:
+                fields_text = "\n".join(f"  - {name}" for name in missing)
+                QMessageBox.warning(
+                    self,
+                    "Incomplete DUT Volume",
+                    (
+                        "The DUT Volume (no-fly zone) is not fully configured. "
+                        "Please fill in all missing fields before starting a measurement:\n\n"
+                        f"{fields_text}\n\n"
+                        "Go to the Grid Generation & Planning tab to set the values."
+                    ),
+                )
+                return
+            # Pre-measurement check: simulate motion to detect unsafe points
+            if not self._check_unsafe_points_before_measurement():
+                return
             overwrite = False
             if self._measurement_outputs_exist(project.get_project_dir()):
                 result = QMessageBox.question(
@@ -588,12 +664,85 @@ class ControlPane(QWidget):
             title = project.get_project_name() or project.DEFAULT_PROJECT_NAME
             self._save_measurement_project_snapshot()
             self.refresh_grid_readout()
+            self._last_error_notified = None
             self.backend.start_measurement_set(
                 project.sanitize_project_name(title),
                 lambda event: self.progress_event.emit(event),
                 overwrite=overwrite,
             )
         self.refresh_progress()
+
+    def _check_unsafe_points_before_measurement(self) -> bool:
+        """Run motion simulation to check for unsafe points and paths before starting measurement.
+        
+        Returns True if the user chooses to proceed (or no unsafe points found),
+        False if the user cancels.
+        """
+        try:
+            simulation = simulate_motion(self.backend.config_file)
+        except Exception:
+            # If simulation fails, allow the measurement to proceed
+            # The motion manager will still check at runtime
+            return True
+        
+        unsafe = simulation.unsafe_points
+        unsafe_paths = simulation.unsafe_path_samples
+        if not unsafe and not unsafe_paths:
+            return True
+        
+        parts = []
+        if unsafe:
+            count = len(unsafe)
+            noun = "point" if count == 1 else "points"
+            if simulation.aborted:
+                parts.append(
+                    f"{count} measurement {noun} lie inside the no-fly zone. "
+                    f"With the current settings the scan will ABORT before any motion "
+                    f"to avoid a collision."
+                )
+            else:
+                parts.append(
+                    f"{count} measurement {noun} lie inside the no-fly zone. "
+                    f"With the current settings {'this' if count == 1 else 'these'} "
+                    f"{noun} will be SKIPPED during the scan."
+                )
+        if unsafe_paths:
+            # Deduplicate by rounding to avoid reporting the same sample multiple times
+            unique_paths = self._deduplicate_path_samples(unsafe_paths)
+            path_count = len(unique_paths)
+            parts.append(
+                f"Additionally, {path_count} sampled path positions cross the no-fly zone "
+                f"(motion paths between safe measurement points pass through the keep-out area)."
+            )
+        parts.append("Review the no-fly zone settings and the measurement grid.")
+        message = " ".join(parts) + "\n\nDo you want to cancel or continue anyway?"
+        
+        title = "Unsafe measurement points" if not unsafe_paths else "Unsafe motion paths detected"
+        msg_box = QMessageBox(
+            QMessageBox.Icon.Question,
+            title,
+            message,
+            QMessageBox.StandardButton.Cancel,
+            self,
+        )
+        continue_btn = msg_box.addButton("Continue", QMessageBox.ButtonRole.ActionRole)
+        msg_box.exec()
+        
+        return msg_box.clickedButton() == continue_btn
+
+    @staticmethod
+    def _deduplicate_path_samples(samples):
+        """Remove consecutive duplicate path samples (rounded to 0.1mm / 0.1°)."""
+        if not samples:
+            return []
+        unique = [samples[0]]
+        for s in samples[1:]:
+            key = (round(s.r(), 1), round(s.t(), 1), round(s.z(), 1))
+            prev = unique[-1]
+            prev_key = (round(prev.r(), 1), round(prev.t(), 1), round(prev.z(), 1))
+            if key != prev_key:
+                unique.append(s)
+        return unique
 
     def _save_measurement_project_snapshot(self) -> None:
         title = project.get_project_name() or project.DEFAULT_PROJECT_NAME
@@ -674,9 +823,13 @@ class ControlPane(QWidget):
         pos = self.backend.get_position()
         state = self.backend.get_state()
         machine_pos = self.backend.get_machine_position() if self.mcs_labels else None
-        state_name = str(state).split(".")[-1] if state is not None else ""
-        if state_name.upper() == "ALARM" and not self._homing_in_progress:
-            self._set_home_ok(False)
+        homed = self.backend.is_homed()
+        homing = state is not None and state == GrblMachineState.HOME
+        self._set_home_button_state(homed, homing)
+        # Enable all scanner-dependent buttons when the scanner is loaded
+        loaded = self.backend.is_scanner_loaded()
+        self._set_control_buttons_enabled(loaded)
+        self._set_jog_buttons_enabled(loaded and not self._jog_in_progress)
         self._set_position_labels(self.wcs_labels, pos, state)
         if self.mcs_labels:
             self._set_position_labels(self.mcs_labels, machine_pos, state)
@@ -721,7 +874,12 @@ class ControlPane(QWidget):
         current = int(event.get("current") or 0)
         total = int(event.get("total") or 0)
         status = str(event.get("status") or "ready")
-        if status == "finished" and total > 0 and current >= total:
+        error_text = str(event.get("error") or "")
+        has_error = status in ("failed", "error") or bool(error_text)
+
+        if has_error:
+            label_status = "Failed"
+        elif status == "finished" and total > 0 and current >= total:
             label_status = "Complete"
         elif status == "finished":
             label_status = "Stopped"
@@ -733,8 +891,30 @@ class ControlPane(QWidget):
         self.progress.setValue(int(max(0.0, min(1.0, percent)) * 1000))
         self._update_grid_readout(max(0, current - 1 if current else 0))
         eta = format_duration(event.get("eta_seconds"))
-        if total:
-            self.progress.setFormat(f"{label_status} - {current} of {total} points - ETA {eta}")
+        elapsed = format_duration(event.get("elapsed_seconds"))
+
+        if has_error:
+            err_info = event.get("error_info") or format_measurement_error(
+                event.get("exception") or error_text or "Measurement set failed"
+            )
+            title = err_info.get("title", "Measurement Failed")
+            self.progress.setFormat(f"Failed - {title}")
+            self.measurement_start.setText("START MEASUREMENT SET")
+            primary_button(self.measurement_start)
+            self.measurement_start.setIcon(ui_icon("play"))
+            self.measurement_start.setIconSize(QSize(18, 18))
+
+            if error_text and self._last_error_notified != error_text:
+                self._last_error_notified = error_text
+                msg_box = QMessageBox(self)
+                msg_box.setIcon(QMessageBox.Icon.Critical)
+                msg_box.setWindowTitle(title)
+                msg_box.setText(err_info.get("summary", error_text))
+                msg_box.setInformativeText(err_info.get("details", ""))
+                msg_box.setStandardButtons(QMessageBox.StandardButton.Ok)
+                msg_box.exec()
+        elif total:
+            self.progress.setFormat(f"{label_status} - {current} of {total} points - ETA {eta} - Elapsed {elapsed}")
         else:
             self.progress.setFormat(f"{label_status} - waiting for measurement points")
 

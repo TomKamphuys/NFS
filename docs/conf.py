@@ -24,7 +24,21 @@ extensions = [
     'sphinx.ext.intersphinx',
     'sphinx_autodoc_typehints',
     'sphinx.ext.githubpages',
+    'myst_parser',
+    'sphinxcontrib.mermaid',
 ]
+
+# MyST (Markdown) support so the hand-written .md pages (architecture, motion
+# manager notes) build into the Sphinx site alongside the API reference.
+source_suffix = {
+    '.rst': 'restructuredtext',
+    '.md': 'markdown',
+}
+
+# Treat ```mermaid fenced code blocks (as rendered natively by GitHub) as the
+# sphinxcontrib-mermaid directive, so the same Markdown renders diagrams in both
+# places.
+myst_fence_as_directive = ['mermaid']
 
 intersphinx_mapping = {
     'python': ('https://docs.python.org/3', None),

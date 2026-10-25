@@ -1,4 +1,5 @@
 import os
+from unittest.mock import Mock
 
 import pytest
 
@@ -14,8 +15,77 @@ def _app():
     return QApplication.instance() or QApplication([])
 
 
+@pytest.mark.parametrize('app_config', ['', '[app]\nauto_hide_left_menu = False\n'])
+def test_missing_preview_option_is_accessible_without_writing_config(tmp_path, app_config):
+    _app()
+    config_file = tmp_path / 'config.ini'
+    config_file.write_text(app_config, encoding='utf-8')
+    dialog = SettingsDialog(str(config_file), lambda changed: None)
+    assert 'app' in dialog.tab_sections
+    checkbox, _kind = dialog.inputs[('app', 'show_motion_preview')]
+    assert checkbox.isChecked()
+    dialog.reject()
+    assert config_file.read_text(encoding='utf-8') == app_config
+
+
+@pytest.mark.parametrize('enabled', [False, True])
+def test_preview_setting_preserves_explicit_choice(tmp_path, enabled):
+    _app()
+    config_file = tmp_path / 'config.ini'
+    config_file.write_text(f'[app]\nshow_motion_preview = {enabled}\n', encoding='utf-8')
+    dialog = SettingsDialog(str(config_file), lambda changed: None)
+    checkbox, _kind = dialog.inputs[('app', 'show_motion_preview')]
+    assert checkbox.isChecked() == enabled
+    dialog.reject()
+
+
+@pytest.mark.parametrize('enabled', [False, True])
+def test_preview_can_be_enabled_and_saved_in_legacy_config(tmp_path, enabled):
+    _app()
+    config_file = tmp_path / 'config.ini'
+    config_file.write_text('[calibration]\ncustom_value = 123\n', encoding='utf-8')
+    callback = Mock()
+    dialog = SettingsDialog(str(config_file), callback)
+    checkbox, _kind = dialog.inputs[('app', 'show_motion_preview')]
+    checkbox.setChecked(enabled)
+    dialog.save()
+    reopened = SettingsDialog(str(config_file), lambda changed: None)
+    assert reopened.inputs[('app', 'show_motion_preview')][0].isChecked() == enabled
+    assert reopened.parser.get('calibration', 'custom_value') == '123'
+    assert 'app' in callback.call_args.args[0]
+    reopened.reject()
+
+
+def test_settings_dialog_fixes_motion_manager_and_measurement_points_type(tmp_path):
+    _app()
+    config_file = tmp_path / "config.ini"
+    config_file.write_text(
+        "[motion_manager]\n"
+        "type = FastCylindricalMeasurementMotionManager\n"
+        "unsafe_point_policy = abort\n"
+        "measurement_points_type = FileMeasurementPoints\n"
+        "filename = test.csv\n",
+        encoding="utf-8",
+    )
+
+    dialog = SettingsDialog(str(config_file), lambda changed: None)
+    manager_type, _kind = dialog.inputs[("motion_manager", "type")]
+    mp_type, _kind = dialog.inputs[("__motion_manager_ui__", "measurement_points_type")]
+
+    assert isinstance(manager_type, QComboBox)
+    assert not manager_type.isEnabled()
+    assert manager_type.currentText() == "FastCylindricalMeasurementMotionManager"
+
+    assert isinstance(mp_type, QComboBox)
+    assert not mp_type.isEnabled()
+    assert mp_type.currentText() == "FileMeasurementPoints"
+
+    assert "no_fly_radius" not in dialog.motion_manager_extra_widgets or not dialog.motion_manager_extra_widgets["no_fly_radius"].isVisible()
+    assert "no_fly_z_min" not in dialog.motion_manager_extra_widgets
+    assert "no_fly_z_max" not in dialog.motion_manager_extra_widgets
+
+
 def test_motion_setting_labels_include_normalized_units():
-    assert DISPLAY_LABELS["safe_radius"] == "Safe radius (mm)"
     assert DISPLAY_LABELS["homing_gap"] == "Homing gap (degrees)"
     assert DISPLAY_LABELS["pole_gap"] == "Pole gap (mm)"
 
@@ -34,7 +104,7 @@ def test_numeric_setting_labels_show_correct_units():
 
 def test_settings_dialog_fonts_have_point_sizes():
     _app()
-    dialog = SettingsDialog("config.ini", lambda: None)
+    dialog = SettingsDialog("config.ini", lambda changed: None)
     dialog.ensurePolished()
 
     fonts = [dialog.font()]
@@ -63,7 +133,7 @@ def test_mock_dro_fields_follow_selected_grbl_streamer_type(tmp_path):
         encoding="utf-8",
     )
 
-    dialog = SettingsDialog(str(config_file), lambda: None)
+    dialog = SettingsDialog(str(config_file), lambda changed: None)
     streamer_type, _kind = dialog.inputs[("grbl_streamer", "type")]
     mock_fields = [
         dialog.inputs[("grbl_streamer", key)][0]
@@ -98,7 +168,7 @@ def test_settings_dialog_hides_audio_device_selection_fields(tmp_path):
         encoding="utf-8",
     )
 
-    dialog = SettingsDialog(str(config_file), lambda: None)
+    dialog = SettingsDialog(str(config_file), lambda changed: None)
 
     assert ("audio", "mode") in dialog.inputs
     for key in (
@@ -125,7 +195,7 @@ def test_settings_dialog_restore_defaults_uses_config_default_ini(tmp_path, monk
         lambda *args, **kwargs: QMessageBox.StandardButton.Yes,
     )
 
-    dialog = SettingsDialog(str(config_file), lambda: applied.append(True))
+    dialog = SettingsDialog(str(config_file), lambda changed: applied.append(True))
     dialog.restore_defaults()
 
     assert config_file.read_text(encoding="utf-8") == default_file.read_text(encoding="utf-8")
@@ -144,59 +214,37 @@ def test_settings_dialog_restore_defaults_warns_when_default_missing(tmp_path, m
     warnings = []
     monkeypatch.setattr(QMessageBox, "warning", lambda *args: warnings.append(args))
 
-    dialog = SettingsDialog(str(config_file), lambda: None)
+    dialog = SettingsDialog(str(config_file), lambda changed: None)
     dialog.restore_defaults()
 
     assert "level = ERROR" in config_file.read_text(encoding="utf-8")
     assert warnings
 
 
-def test_settings_dialog_saves_cylindrical_motion_manager_fields(tmp_path):
+def test_settings_dialog_saves_fast_cylindrical_motion_manager_fields(tmp_path):
     _app()
     config_file = tmp_path / "config.ini"
     config_file.write_text(
         "[motion_manager]\n"
-        "type = SphericalMeasurementMotionManager\n",
+        "type = FastCylindricalMeasurementMotionManager\n"
+        "unsafe_point_policy = abort\n"
+        "optimize_point_order = False\n",
         encoding="utf-8",
     )
 
-    dialog = SettingsDialog(str(config_file), lambda: None)
+    dialog = SettingsDialog(str(config_file), lambda changed: None)
     manager_type, _kind = dialog.inputs[("motion_manager", "type")]
-    safe_radius, _kind = dialog.inputs[("motion_manager", "safe_radius")]
+    policy, _kind = dialog.inputs[("motion_manager", "unsafe_point_policy")]
 
     assert isinstance(manager_type, QComboBox)
-    assert isinstance(safe_radius, QLineEdit)
+    assert isinstance(policy, QComboBox)
 
-    manager_type.setCurrentText("CylindricalMeasurementMotionManager")
-    safe_radius.setText("123.5")
+    policy.setCurrentText("skip")
     dialog.save()
 
     content = config_file.read_text(encoding="utf-8")
-    assert "type = CylindricalMeasurementMotionManager" in content
-    assert "safe_radius = 123.5" in content
-
-
-def test_settings_dialog_removes_stale_motion_manager_fields(tmp_path):
-    _app()
-    config_file = tmp_path / "config.ini"
-    config_file.write_text(
-        "[motion_manager]\n"
-        "type = CylindricalMeasurementMotionManager\n"
-        "safe_radius = 123.5\n",
-        encoding="utf-8",
-    )
-
-    dialog = SettingsDialog(str(config_file), lambda: None)
-    manager_type, _kind = dialog.inputs[("motion_manager", "type")]
-
-    assert isinstance(manager_type, QComboBox)
-
-    manager_type.setCurrentText("SphericalMeasurementMotionManager")
-    dialog.save()
-
-    content = config_file.read_text(encoding="utf-8")
-    assert "type = SphericalMeasurementMotionManager" in content
-    assert "safe_radius" not in content
+    assert "type = FastCylindricalMeasurementMotionManager" in content
+    assert "unsafe_point_policy = skip" in content
 
 
 def test_settings_dialog_saves_referenced_measurement_points_fields(tmp_path):
@@ -204,7 +252,7 @@ def test_settings_dialog_saves_referenced_measurement_points_fields(tmp_path):
     config_file = tmp_path / "config.ini"
     config_file.write_text(
         "[motion_manager]\n"
-        "type = CylindricalMeasurementMotionManager\n"
+        "type = FastCylindricalMeasurementMotionManager\n"
         "measurement_points = points\n"
         "[points]\n"
         "type = FileMeasurementPoints\n"
@@ -212,14 +260,13 @@ def test_settings_dialog_saves_referenced_measurement_points_fields(tmp_path):
         encoding="utf-8",
     )
 
-    dialog = SettingsDialog(str(config_file), lambda: None)
+    dialog = SettingsDialog(str(config_file), lambda changed: None)
     mp_type, _kind = dialog.inputs[("__motion_manager_ui__", "measurement_points_type")]
     filename, _kind = dialog.inputs[("__measurement_points__", "filename")]
 
     assert isinstance(mp_type, QComboBox)
     assert isinstance(filename, QLineEdit)
 
-    mp_type.setCurrentText("FileMeasurementPoints")
     filename.setText("new.csv")
     dialog.save()
 
@@ -243,7 +290,7 @@ def test_settings_dialog_can_inline_measurement_points_fields(tmp_path):
         encoding="utf-8",
     )
 
-    dialog = SettingsDialog(str(config_file), lambda: None)
+    dialog = SettingsDialog(str(config_file), lambda changed: None)
     section, _kind = dialog.inputs[("__motion_manager_ui__", "measurement_points_section")]
     mp_type, _kind = dialog.inputs[("__motion_manager_ui__", "measurement_points_type")]
     filename, _kind = dialog.inputs[("__measurement_points__", "filename")]

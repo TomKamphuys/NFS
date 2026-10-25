@@ -1,9 +1,8 @@
 import numpy as np
+
 from loguru import logger
 
 from nfs.datatypes import CylindricalPosition
-
-logger.add('scanner.log', mode='w', level="TRACE")
 
 
 class SphericalMeasurementPointsArcs:
@@ -101,12 +100,9 @@ class SphericalMeasurementPointsArcs:
         self._actual_nr_of_points = self._r_cyl.size
         self._current_index = 0
 
-    def get_radius(self) -> float:
-        return self._radius
-
     def next(self) -> CylindricalPosition:
         i = self._current_index
-        logger.info(f'Point {i} of {self._actual_nr_of_points}')
+        logger.debug(f'Point {i} of {self._actual_nr_of_points}')
 
         r = self._r_cyl[i]
         theta = self._theta_cyl[i]
@@ -127,9 +123,6 @@ class SphericalMeasurementPointsArcs:
 
     def total_points(self) -> int:
         return self._actual_nr_of_points
-
-    def need_to_do_evasive_move(self) -> bool:
-        return False
 
 
 def register(factory) -> None:
