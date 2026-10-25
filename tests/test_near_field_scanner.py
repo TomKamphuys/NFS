@@ -55,10 +55,9 @@ def test_take_measurement_set(mocks):
     # 1. move_to_safe_starting_radius()
     # 2. while not ready():
     # 3.   next()
-    # 4.   if ready(): break
-    # 5.   get_position(), log, measure_ir()
-    # 6. loop...
-    # 7. reset(), move_to_park_position()
+    # 4.   get_position(), log, measure_ir()
+    # 5. loop...
+    # 6. reset(), move_to_park_position()
 
     mocks['motion_manager'].ready.side_effect = [
         False, # first while check
@@ -80,7 +79,7 @@ def test_take_measurement_set(mocks):
     mocks['motion_manager'].move_to_park_position.assert_called_once()
     mocks['motion_manager'].reset.assert_called_once()
 
-    # measure_ir called once (first point). Second point loop breaks before measure_ir.
+    # Both points are measured
     mocks['audio'].set_session_directory.assert_called_with(Path.cwd() / "measurement_set")
     assert (Path.cwd() / "logs").exists()
     assert mocks['audio'].measure_ir.call_count == 2
