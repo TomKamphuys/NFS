@@ -11,8 +11,8 @@ Responsibilities of this launcher:
   ``config.ini`` relative to the current working directory. When installed
   under ``C:\\Program Files`` that location is read-only, so we redirect the
   working directory to a per-user data folder.
-* Seed that folder, on first run, with the default configuration files that
-  were bundled into the executable.
+* Seed missing user configuration and refresh bundled defaults in that folder
+  on every launch, preserving an existing ``config.ini``.
 * Hand control over to :func:`harmonic_drive_qt.main.main`.
 """
 
@@ -42,12 +42,12 @@ def _user_data_dir() -> Path:
 
 
 def _seed_config_files(data_dir: Path) -> None:
-    """Copy bundled default configuration files into ``data_dir`` if missing."""
+    """Refresh bundled defaults in ``data_dir`` without replacing user configuration."""
     bundle = _bundle_dir()
     for name in ("config_default.ini", "config.ini"):
         source = bundle / name
         target = data_dir / name
-        if source.exists() and not target.exists():
+        if source.exists() and (name == "config_default.ini" or not target.exists()):
             try:
                 shutil.copyfile(source, target)
             except OSError:

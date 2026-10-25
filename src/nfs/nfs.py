@@ -1,4 +1,5 @@
 import configparser
+import datetime
 import shutil
 import threading
 import time
@@ -10,7 +11,7 @@ from loguru import logger
 
 from . import loader
 from .audio import AudioFactory, IAudio
-from .motion_manager import MotionManagerFactory
+from .motion_manager import MotionManagerFactory, IMotionManager
 from .scanner import Scanner
 
 
@@ -34,9 +35,8 @@ class NearFieldScanner:
     def __init__(self,
                  scanner: Scanner,
                  audio: IAudio,
-                 measurement_motion_manager,
-                 position_log_file: str = 'measurement_positions.csv',
-                 config_file: str = None):
+                 measurement_motion_manager: IMotionManager,
+                 position_log_file: str = 'measurement_positions.csv'):
         """
         Initialize the NearFieldScanner.
 
@@ -44,13 +44,11 @@ class NearFieldScanner:
         :param audio: The audio interface for measurement and signal capture.
         :param measurement_motion_manager: Manager responsible for controlling motions during measurements.
         :param position_log_file: Path to the file where measurement positions are logged.
-        :param config_file: Path to the configuration file used.
         """
         self._scanner = scanner
         self._audio = audio
         self._measurement_motion_manager = measurement_motion_manager
         self._position_log_file = position_log_file
-        self._config_file = config_file
         self._project_dir = Path.cwd()
         self._measurement_pause_requested = threading.Event()
         self._measurement_stop_requested = threading.Event()
@@ -62,23 +60,42 @@ class NearFieldScanner:
             "total": 0,
             "timestamp": time.monotonic(),
             "eta_seconds": None,
+            "elapsed_seconds": 0.0,
         }
         self._clear_position_log()
 
     def _single_measurements_dir(self) -> Path:
+        """
+        Get the directory path used for storing single measurement outputs.
+
+        :return: Path to the single measurements directory.
+        """
         return self._project_dir / "single_measurements"
 
     def _measurement_set_dir(self) -> Path:
+        """
+        Get the directory path used for storing measurement set outputs.
+
+        :return: Path to the measurement set directory.
+        """
         return self._project_dir / "measurement_set"
 
     @staticmethod
     def _safe_measurement_set_name(name: str | None) -> str:
+        """
+        Sanitize or generate a measurement set session name.
+
+        If a valid name is provided, non-alphanumeric characters are replaced
+        with underscores. If no valid name is provided, generates a timestamp-based name.
+
+        :param name: Optional raw name for the measurement set.
+        :return: A sanitized filename-safe measurement set name string.
+        """
         if name:
             cleaned = "".join(ch if ch.isalnum() else "_" for ch in str(name).strip())
             cleaned = "_".join(part for part in cleaned.split("_") if part)
             if cleaned:
                 return cleaned
-        import datetime
         return datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 
     def _clear_position_log(self) -> None:
@@ -90,7 +107,7 @@ class NearFieldScanner:
             f.write('r_xy_mm,phi_deg,z_mm\n')
         logger.info(f'Position log file cleared: {self._position_log_file}')
 
-    def _append_position_to_file(self, position) -> None:
+    def _append_position_to_file(self, position: 'CylindricalPosition') -> None:
         """
         Appends the measurement position to the log file as CSV with numeric values only.
         :param position: The position to be logged (CylindricalPosition)
@@ -110,7 +127,7 @@ class NearFieldScanner:
             self._audio.set_session_directory(self._single_measurements_dir())
         self._audio.measure_ir(self._scanner.get_position())
 
-    def test_sweep(self):
+    def test_sweep(self) -> dict[str, Any]:
         """
         Run the current sweep settings at the current position without saving files.
 
@@ -138,16 +155,37 @@ class NearFieldScanner:
             self._measurement_pause_requested.clear()
 
     def is_measurement_set_running(self) -> bool:
+        """
+        Check if a measurement set is currently in progress.
+
+        :return: True if a measurement set is running, False otherwise.
+        """
         return self._measurement_running
 
     def is_measurement_set_paused(self) -> bool:
+        """
+        Check if the active measurement set is currently paused.
+
+        :return: True if paused, False otherwise.
+        """
         return self._measurement_pause_requested.is_set()
 
     def get_measurement_progress(self) -> dict[str, Any]:
+        """
+        Retrieve a copy of the current measurement set progress dictionary.
+
+        :return: Dictionary containing progress details (status, current point,
+                 total points, timestamp, and estimated time remaining in seconds).
+        """
         with self._measurement_progress_lock:
             return dict(self._measurement_progress)
 
     def _wait_while_measurement_paused(self) -> bool:
+        """
+        Wait in a loop while measurement set is paused until resumed or stopped.
+
+        :return: True if resumed and measurement should continue, False if stop was requested.
+        """
         if self._measurement_pause_requested.is_set():
             logger.info("Measurement set paused.")
         while self._measurement_pause_requested.is_set():
@@ -164,7 +202,15 @@ class NearFieldScanner:
     ) -> None:
         """
         Take a full set of measurements.
-        :return: nothing
+
+        Iterates through all measurement positions defined by the motion manager,
+        records impulse responses at each point, logs cylindrical coordinates,
+        and manages pause/stop requests and progress reporting.
+
+        :param measurement_set_name: Optional name for the measurement session.
+        :param overwrite: If True, overwrite existing measurement set directory.
+        :param progress_callback: Optional callback invoked when progress updates occur.
+        :return: None
         """
         self._measurement_pause_requested.clear()
         self._measurement_stop_requested.clear()
@@ -173,7 +219,9 @@ class NearFieldScanner:
         total = 0
         started_at = None
         eta_seconds = None
+        elapsed_seconds = 0.0
         stopped_early = False
+        failure_exc: Exception | None = None
 
         # 1. Setup this measurement set's output directory
         session_name = self._safe_measurement_set_name(measurement_set_name)
@@ -186,9 +234,10 @@ class NearFieldScanner:
         log_dir = self._project_dir / "logs"
         log_dir.mkdir(parents=True, exist_ok=True)
         log_file = log_dir / "Scanner.log"
+        from .logging_config import get_configured_level
         sink_id = logger.add(
             log_file,
-            level="DEBUG",
+            level=get_configured_level(),
             format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {name}:{function}:{line} - {message}"
         )
         logger.info(f"Starting measurement set {session_name} in: {self._project_dir}")
@@ -213,6 +262,7 @@ class NearFieldScanner:
                 total,
                 timestamp=started_at,
                 eta_seconds=eta_seconds,
+                elapsed_seconds=elapsed_seconds,
             )
             while not self._measurement_motion_manager.ready():
                 if not self._wait_while_measurement_paused():
@@ -236,6 +286,8 @@ class NearFieldScanner:
 
                 self._audio.measure_ir(position)
                 timestamp = time.monotonic()
+                if started_at is not None:
+                    elapsed_seconds = timestamp - started_at
                 if started_at is not None and total > 0 and current >= 2:
                     seconds_per_point = (timestamp - started_at) / current
                     eta_seconds = seconds_per_point * max(0, total - current)
@@ -246,26 +298,53 @@ class NearFieldScanner:
                     total,
                     timestamp=timestamp,
                     eta_seconds=eta_seconds,
+                    elapsed_seconds=elapsed_seconds,
                 )
 
             self._measurement_motion_manager.reset()
             self._measurement_motion_manager.move_to_park_position()
 
+        except Exception as exc:
+            failure_exc = exc
+            logger.error(f"Measurement set failed: {exc}")
+            raise
+
         finally:
-            final_current = current
-            finished_eta = 0 if total > 0 and final_current >= total else eta_seconds
-            self._emit_measurement_progress(
-                progress_callback,
-                "finished",
-                final_current,
-                total,
-                eta_seconds=finished_eta,
-            )
+            if failure_exc is not None:
+                self._emit_measurement_progress(
+                    progress_callback,
+                    "failed",
+                    current,
+                    total,
+                    eta_seconds=None,
+                    elapsed_seconds=elapsed_seconds,
+                    error=str(failure_exc),
+                    exception=failure_exc,
+                )
+            else:
+                final_current = current
+                if not stopped_early and total > 0:
+                    final_current = total
+                finished_eta = 0 if total > 0 and final_current >= total else eta_seconds
+                self._emit_measurement_progress(
+                    progress_callback,
+                    "finished",
+                    final_current,
+                    total,
+                    eta_seconds=finished_eta,
+                    elapsed_seconds=elapsed_seconds,
+                )
             self._measurement_running = False
             self._measurement_pause_requested.clear()
             self._measurement_stop_requested.clear()
             # 5. Cleanup: Restore paths and remove session log sink
-            logger.info(f"Measurement set {session_name} complete.")
+            if failure_exc is not None:
+                logger.error(f"Measurement set {session_name} failed: {failure_exc}")
+            else:
+                if elapsed_seconds > 0:
+                    logger.info(f"Measurement set {session_name} complete in {elapsed_seconds:.1f}s.")
+                else:
+                    logger.info(f"Measurement set {session_name} complete.")
             logger.remove(sink_id)
 
     def _emit_measurement_progress(
@@ -276,14 +355,39 @@ class NearFieldScanner:
         total: int,
         timestamp: float | None = None,
         eta_seconds: float | None = None,
+        elapsed_seconds: float = 0.0,
+        error: str | None = None,
+        exception: Exception | None = None,
     ) -> None:
-        event = {
+        """
+        Record and emit a measurement progress update.
+
+        Updates the internal thread-safe progress status dictionary and calls the
+        user-provided callback function if one was supplied.
+
+        :param progress_callback: Optional callback receiving a copy of the progress dictionary.
+        :param status: Current status string (e.g., 'started', 'point_complete', 'finished', 'failed').
+        :param current: Number of points measured so far.
+        :param total: Total number of points in the measurement set.
+        :param timestamp: Monotonic timestamp of the progress event (defaults to current monotonic time).
+        :param eta_seconds: Estimated remaining time in seconds, or None if undetermined.
+        :param elapsed_seconds: Elapsed time in seconds since measurement started.
+        :param error: Optional error description string if failed.
+        :param exception: Optional Exception instance if failed.
+        :return: None
+        """
+        event: dict[str, Any] = {
             "status": status,
             "current": current,
             "total": total,
             "timestamp": timestamp if timestamp is not None else time.monotonic(),
             "eta_seconds": eta_seconds,
+            "elapsed_seconds": elapsed_seconds,
         }
+        if error is not None:
+            event["error"] = error
+        if exception is not None:
+            event["exception"] = exception
         with self._measurement_progress_lock:
             self._measurement_progress = dict(event)
         if progress_callback is None:
@@ -294,6 +398,15 @@ class NearFieldScanner:
             logger.warning(f"Measurement progress callback failed: {exc}")
 
     def set_project_directory(self, project_dir: str | Path) -> None:
+        """
+        Set the active project directory for measurement outputs and position logging.
+
+        Ensures the target directory exists, updates position log path and audio session
+        directory, and clears the position log file.
+
+        :param project_dir: Path to the new project root directory.
+        :return: None
+        """
         self._project_dir = Path(project_dir)
         self._project_dir.mkdir(parents=True, exist_ok=True)
         self._position_log_file = str(self._project_dir / "measurement_positions.csv")
@@ -345,7 +458,7 @@ class NearFieldScanner:
             logger.warning(f"Error stopping sine during shutdown: {e}")
         self._scanner.shutdown()  # turn off stuff and tidy
 
-    def __enter__(self):
+    def __enter__(self) -> 'NearFieldScanner':
         """
         Context manager enter.
 
@@ -353,7 +466,12 @@ class NearFieldScanner:
         """
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: object | None,
+    ) -> None:
         """
         Context manager exit, ensures shutdown is called.
 
@@ -401,4 +519,4 @@ class NearFieldScannerFactory:
         motion_manager_section = config_parser.get(section, 'motion_manager')
         measurement_manager = MotionManagerFactory.create(config_file, motion_manager_section, scanner)
 
-        return NearFieldScanner(scanner, audio, measurement_manager, config_file=config_file)
+        return NearFieldScanner(scanner, audio, measurement_manager)

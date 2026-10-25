@@ -31,7 +31,9 @@ Key Features:
 """
 
 import configparser
-import os
+import ctypes
+import sys
+from contextlib import contextmanager
 import threading
 import time
 from abc import ABC, abstractmethod
@@ -48,11 +50,31 @@ from loguru import logger
 
 from .datatypes import CylindricalPosition
 from .utils.dsp import DSPUtils
+from . import _audio_backend as sd
 
-# Enable ASIO build of PortAudio in python-sounddevice (Windows).
-# This environment variable triggers the loading of ASIO drivers if available.
-os.environ["SD_ENABLE_ASIO"] = "1"
-import sounddevice as sd  # noqa: E402
+
+@contextmanager
+def _asio_thread_context(enabled: bool):
+    """Keep Windows COM initialized on the calling thread until ASIO closes."""
+    # COM is thread-specific. The thread that opens an ASIO stream must set it
+    # up first, then keep it available until the stream has been closed.
+    if not enabled or sys.platform != "win32":
+        yield
+        return
+    ole32 = ctypes.windll.ole32
+    # COINIT_APARTMENTTHREADED = 2. Mask to unsigned so Windows error codes
+    # compare the same way whether ctypes returns a signed or unsigned value.
+    result = ole32.CoInitializeEx(None, 2) & 0xFFFFFFFF
+    # 0: new apartment; 1: already initialized here; RPC_E_CHANGED_MODE:
+    # another apartment model is active, and we do not own a COM reference.
+    if result not in (0, 1, 0x80010106):
+        raise RuntimeError(f"ASIO COM initialization failed (HRESULT 0x{result:08X})")
+    try:
+        yield
+    finally:
+        # Balance our own successful initialization, even if the stream fails.
+        if result in (0, 1):
+            ole32.CoUninitialize()
 
 
 _METER_EPS = 1e-12
@@ -487,12 +509,16 @@ def get_devices_and_channels() -> dict:
     Channel indices are 0-based because they are used directly as sounddevice
     stream buffer indices.
     """
-    # Hard refresh PortAudio state to catch any recent device changes
-    sd._terminate()
-    sd._initialize()
-
-    apis = sd.query_hostapis()
-    devs = sd.query_devices()
+    # Device lookup must be read-only: PortAudio is shared by every stream.
+    # Restarting it here can invalidate an active driver, or reload ASIO on
+    # a temporary UI worker that exits before the next capture. Restart the
+    # application after hot-plugging hardware if the catalog has not updated.
+    try:
+        apis = sd.query_hostapis()
+        devs = sd.query_devices()
+    except Exception as exc:
+        logger.warning("Unable to discover audio devices: {}", exc)
+        return {}
 
     device_catalog = {}
 
@@ -526,15 +552,22 @@ def get_supported_sample_rates(input_device_id: Optional[int], output_device_id:
     PortAudio does not expose a guaranteed exhaustive list for every host API, so
     probe standard audio rates and keep those accepted by all selected devices.
     """
+    try:
+        check_input_settings = sd.check_input_settings
+        check_output_settings = sd.check_output_settings
+    except Exception as exc:
+        logger.warning("Unable to discover supported audio sample rates: {}", exc)
+        return []
+
     common_rates = [44100, 48000, 88200, 96000, 176400, 192000]
     supported = []
 
     for rate in common_rates:
         try:
             if input_device_id is not None:
-                sd.check_input_settings(device=input_device_id, samplerate=rate)
+                check_input_settings(device=input_device_id, samplerate=rate)
             if output_device_id is not None:
-                sd.check_output_settings(device=output_device_id, samplerate=rate)
+                check_output_settings(device=output_device_id, samplerate=rate)
         except Exception:
             continue
         supported.append(rate)
@@ -642,7 +675,7 @@ class DSPVerificationTool:
     Provides automated verification of SNR, THD, and Timing Jitter.
     """
 
-    def __init__(self, fs: int):
+    def __init__(self, fs: int) -> None:
         """
         Initialize the DSP verification tool.
 
@@ -650,7 +683,8 @@ class DSPVerificationTool:
         """
         self.fs = fs
 
-    def calculate_metrics(self, h_full: np.ndarray, h_linear: np.ndarray, psr: float) -> Dict[str, float]:
+    def calculate_metrics(self, h_full: np.ndarray, h_linear: np.ndarray, psr: float,
+                          psr_reference: Optional[float] = None) -> Dict[str, float]:
         """
         Calculates a suite of DSP quality metrics.
         
@@ -685,6 +719,15 @@ class DSPVerificationTool:
 
         # 3. Alignment Quality
         metrics['psr'] = float(psr)
+        metrics['psr_db'] = float(20.0 * np.log10(psr)) if psr > 0 else 0.0
+        if psr_reference is not None and psr_reference > 1.0:
+            reference_db = float(20.0 * np.log10(psr_reference))
+            metrics['psr_reference_db'] = reference_db
+            # This is a relative clarity score, not a probability that the
+            # alignment is correct. The raw PSR remains in the saved metrics.
+            metrics['alignment_score_10'] = round(float(np.clip(
+                10.0 * metrics['psr_db'] / reference_db, 0.0, 10.0
+            )), 1)
 
         # 4. Crest Factor of IR (Indicates impulsive vs smeared)
         # Ratio of peak amplitude to RMS value. A high crest factor means a sharp, clean impulse.
@@ -700,7 +743,16 @@ class DSPVerificationTool:
         if metrics.get('thd_pct', 0) > 10:
             warnings.append(f"HIGH DISTORTION: {metrics['thd_pct']:.2f}%. Check for clipping or transducer stress.")
         if metrics.get('psr', 10) < 3.0:
-            warnings.append(f"POOR ALIGNMENT: PSR is {metrics['psr']:.1f}. Possible clock drift or phase smear.")
+            if 'alignment_score_10' in metrics:
+                warnings.append(
+                    f"POOR ALIGNMENT: Marker clarity is {metrics['psr_db']:.1f} dB / "
+                    f"{metrics['psr_reference_db']:.1f} dB reference "
+                    f"({metrics['alignment_score_10']:.1f}/10)."
+                )
+            else:
+                warnings.append(
+                    f"POOR ALIGNMENT: Marker clarity is {metrics.get('psr_db', 0.0):.1f} dB."
+                )
 
         return warnings
 
@@ -716,7 +768,7 @@ class MarkerGenerator:
     superior to simple pulses for synchronization in noisy environments.
     """
 
-    def __init__(self, fs: int, dur_ms: float, bw_hz: Tuple[float, float], level_dbfs: float):
+    def __init__(self, fs: int, dur_ms: float, bw_hz: Tuple[float, float], level_dbfs: float) -> None:
         """
         Initialize the marker generator.
 
@@ -776,7 +828,7 @@ class SweepGenerator:
       3. A 'clean' Inverse Filter using Time Reversal of the fundamental.
     """
 
-    def __init__(self, fs: int, duration_s: float, f1: float, level_dbfs: float):
+    def __init__(self, fs: int, duration_s: float, f1: float, level_dbfs: float) -> None:
         """
         Initialize the sweep generator.
 
@@ -804,10 +856,17 @@ class SweepGenerator:
         s_fund = np.sin(phase).astype(np.float64)
 
         # 2. Generate CLEAN Inverse (Using Time Reversal)
-        # We use the clean fundamental for the inverse to avoid "baking in" the distortion 
+        # We use the clean fundamental for the inverse to avoid "baking in" the distortion
         # or protection filter into the reference.
         envelope = np.exp(-t / L)  # Amplitude envelope to correct pink spectrum to white (flat frequency response)
         inv = s_fund[::-1] * envelope  # Time Reversal effectively conjugates the phase in frequency domain
+
+        # 3. Apply short endpoint fade to the inverse filter to suppress artificial THD
+        # caused by discontinuities at the boundaries of the time-reversed signal.
+        # Fade duration scales with sweep length: 0.2% of duration, clamped to [1ms, 5ms].
+        fade_duration_s = min(5e-3, max(1e-3, 0.002 * self.T))
+        fade_ms = fade_duration_s * 1000.0
+        inv = DSPUtils.hann_fade(inv, fade_ms, self.fs, side="both")
 
         # Normalize Inverse in Frequency Domain to ensure unity gain convolution
         Nfft = int(2 ** np.ceil(np.log2(len(s_fund) + len(inv) - 1)))
@@ -822,7 +881,7 @@ class SweepGenerator:
 class HarmonicInjector:
     """Injects H2/H3 distortions using the sweep's phase array."""
 
-    def __init__(self, h2_db: Optional[float] = None, h3_db: Optional[float] = None):
+    def __init__(self, h2_db: Optional[float] = None, h3_db: Optional[float] = None) -> None:
         """
         Initialize the harmonic injector.
 
@@ -839,12 +898,12 @@ class HarmonicInjector:
         # Adds artificial distortion to verify that the Farina separation logic works.
         if self.h2_db is not None:
             amp_h2 = DSPUtils.db_to_lin(self.h2_db)
-            logger.info(f"► INJECTING H2 @ {self.h2_db} dB")
+            logger.debug(f"► INJECTING H2 @ {self.h2_db} dB")
             s_composite += amp_h2 * np.sin(2 * phase)
 
         if self.h3_db is not None:
             amp_h3 = DSPUtils.db_to_lin(self.h3_db)
-            logger.info(f"► INJECTING H3 @ {self.h3_db} dB")
+            logger.debug(f"► INJECTING H3 @ {self.h3_db} dB")
             s_composite += amp_h3 * np.sin(3 * phase)
 
         return s_composite
@@ -853,7 +912,7 @@ class HarmonicInjector:
 class ProtectionFilter:
     """Applies MIN phase HPF to protect drivers, and generates an inverse correction mask."""
 
-    def __init__(self, fs: int, freq_hz: float, order: int, hpf_correction: bool = False, hpf_corr_db_cap: float = 12.0):
+    def __init__(self, fs: int, freq_hz: float, order: int, hpf_correction: bool = False, hpf_corr_db_cap: float = 12.0) -> None:
         """
         Initialize the protection filter.
 
@@ -880,7 +939,7 @@ class ProtectionFilter:
         if self.sos is None:
             return sig
 
-        logger.info(f"► Applying Protection HPF: {self.freq_hz}Hz, Order={self.order} (Min Phase)")
+        logger.debug(f"► Applying Protection HPF: {self.freq_hz}Hz, Order={self.order} (Min Phase)")
         return scipy.signal.sosfilt(self.sos, sig).astype(np.float32)
 
     def get_correction_mask(self, n_bins: int) -> np.ndarray:
@@ -891,7 +950,7 @@ class ProtectionFilter:
         if self.sos is None or not self.hpf_correction:
             return np.ones(n_bins, dtype=np.complex64)
 
-        logger.info(f"► Generating HPF Correction Mask (Max Gain: +{self.hpf_corr_db_cap}dB)")
+        logger.debug(f"► Generating HPF Correction Mask (Max Gain: +{self.hpf_corr_db_cap}dB)")
 
         # 1. Calculate the exact complex frequency response of the applied IIR filter
         _, H = scipy.signal.sosfreqz(self.sos, worN=n_bins, fs=self.fs)
@@ -948,6 +1007,38 @@ class AlignmentEngine:
         self.align_to_first_marker = align_to_first_marker
         self.mic_tail_taper_ms = mic_tail_taper_ms
         self.marker_dur_ms = marker_dur_ms
+        self.last_psr_reference = 0.0
+
+    def _calculate_psr(self, lags: np.ndarray, corr: np.ndarray, peak_lag: int,
+                       peak_val: float, ref_len: int) -> float:
+        """Compare a selected peak with the marker's surrounding correlation peaks."""
+        chip_dur_s = (self.marker_dur_ms / 1000.0) / 13.0
+        exclusion_samps = int((chip_dur_s * 2.0) * self.fs)
+        quality_start = max(0, peak_lag - ref_len)
+        quality_end = min(int(lags[-1]), peak_lag + ref_len)
+        sidelobe_windows = (
+            (lags >= quality_start) & (lags <= quality_end)
+            & (np.abs(lags - peak_lag) > exclusion_samps)
+        )
+        sidelobe_val = float(np.max(corr[sidelobe_windows], initial=0.0))
+        return peak_val / (sidelobe_val + 1e-12) if sidelobe_val > 0 else 0.0
+
+    def reference_psr(self, ref: np.ndarray) -> float:
+        """Return the ideal digital-loopback PSR for the current marker waveform."""
+        marker_start = len(ref)
+        ideal_recording = np.pad(ref, (marker_start, marker_start))
+        lags, corr = DSPUtils.rfft_xcorr(ideal_recording, ref)
+        peak_val = float(corr[lags == marker_start][0])
+        return self._calculate_psr(lags, corr, marker_start, peak_val, len(ref))
+
+    def _format_marker_clarity(self, psr: float) -> str:
+        """Format the internal ratio as the user-facing dB and relative score."""
+        measured_db = float(20.0 * np.log10(psr)) if psr > 0 else 0.0
+        if self.last_psr_reference > 1.0:
+            reference_db = float(20.0 * np.log10(self.last_psr_reference))
+            score = float(np.clip(10.0 * measured_db / reference_db, 0.0, 10.0))
+            return f"{measured_db:.1f} dB / {reference_db:.1f} dB reference ({score:.1f}/10)"
+        return f"{measured_db:.1f} dB"
 
     def _matched_filter_detect(self, x: np.ndarray, ref: np.ndarray, search_start: int = None,
                                search_end: int = None) -> Tuple[int, float, float]:
@@ -970,22 +1061,15 @@ class AlignmentEngine:
         peak_val = float(corr_sel[i])
 
         # --- BEGIN QUALITY / PSR CHECK ---
-        # Barker-13 autocorrelation main lobe is 2 chips wide. 
-        # We dynamically calculate this width to mask only the main peak.
-        chip_dur_s = (self.marker_dur_ms / 1000.0) / 13.0
-        exclusion_samps = int((chip_dur_s * 2.0) * self.fs)
-        mask_start = max(0, i - exclusion_samps)
-        mask_end = min(len(corr_sel), i + exclusion_samps)
+        peak_lag = int(lags_sel[i])
+        psr = self._calculate_psr(lags, corr, peak_lag, peak_val, len(ref))
 
-        corr_masked = corr_sel.copy()
-        corr_masked[mask_start:mask_end] = 0.0  # Zero out the main lobe
-
-        sidelobe_val = float(np.max(corr_masked))
-        psr = peak_val / (sidelobe_val + 1e-12) if sidelobe_val > 0 else 99.0
-
-        # If the peak is less than 2.5x the height of the sidelobes, alignment is dangerously smeared.
+        # A small ratio warns that the chosen marker is not clearly isolated.
+        # It does not by itself prove phase smearing in the acoustic path.
         if psr < 2.5:
-            logger.warning(f"POOR MARKER ALIGNMENT: Correlation Peak Sharpness is {psr:.1f}. Phase smearing detected.")
+            logger.warning(
+                f"Marker clarity is {self._format_marker_clarity(psr)}; check alignment quality."
+            )
         # --- END QUALITY / PSR CHECK ---
 
         # --- BEGIN DEBUG DATA SAVE BLOCK ---
@@ -1029,25 +1113,34 @@ class AlignmentEngine:
         # --- Alignment & Averaging ---
         mic_slices = []
         loop_slices = []
+        self.last_psr_reference = self.reference_psr(marker_single)
         capture_len = sweep_len + int(round(self.mic_tail_taper_ms / 1000.0 * self.fs))
 
         # --- FIXED ALIGNMENT LOGIC ---
         # 1. Find a global anchor (first marker) using Matched Filter
-        search_limit = pre_samps_settle + slot_len
+        # The first marker must be inside the first half of its sweep slot.
+        # Stopping here keeps the following marker (and its correlation peak)
+        # out of the initial search, even in a zero-latency loopback.
+        search_limit = pre_samps_settle + (slot_len // 2)
         k_first_marker, _, psr = self._matched_filter_detect(rec_loop, marker_single, search_end=search_limit)
 
         # The correlation peak IS the start.
         t0_first_sweep = k_first_marker
-        logger.debug(f"Marker found at {k_first_marker}. Using this as T0. PSR={psr:.1f}")
+        logger.debug(
+            f"Marker found at {k_first_marker}. Using this as T0. "
+            f"Clarity={self._format_marker_clarity(psr)}"
+        )
 
         window_samps = int(0.005 * self.fs)  # 5ms search window for re-sync
 
+        repeat_psrs = []
         for i in range(self.num_sweeps):
             expected_t0 = t0_first_sweep + (i * slot_len)
 
             if self.align_to_first_marker:
                 # Sample-based cut: Rely on the first marker and constant sample rate
                 start_idx = expected_t0
+                psr_local = psr
             else:
                 # Per-sweep alignment: Re-sync to the marker for *every* sweep
                 # Corrects for minor clock drift in very long sequences
@@ -1056,17 +1149,18 @@ class AlignmentEngine:
                 k_local, _, psr_local = self._matched_filter_detect(rec_loop, marker_single, search_start=s_start,
                                                                     search_end=s_end)
                 start_idx = k_local
-                if i == 0:
-                    psr = psr_local  # Use first sweep PSR as representative if per-sweep
 
             end_idx = start_idx + capture_len
             # Stores aligned capture window copies into accumulation lists
             if end_idx <= len(rec_mic) and start_idx >= 0:
+                repeat_psrs.append(psr_local)
                 mic_slices.append(rec_mic[start_idx: end_idx].copy())
                 loop_slices.append(rec_loop[start_idx: end_idx].copy())
 
         if not mic_slices:
             raise RuntimeError("No valid sweeps captured (Alignment failed).")
+
+        psr = float(min(repeat_psrs))
 
         # Synchronous Averaging to lower the noise floor
         # By averaging multiple sweeps, the correlated signal (the sweep) adds coherently,
@@ -1083,7 +1177,7 @@ class AlignmentEngine:
 class DeconvolutionEngine:
     """Handles FFT deconvolution, spectral masking, and Farina separation."""
 
-    def __init__(self, fs: int):
+    def __init__(self, fs: int) -> None:
         """
         Initialize the deconvolution engine.
 
@@ -1210,7 +1304,7 @@ class DeconvolutionEngine:
 
 class IAudio(ABC):
     @abstractmethod
-    def measure_ir(self, position: CylindricalPosition, order_id: str = "NA", save: bool = True):
+    def measure_ir(self, position: CylindricalPosition, order_id: str = "NA", save: bool = True) -> dict[str, Any]:
         pass
 
     @abstractmethod
@@ -1252,6 +1346,8 @@ class Audio(IAudio):
         self.hw = hw_config
         self.cap = capture_config
         self._sine_stream = None
+        self._sine_com_context = None
+        self._sine_owner_thread = None
         self._sine_meter_worker: _AudioMeterWorker | None = None
         self._sine_level_lock = threading.Lock()
         self._sine_level_dbfs: float | None = None
@@ -1271,7 +1367,7 @@ class Audio(IAudio):
 
         self._log_config()
 
-    def _ensure_directories(self):
+    def _ensure_directories(self) -> None:
         self.rec_dir.mkdir(parents=True, exist_ok=True)
         self.dist_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1281,14 +1377,14 @@ class Audio(IAudio):
         else:
             self.debug_dir = None
 
-    def set_session_directory(self, session_path: Path):
+    def set_session_directory(self, session_path: Path) -> None:
         """Updates internal recording and debug directories to a measurement session path."""
         self.rec_dir = Path(session_path)
         self.dist_dir = self.rec_dir / "Distortion"
         self._ensure_directories()
         logger.debug(f"Audio session directory updated to: {session_path}")
 
-    def _log_config(self):
+    def _log_config(self) -> None:
         """Log the current hardware and capture configuration."""
         logger.info(
             f"Audio Config: FS={self.hw['fs']}, Sweeps={self.cap['num_sweeps']}, Dur={self.cap['sweep_dur_s']}s")
@@ -1457,7 +1553,7 @@ class Audio(IAudio):
 
         # 7. Start Stream
         try:
-            with sd.Stream(device=(self.hw['dev_in'], self.hw['dev_out']), samplerate=self.hw['fs'],
+            with _asio_thread_context(use_asio_in or use_asio_out), sd.Stream(device=(self.hw['dev_in'], self.hw['dev_out']), samplerate=self.hw['fs'],
                            blocksize=self.hw['blocksize'],
                            dtype="float32", channels=(in_args[0], out_args[0]), dither_off=True,
                            extra_settings=(in_args[1], out_args[1]), callback=callback):
@@ -1476,10 +1572,11 @@ class Audio(IAudio):
             "rx_mic_conditioned": avg_mic,
             "rx_loop_aligned": avg_loop,
             "debug_mic_slices": mic_slices,
-            "psr": psr
+            "psr": psr,
+            "psr_reference": self.alignment_engine.last_psr_reference
         }
 
-    def measure_ir(self, position: CylindricalPosition, order_id: str = "NA", save: bool = True):
+    def measure_ir(self, position: CylindricalPosition, order_id: str = "NA", save: bool = True) -> dict[str, Any]:
         """
         Public entry point. Coordinates capture, processing, and file saving.
         """
@@ -1526,9 +1623,14 @@ class Audio(IAudio):
         )
 
         # 5. DSP Verification
-        metrics = self.verifier.calculate_metrics(ir_full, ir_linear, result.get("psr", 0.0))
+        metrics = self.verifier.calculate_metrics(
+            ir_full, ir_linear, result.get("psr", 0.0), result.get("psr_reference")
+        )
         logger.info(
-            f"DSP Metrics: SNR={metrics['snr_db']:.1f}dB, THD={metrics['thd_pct']:.2f}%, PSR={metrics['psr']:.1f}")
+            f"DSP Metrics: SNR={metrics['snr_db']:.1f}dB, THD={metrics['thd_pct']:.2f}%, "
+            f"marker clarity={metrics['psr_db']:.1f}dB / "
+            f"{metrics.get('psr_reference_db', 0.0):.1f}dB reference "
+            f"({metrics.get('alignment_score_10', 0.0):.1f}/10)")
 
         warnings = self.verifier.verify(metrics)
         for w in warnings:
@@ -1657,7 +1759,7 @@ class Audio(IAudio):
                     done_evt.set()
 
             try:
-                with sd.Stream(
+                with _asio_thread_context(use_asio_in or use_asio_out), sd.Stream(
                     device=(in_dev, out_dev),
                     samplerate=fs,
                     blocksize=self.hw['blocksize'],
@@ -1717,6 +1819,12 @@ class Audio(IAudio):
                 out_args_extra = sd.WasapiSettings(exclusive=self.hw['wasapi_exclusive']) if "WASAPI" in out_api else None
 
             try:
+                # Continuous playback outlives this method. Keep the COM
+                # reference until stop_sine closes the stream on this thread.
+                context = _asio_thread_context(use_asio_in or use_asio_out)
+                context.__enter__()
+                self._sine_com_context = context
+                self._sine_owner_thread = threading.get_ident()
                 self._sine_stream = sd.Stream(
                     device=(in_dev, out_dev),
                     samplerate=fs,
@@ -1729,10 +1837,9 @@ class Audio(IAudio):
                 )
                 self._sine_stream.start()
             except Exception:
-                self._sine_stream = None
-                self._sine_meter_worker.stop()
-                self._sine_meter_worker = None
-                reset_audio_meter_state(active=False)
+                # Also close an allocated stream when start(), rather than
+                # construction, fails; release COM only after closing it.
+                self.stop_sine()
                 raise
 
     def update_sine_level(self, level_dbfs: float) -> None:
@@ -1741,21 +1848,33 @@ class Audio(IAudio):
             self._sine_level_dbfs = float(level_dbfs)
 
     def stop_sine(self) -> None:
-        """Stops any active sine wave playback."""
+        """Stop continuous playback on the same thread that started it."""
+
+        if (self._sine_com_context is not None
+                and self._sine_owner_thread != threading.get_ident()):
+            raise RuntimeError("Continuous audio must be stopped on its owning audio thread")
         if self._sine_stream is not None:
             logger.info("Stopping indefinite sine playback")
             try:
-                self._sine_stream.stop()
-                self._sine_stream.close()
+                try:
+                    self._sine_stream.stop()
+                finally:
+                    self._sine_stream.close()
             except Exception as e:
                 logger.debug(f"Error closing sine stream: {e}")
             self._sine_stream = None
+        if self._sine_com_context is not None:
+            context = self._sine_com_context
+            self._sine_com_context = None
+            self._sine_owner_thread = None
+            context.__exit__(None, None, None)
         if self._sine_meter_worker is not None:
             self._sine_meter_worker.stop()
             self._sine_meter_worker = None
         with self._sine_level_lock:
             self._sine_level_dbfs = None
-        sd.stop()
+        # Explicit streams are already closed above. sounddevice.stop() only
+        # handles play/rec convenience functions and would load an unused backend.
         reset_audio_meter_state(active=False)
 
 
@@ -1848,7 +1967,7 @@ class MockInterfaceAudio(Audio):
             noise = np.random.normal(0, 1e-5, len(y))
             return (y + noise).astype(np.float32)
 
-        logger.info("► Loopback Mode: Applying CS4272 FIR, 15Hz HPF, and 20ms delay.")
+        logger.debug("► Loopback Mode: Applying CS4272 FIR, 15Hz HPF, and 20ms delay.")
         rec_mic = apply_hardware_sim(tx_sweep)
         rec_loop = apply_hardware_sim(tx_ref)
 
@@ -1863,7 +1982,8 @@ class MockInterfaceAudio(Audio):
             "rx_mic_conditioned": avg_mic,
             "rx_loop_aligned": avg_loop,
             "debug_mic_slices": mic_slices,
-            "psr": psr
+            "psr": psr,
+            "psr_reference": self.alignment_engine.last_psr_reference
         }
 
     def play_sine(self, frequency: float, level_dbfs: float, duration_s: Optional[float] = 1.0) -> None:
@@ -1874,16 +1994,16 @@ class MockInterfaceAudio(Audio):
         :param level_dbfs: Level in dBFS.
         :param duration_s: Duration in seconds. If None, plays until stop_sine() is called.
         """
-        logger.info(
+        logger.debug(
             f"[MOCK-INTERFACE] Playing sine: {frequency} Hz, {level_dbfs} dBFS, {'until stopped' if duration_s is None else f'for {duration_s} s'}")
         self.update_sine_level(level_dbfs)
 
     def update_sine_level(self, level_dbfs: float) -> None:
-        logger.info(f"[MOCK-INTERFACE] Updated sine level: {level_dbfs} dBFS")
+        logger.debug(f"[MOCK-INTERFACE] Updated sine level: {level_dbfs} dBFS")
 
     def stop_sine(self) -> None:
         """Stops sine playback."""
-        logger.info("[MOCK-INTERFACE] Stopped sine playback")
+        logger.debug("[MOCK-INTERFACE] Stopped sine playback")
         reset_audio_meter_state(active=False)
 
 
@@ -1894,15 +2014,16 @@ class MockInterfaceAudio(Audio):
 class AudioMock(IAudio):
     """Simulation class for when hardware is unavailable."""
 
-    def measure_ir(self, position: CylindricalPosition, order_id: str = "NA", save: bool = True) -> None:
+    def measure_ir(self, position: CylindricalPosition, order_id: str = "NA", save: bool = True) -> dict[str, Any]:
         """
         Measure the impulse response at a given position.
 
         :param position: The scanner position.
         :param order_id: An optional order ID for file naming.
         """
-        logger.info(f"[MOCK] Measured {position}, ID={order_id}")
+        logger.debug(f"[MOCK] Measured {position}, ID={order_id}")
         # time.sleep(1.0)  # Simulate sweep duration
+        return {}
 
     def play_sine(self, frequency: float, level_dbfs: float, duration_s: Optional[float] = 1.0) -> None:
         """
@@ -1912,16 +2033,16 @@ class AudioMock(IAudio):
         :param level_dbfs: Level in dBFS.
         :param duration_s: Duration in seconds. If None, plays until stop_sine() is called.
         """
-        logger.info(
+        logger.debug(
             f"[MOCK] Playing sine: {frequency} Hz, {level_dbfs} dBFS, {'until stopped' if duration_s is None else f'for {duration_s} s'}")
         self.update_sine_level(level_dbfs)
 
     def update_sine_level(self, level_dbfs: float) -> None:
-        logger.info(f"[MOCK] Updated sine level: {level_dbfs} dBFS")
+        logger.debug(f"[MOCK] Updated sine level: {level_dbfs} dBFS")
 
     def stop_sine(self) -> None:
         """Stops sine playback."""
-        logger.info("[MOCK] Stopped sine playback")
+        logger.debug("[MOCK] Stopped sine playback")
         reset_audio_meter_state(active=False)
 
 
@@ -1933,10 +2054,17 @@ class AudioFactory:
         return value.replace(",", ".")
 
     @staticmethod
-    def _get_required_config(config: configparser.ConfigParser, section: str, key: str, type_func):
+    def _get_required_config(config: configparser.ConfigParser, section: str, key: str, type_func: Any) -> Any:
         if not config.has_option(section, key):
             raise KeyError(f"Missing required config: [{section}] {key}")
         val = config.get(section, key).split('#')[0].split(';')[0].strip()
+        if type_func is bool:
+            # bool("False") is True in Python: nonempty text is truthy.
+            # Decode the configuration value so disabled options stay off.
+            value = val.casefold()
+            if value not in configparser.ConfigParser.BOOLEAN_STATES:
+                raise ValueError(f"Not a boolean: [{section}] {key} = {val}")
+            return configparser.ConfigParser.BOOLEAN_STATES[value]
         if type_func in (float, int):
             val = AudioFactory._normalize_decimal_text(val)
         return type_func(val)

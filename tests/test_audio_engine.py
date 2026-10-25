@@ -4,15 +4,17 @@ import scipy.signal
 import configparser
 import json
 import os
+import sys
 import threading
 from pathlib import Path
+from types import ModuleType
 from unittest.mock import Mock, patch
 import nfs.audio as audio_module
 from nfs.audio import (
     MarkerGenerator, SweepGenerator, HarmonicInjector,
     ProtectionFilter, DeconvolutionEngine, AlignmentEngine,
     DSPVerificationTool, AudioFactory, find_device_id_by_name, get_devices_and_channels,
-    resolve_device_id_by_saved_identity,
+    get_supported_sample_rates, resolve_device_id_by_saved_identity,
     SINE_RMS_FROM_PEAK,
     _AudioMeterWorker,
 )
@@ -169,6 +171,115 @@ def test_sweep_generator_functional(fs):
 
 
 # -----------------------------------------------------------------------------
+# SWEEP GENERATOR — INVERSE FILTER ENDPOINT FADE
+# -----------------------------------------------------------------------------
+
+def _fade_duration_sweep(dur_s: float) -> float:
+    """Return the fade duration in seconds used by SweepGenerator for a given sweep duration."""
+    return min(5e-3, max(1e-3, 0.002 * dur_s))
+
+
+def test_sweep_generator_inverse_fade_duration_short(fs):
+    """For a 0.1 s sweep, 0.2% = 0.2 ms < 1 ms minimum → fade = 1 ms."""
+    dur_s = 0.1
+    gen = SweepGenerator(fs, dur_s, 20.0, -10.0)
+    _, _, inv = gen.generate()
+    expected_fade_s = _fade_duration_sweep(dur_s)
+    assert expected_fade_s == 1e-3
+    n_fade = int(round(expected_fade_s * fs))
+    # First sample should be near zero (fade-in from zero)
+    assert np.abs(inv[0]) < 1e-6
+    # Interior (after fade) should not be zero — use a relative threshold
+    # since short sweeps produce smaller inverse filter amplitudes
+    assert np.max(np.abs(inv[n_fade:])) > 1e-3
+
+
+def test_sweep_generator_inverse_fade_duration_medium(fs):
+    """For a 0.5 s sweep, 0.2% = 1 ms → fade = 1 ms (at the minimum clamp)."""
+    dur_s = 0.5
+    gen = SweepGenerator(fs, dur_s, 20.0, -10.0)
+    _, _, inv = gen.generate()
+    expected_fade_s = _fade_duration_sweep(dur_s)
+    assert expected_fade_s == 1e-3
+    n_fade = int(round(expected_fade_s * fs))
+    assert np.abs(inv[0]) < 1e-6
+    assert np.abs(inv[-1]) < 1e-6
+
+
+def test_sweep_generator_inverse_fade_duration_long(fs):
+    """For a 10 s sweep, 0.2% = 20 ms > 5 ms maximum → fade = 5 ms."""
+    dur_s = 10.0
+    gen = SweepGenerator(fs, dur_s, 20.0, -10.0)
+    _, _, inv = gen.generate()
+    expected_fade_s = _fade_duration_sweep(dur_s)
+    assert expected_fade_s == 5e-3
+    n_fade = int(round(expected_fade_s * fs))
+    assert np.abs(inv[0]) < 1e-6
+    assert np.abs(inv[-1]) < 1e-6
+
+
+def test_sweep_generator_inverse_fade_duration_nominal(fs):
+    """For a 5 s sweep, 0.2% = 10 ms > 5 ms max → fade = 5 ms.
+    For a 2 s sweep, 0.2% = 4 ms → fade = 4 ms (within [1, 5] ms)."""
+    dur_s = 2.0
+    gen = SweepGenerator(fs, dur_s, 20.0, -10.0)
+    _, _, inv = gen.generate()
+    expected_fade_s = _fade_duration_sweep(dur_s)
+    assert expected_fade_s == 4e-3
+    n_fade = int(round(expected_fade_s * fs))
+    assert np.abs(inv[0]) < 1e-6
+    assert np.abs(inv[-1]) < 1e-6
+
+
+def test_sweep_generator_inverse_fade_smooth_transition(fs):
+    """Verify the fade-in ramp is a smooth half-cosine, not a linear or abrupt step."""
+    dur_s = 1.0
+    gen = SweepGenerator(fs, dur_s, 20.0, -10.0)
+    _, _, inv = gen.generate()
+    expected_fade_s = _fade_duration_sweep(dur_s)
+    n_fade = int(round(expected_fade_s * fs))
+    # Check that the very first sample is near zero (fade-in from zero)
+    assert np.abs(inv[0]) < 1e-6
+    # Check that the last sample is near zero (fade-out to zero)
+    assert np.abs(inv[-1]) < 1e-6
+    # Check that the interior is larger than the fade region — use relative comparison
+    # since inverse filter amplitudes are normalized and vary with sweep parameters
+    interior = inv[n_fade:-n_fade] if 2 * n_fade < len(inv) else inv[n_fade:]
+    fade_region = np.concatenate([inv[:n_fade], inv[-n_fade:]]) if 2 * n_fade < len(inv) else inv[:n_fade]
+    assert np.max(np.abs(interior)) > np.max(np.abs(fade_region)), \
+        "Interior should have larger amplitude than the faded endpoints"
+
+
+def test_sweep_generator_inverse_fade_short_sweep_no_overlap(fs):
+    """For a very short sweep (0.01 s = 480 samples at 48 kHz),
+    the two 1 ms fades (48 samples each) should not overlap."""
+    dur_s = 0.01
+    gen = SweepGenerator(fs, dur_s, 20.0, -10.0)
+    _, _, inv = gen.generate()
+    expected_n = int(round(dur_s * fs))
+    assert len(inv) == expected_n
+    expected_fade_s = _fade_duration_sweep(dur_s)
+    n_fade = int(round(expected_fade_s * fs))
+    # Two fades should not consume the entire signal
+    assert 2 * n_fade < len(inv), "Fades should not overlap on short sweeps"
+    # Shape and dtype preserved
+    assert inv.shape == (expected_n,)
+    assert inv.dtype == np.float64
+
+
+def test_sweep_generator_inverse_fade_preserves_shape_and_dtype(fs):
+    """Verify that the fade does not change the array shape or dtype."""
+    dur_s = 0.5
+    gen = SweepGenerator(fs, dur_s, 20.0, -10.0)
+    s_fund, phase, inv = gen.generate()
+    expected_n = int(round(dur_s * fs))
+    assert s_fund.shape == (expected_n,)
+    assert inv.shape == (expected_n,)
+    assert inv.dtype == np.float64
+    assert phase.shape == (expected_n,)
+
+
+# -----------------------------------------------------------------------------
 # PIPELINE STEPS
 # -----------------------------------------------------------------------------
 
@@ -252,6 +363,107 @@ def test_alignment_engine_functional(fs):
     assert len(avg_mic) == fs // 4 + int(round(taper_ms / 1000.0 * fs))
 
 
+def _psr_marker_recording(fs):
+    marker = MarkerGenerator(fs, 100, (500, 5000), -6).generate()
+    raw = np.zeros(fs)
+    raw[fs // 2:fs // 2 + len(marker)] = marker
+    return raw, marker, AlignmentEngine(fs, 1, False, 20, 100)
+
+
+def test_first_marker_search_stops_before_zero_latency_second_marker(fs, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    marker = MarkerGenerator(fs, 100, (500, 5000), -6).generate()
+    pre, slot, length = 2400, 12000, 6000
+    loop = np.zeros(pre + 2 * slot + len(marker))
+    loop[pre:pre + len(marker)] = 0.5 * marker
+    # A stronger marker at the next slot boundary would win the old search,
+    # whose inclusive end point reached this zero-latency second marker.
+    loop[pre + slot:pre + slot + len(marker)] = marker
+    mic = np.zeros_like(loop)
+    mic[pre + 100] = 1.0
+    engine = AlignmentEngine(fs, 1, True, 20, 100)
+
+    _, _, slices, _ = engine.sync_and_average(mic, loop, marker, pre, slot, length)
+
+    assert int(np.argmax(slices[0])) == 100
+
+
+def test_psr_preserves_lag_at_both_search_boundaries(fs, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)  # Existing diagnostic dump belongs in test storage.
+    raw, marker, engine = _psr_marker_recording(fs)
+    results = [engine._matched_filter_detect(raw, marker, a, b)
+               for a, b in ((23760, 24240), (24000, 24480), (23520, 24000),
+                            (0, len(raw) - len(marker)))]
+    assert [r[0] for r in results] == [24000] * 4
+    assert 2.5 < results[0][2] < 99
+    np.testing.assert_allclose([r[2] for r in results], results[0][2], rtol=1e-12)
+
+
+def test_psr_competing_marker_changes_quality_not_timing(fs, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    raw, marker, engine = _psr_marker_recording(fs)
+    clean = engine._matched_filter_detect(raw, marker, 23760, 24240)
+    raw[24900:24900 + len(marker)] += .65 * marker
+    ambiguous = engine._matched_filter_detect(raw, marker, 23760, 24240)
+    assert clean[0] == ambiguous[0] == 24000
+    assert 1 < ambiguous[2] < 2.5 < clean[2]
+
+
+def test_psr_without_comparison_data_warns(fs):
+    engine = AlignmentEngine(fs, 1, False, 20, 100)
+    psr = engine._calculate_psr(
+        np.array([0]), np.array([1.0]), peak_lag=0, peak_val=1.0, ref_len=1
+    )
+    assert psr == 0
+    metrics = audio_module.DSPVerificationTool(fs)
+    assert any('ALIGNMENT' in warning for warning in metrics.verify({'psr': psr}))
+
+
+@pytest.mark.parametrize('marker_fs', [44100, 48000, 96000, 192000])
+def test_generated_marker_reference_scores_ten(marker_fs):
+    marker = MarkerGenerator(marker_fs, 100, (500, 5000), -6).generate()
+    engine = AlignmentEngine(marker_fs, 1, False, 20, 100)
+    reference_psr = engine.reference_psr(marker)
+    reference_db = 20 * np.log10(reference_psr)
+
+    impulse = np.zeros(marker_fs)
+    impulse[100] = 1.0
+    metrics = DSPVerificationTool(marker_fs).calculate_metrics(
+        impulse, impulse, reference_psr, reference_psr
+    )
+    assert metrics['psr_db'] == pytest.approx(reference_db)
+    assert metrics['psr_reference_db'] == pytest.approx(reference_db)
+    assert metrics['alignment_score_10'] == 10.0
+
+
+@pytest.mark.parametrize('first_only', [False, True])
+def test_alignment_reports_weakest_assessed_repeat(fs, tmp_path, monkeypatch, first_only):
+    monkeypatch.chdir(tmp_path)
+    marker = MarkerGenerator(fs, 100, (500, 5000), -6).generate()
+    slot, pre, length, delay = 24000, 2400, 12000, 80
+    loop = np.zeros(pre + 3 * slot)
+    starts = [pre + delay + i * slot for i in range(3)]
+    for start in starts:
+        loop[start:start + len(marker)] = marker
+    # Add an ambiguous echo only to the final marker, outside its timing search.
+    competitor = starts[-1] + 900
+    loop[competitor:competitor + len(marker)] += .65 * marker
+    mic = np.zeros_like(loop)
+    for start in starts:
+        mic[start + 100] = 1
+    engine = AlignmentEngine(fs, 3, first_only, 20, 100)
+    expected_scores = [engine._matched_filter_detect(loop, marker, s - 240, s + 240)[2]
+                       for s in starts]
+    _, _, slices, psr = engine.sync_and_average(mic, loop, marker, pre, slot, length)
+    assert [int(np.argmax(x)) for x in slices] == [100, 100, 100]
+    if first_only:
+        first_score = engine._matched_filter_detect(loop, marker, search_end=pre + slot // 2)[2]
+        assert psr == first_score
+    else:
+        assert psr == min(expected_scores) == expected_scores[-1]
+        assert psr < 2.5 < expected_scores[0]
+
+
 def test_deconvolution_separation_functional(fs):
     dur_s = 0.5
     f1 = 20.0
@@ -330,34 +542,56 @@ def test_verification_warnings(fs):
     assert any("POOR ALIGNMENT" in w for w in verifier.verify({'psr': 2.0}))
 
 
-@patch("nfs.audio.sd.query_devices")
-@patch("nfs.audio.sd.query_hostapis")
-@patch("nfs.audio.sd._initialize")
-@patch("nfs.audio.sd._terminate")
 def test_device_catalog_uses_zero_based_channels_for_all_host_apis(
-    _terminate,
-    _initialize,
-    mock_hostapis,
-    mock_devices,
+    monkeypatch,
 ):
-    mock_hostapis.return_value = [
+    sounddevice = ModuleType("sounddevice")
+    sounddevice._terminate = Mock()
+    sounddevice._initialize = Mock()
+    sounddevice.query_hostapis = Mock(return_value=[
         {"name": "MME"},
         {"name": "Windows DirectSound"},
         {"name": "Windows WASAPI"},
         {"name": "ASIO"},
-    ]
-    mock_devices.return_value = [
+    ])
+    sounddevice.query_devices = Mock(return_value=[
         {"name": "MME Device", "hostapi": 0, "max_input_channels": 2, "max_output_channels": 2},
         {"name": "DS Device", "hostapi": 1, "max_input_channels": 2, "max_output_channels": 2},
         {"name": "WASAPI Device", "hostapi": 2, "max_input_channels": 2, "max_output_channels": 2},
         {"name": "ASIO Device", "hostapi": 3, "max_input_channels": 2, "max_output_channels": 2},
-    ]
+    ])
+    monkeypatch.setitem(sys.modules, "sounddevice", sounddevice)
 
     catalog = get_devices_and_channels()
 
     for info in catalog.values():
         assert info["input_channels"] == [0, 1]
         assert info["output_channels"] == [0, 1]
+
+
+def test_device_catalog_returns_empty_when_sounddevice_is_unavailable(monkeypatch):
+    monkeypatch.setitem(sys.modules, "sounddevice", None)
+
+    assert get_devices_and_channels() == {}
+
+
+@pytest.mark.parametrize("failed_operation", ["query_hostapis", "query_devices"])
+def test_device_catalog_returns_empty_when_portaudio_discovery_fails(monkeypatch, failed_operation):
+    sounddevice = ModuleType("sounddevice")
+    sounddevice._terminate = Mock()
+    sounddevice._initialize = Mock()
+    sounddevice.query_hostapis = Mock(return_value=[])
+    sounddevice.query_devices = Mock(return_value=[])
+    getattr(sounddevice, failed_operation).side_effect = RuntimeError("PortAudio unavailable")
+    monkeypatch.setitem(sys.modules, "sounddevice", sounddevice)
+
+    assert get_devices_and_channels() == {}
+
+
+def test_supported_sample_rates_returns_empty_when_sounddevice_is_unavailable(monkeypatch):
+    monkeypatch.setitem(sys.modules, "sounddevice", None)
+
+    assert get_supported_sample_rates(0, 0) == []
 
 
 # -----------------------------------------------------------------------------
@@ -433,6 +667,9 @@ def test_audio_factory_accepts_comma_decimal_config_values(tmp_path):
 
     audio = AudioFactory.create(str(config_path))
 
+    assert audio.hw["wasapi_exclusive"] is False
+    assert audio.cap["debug_saves"] is False
+    assert audio.alignment_engine.align_to_first_marker is True
     assert audio.cap["sweep_dur_s"] == 0.5
     assert audio.cap["sweep_level_dbfs"] == -10.5
     assert audio.cap["pre_sil_ms"] == 50.5
@@ -441,6 +678,7 @@ def test_audio_factory_accepts_comma_decimal_config_values(tmp_path):
     assert audio.protection_filter.freq_hz == 500.5
     assert audio.protection_filter.hpf_corr_db_cap == 6.5
 
+    config["sweep"]["align_to_first_marker"] = "False"
     config.remove_option("sweep", "protect_hpf_corr_db_cap")
     fallback_config_path = tmp_path / "comma_config_fallback.ini"
     with open(fallback_config_path, "w", encoding="utf-8") as f:
@@ -448,6 +686,7 @@ def test_audio_factory_accepts_comma_decimal_config_values(tmp_path):
 
     audio = AudioFactory.create(str(fallback_config_path))
 
+    assert audio.alignment_engine.align_to_first_marker is False
     assert audio.protection_filter.hpf_corr_db_cap == 12.0
 
 
@@ -601,3 +840,20 @@ def test_audio_factory_resolves_saved_identity_without_configured_ids(mock_catal
 
     assert audio.hw["dev_in"] == 20
     assert audio.hw["dev_out"] == 20
+
+
+@pytest.mark.parametrize('value,expected', [
+    ('False', False), ('false # disabled', False), ('0', False), ('off', False),
+    ('True', True), ('1', True), ('yes', True), ('ON ; enabled', True),
+])
+def test_audio_factory_parses_boolean_settings(value, expected):
+    config = configparser.ConfigParser()
+    config['sweep'] = {'debug_saves': value}
+    assert AudioFactory._get_required_config(config, 'sweep', 'debug_saves', bool) is expected
+
+
+def test_audio_factory_rejects_invalid_boolean():
+    config = configparser.ConfigParser()
+    config['sweep'] = {'debug_saves': 'perhaps'}
+    with pytest.raises(ValueError, match='Not a boolean'):
+        AudioFactory._get_required_config(config, 'sweep', 'debug_saves', bool)

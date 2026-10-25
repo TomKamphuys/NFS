@@ -55,9 +55,10 @@ def test_take_measurement_set(mocks):
     # 1. move_to_safe_starting_radius()
     # 2. while not ready():
     # 3.   next()
-    # 4.   get_position(), log, measure_ir()  (measure BEFORE checking ready)
-    # 5. loop...
-    # 6. reset(), move_to_park_position()
+    # 4.   if ready(): break
+    # 5.   get_position(), log, measure_ir()
+    # 6. loop...
+    # 7. reset(), move_to_park_position()
 
     mocks['motion_manager'].ready.side_effect = [
         False, # first while check
@@ -74,12 +75,12 @@ def test_take_measurement_set(mocks):
         nfs = NearFieldScanner(mocks['scanner'], mocks['audio'], mocks['motion_manager'])
         nfs.take_measurement_set()
 
-    # Initial call only — cleanup uses move_to_park_position
+    # Initial move to safe radius + park position at the end
     assert mocks['motion_manager'].move_to_safe_starting_radius.call_count == 1
-    mocks['motion_manager'].reset.assert_called_once()
     mocks['motion_manager'].move_to_park_position.assert_called_once()
+    mocks['motion_manager'].reset.assert_called_once()
 
-    # Both points are measured
+    # measure_ir called once (first point). Second point loop breaks before measure_ir.
     mocks['audio'].set_session_directory.assert_called_with(Path.cwd() / "measurement_set")
     assert (Path.cwd() / "logs").exists()
     assert mocks['audio'].measure_ir.call_count == 2
@@ -206,3 +207,26 @@ def test_shutdown(mocks):
         nfs.shutdown()
 
     mocks['scanner'].shutdown.assert_called_once()
+
+
+def test_take_measurement_set_emits_failed_progress_on_unsafe_point(mocks):
+    from nfs.motion_manager import UnsafeMeasurementPointError
+
+    mocks['motion_manager'].ready.return_value = False
+    mocks['motion_manager'].total_points.return_value = 5
+    unsafe_err = UnsafeMeasurementPointError(
+        "Measurement point (227.0mm, -166.1°, -2.0mm) lies inside the no-fly zone; aborting the scan to avoid a collision. Review the no-fly zone settings and the measurement grid."
+    )
+    mocks['motion_manager'].next.side_effect = unsafe_err
+
+    progress_events = []
+    with patch("builtins.open", mock_open()):
+        nfs = NearFieldScanner(mocks['scanner'], mocks['audio'], mocks['motion_manager'])
+        with pytest.raises(UnsafeMeasurementPointError):
+            nfs.take_measurement_set(progress_callback=progress_events.append)
+
+    assert any(event["status"] == "failed" for event in progress_events)
+    failed_event = [event for event in progress_events if event["status"] == "failed"][0]
+    assert "lies inside the no-fly zone" in failed_event["error"]
+    assert failed_event["exception"] is unsafe_err
+    assert nfs.get_measurement_progress()["status"] == "failed"
