@@ -1,6 +1,7 @@
 """ASIO routing and Windows COM lifetime tests; no audio device is opened."""
 
-from types import SimpleNamespace
+import sys
+from types import ModuleType, SimpleNamespace
 from unittest.mock import Mock
 
 import numpy as np
@@ -21,6 +22,21 @@ def make_engine():
         audio.AlignmentEngine(fs, 1, False, 20, 100),
         audio.DeconvolutionEngine(fs),
     )
+
+
+@pytest.fixture
+def sounddevice(monkeypatch):
+    module = ModuleType("sounddevice")
+    module.AsioSettings = lambda **kwargs: kwargs
+    module.WasapiSettings = lambda **kwargs: kwargs
+    module.Stream = None
+    module.stop = lambda: None
+    module._terminate = None
+    module._initialize = None
+    module.query_hostapis = None
+    module.query_devices = None
+    monkeypatch.setitem(sys.modules, "sounddevice", module)
+    return module
 
 
 @pytest.fixture
@@ -65,7 +81,8 @@ def test_non_asio_or_non_windows_does_not_touch_com(monkeypatch, ole32, platform
 
 
 @pytest.mark.parametrize("operation", ["capture", "finite_sine"])
-def test_stream_closes_before_com_release_and_uses_asio_roles(monkeypatch, ole32, operation):
+def test_stream_closes_before_com_release_and_uses_asio_roles(
+        monkeypatch, ole32, sounddevice, operation):
     fs = 48000
     hw = dict(
         dev_in=18,
@@ -95,7 +112,6 @@ def test_stream_closes_before_com_release_and_uses_asio_roles(monkeypatch, ole32
         audio.DeconvolutionEngine(fs),
     )
     monkeypatch.setattr(engine, "_get_api_name", lambda dev: "ASIO")
-    monkeypatch.setattr(audio.sd, "AsioSettings", lambda **kwargs: kwargs)
     meter = Mock()
     monkeypatch.setattr(audio, "_AudioMeterWorker", lambda *args: meter)
     # Exercise the original master sequence; substitute only DSP alignment.
@@ -139,7 +155,7 @@ def test_stream_closes_before_com_release_and_uses_asio_roles(monkeypatch, ole32
             ole32.CoUninitialize.assert_not_called()
             events.append("stream_closed")
 
-    monkeypatch.setattr(audio.sd, "Stream", Stream)
+    monkeypatch.setattr(sounddevice, "Stream", Stream)
     if operation == "capture":
         result = engine._run_sweep()
         assert np.all(result['rx_mic_conditioned'] == 0.25)
@@ -151,11 +167,9 @@ def test_stream_closes_before_com_release_and_uses_asio_roles(monkeypatch, ole32
 
 
 @pytest.mark.parametrize('failure', [None, 'open', 'start', 'stop'])
-def test_continuous_sine_owns_com_until_close(monkeypatch, ole32, failure):
+def test_continuous_sine_owns_com_until_close(monkeypatch, ole32, sounddevice, failure):
     engine = make_engine()
     monkeypatch.setattr(engine, '_get_api_name', lambda dev: 'ASIO')
-    monkeypatch.setattr(audio.sd, 'AsioSettings', lambda **kwargs: kwargs)
-    monkeypatch.setattr(audio.sd, 'stop', lambda: None)
     meter = Mock()
     monkeypatch.setattr(audio, '_AudioMeterWorker', lambda *args: meter)
     events = []
@@ -180,7 +194,7 @@ def test_continuous_sine_owns_com_until_close(monkeypatch, ole32, failure):
             ole32.CoUninitialize.assert_not_called()
             events.append('close')
 
-    monkeypatch.setattr(audio.sd, 'Stream', Stream)
+    monkeypatch.setattr(sounddevice, 'Stream', Stream)
     if failure in ('open', 'start'):
         with pytest.raises(RuntimeError, match=failure):
             engine.play_sine(1000, -30, None)
@@ -194,15 +208,15 @@ def test_continuous_sine_owns_com_until_close(monkeypatch, ole32, failure):
     ole32.CoUninitialize.assert_called_once_with()
 
 
-def test_device_lookup_never_restarts_portaudio(monkeypatch):
+def test_device_lookup_never_restarts_portaudio(monkeypatch, sounddevice):
     # Recreating an Audio object resolves both saved device names. Those
     # lookups used to reset the library between successful ASIO captures.
     def forbidden():
         pytest.fail("Device lookup must not restart shared PortAudio")
-    monkeypatch.setattr(audio.sd, '_terminate', forbidden)
-    monkeypatch.setattr(audio.sd, '_initialize', forbidden)
-    monkeypatch.setattr(audio.sd, 'query_hostapis', lambda: [{'name': 'ASIO'}])
-    monkeypatch.setattr(audio.sd, 'query_devices', lambda: [dict(
+    monkeypatch.setattr(sounddevice, '_terminate', forbidden)
+    monkeypatch.setattr(sounddevice, '_initialize', forbidden)
+    monkeypatch.setattr(sounddevice, 'query_hostapis', lambda: [{'name': 'ASIO'}])
+    monkeypatch.setattr(sounddevice, 'query_devices', lambda: [dict(
         name='Test ASIO', hostapi=0, max_input_channels=2, max_output_channels=2)])
     for _ in range(3):
         assert audio.get_devices_and_channels()[0]['name'] == 'Test ASIO'

@@ -34,7 +34,6 @@ import configparser
 import ctypes
 import sys
 from contextlib import contextmanager
-import os
 import threading
 import time
 from abc import ABC, abstractmethod
@@ -51,11 +50,7 @@ from loguru import logger
 
 from .datatypes import CylindricalPosition
 from .utils.dsp import DSPUtils
-
-# Enable ASIO build of PortAudio in python-sounddevice (Windows).
-# This environment variable triggers the loading of ASIO drivers if available.
-os.environ["SD_ENABLE_ASIO"] = "1"
-import sounddevice as sd  # noqa: E402
+from . import _audio_backend as sd
 
 
 @contextmanager
@@ -519,8 +514,6 @@ def get_devices_and_channels() -> dict:
     # a temporary UI worker that exits before the next capture. Restart the
     # application after hot-plugging hardware if the catalog has not updated.
     try:
-        import sounddevice as sd  # noqa: E402
-
         apis = sd.query_hostapis()
         devs = sd.query_devices()
     except Exception as exc:
@@ -560,7 +553,8 @@ def get_supported_sample_rates(input_device_id: Optional[int], output_device_id:
     probe standard audio rates and keep those accepted by all selected devices.
     """
     try:
-        import sounddevice as sd  # noqa: E402
+        check_input_settings = sd.check_input_settings
+        check_output_settings = sd.check_output_settings
     except Exception as exc:
         logger.warning("Unable to discover supported audio sample rates: {}", exc)
         return []
@@ -571,9 +565,9 @@ def get_supported_sample_rates(input_device_id: Optional[int], output_device_id:
     for rate in common_rates:
         try:
             if input_device_id is not None:
-                sd.check_input_settings(device=input_device_id, samplerate=rate)
+                check_input_settings(device=input_device_id, samplerate=rate)
             if output_device_id is not None:
-                sd.check_output_settings(device=output_device_id, samplerate=rate)
+                check_output_settings(device=output_device_id, samplerate=rate)
         except Exception:
             continue
         supported.append(rate)
@@ -1349,8 +1343,6 @@ class Audio(IAudio):
         :param dev_index: Device index.
         :return: API name.
         """
-        import sounddevice as sd  # noqa: E402
-
         try:
             d = sd.query_devices(dev_index)
             return sd.query_hostapis()[d['hostapi']]['name'].upper()
@@ -1378,8 +1370,6 @@ class Audio(IAudio):
         Executes the playback and recording of the composite signal.
         Handles stream synchronization, multiple sweep averaging, and loopback alignment.
         """
-        import sounddevice as sd  # noqa: E402
-
         # 1. Generate Signals
         s_fund, phase, inv_sweep = self.sweep_gen.generate()
 
@@ -1625,8 +1615,6 @@ class Audio(IAudio):
         :param level_dbfs: Level in dBFS.
         :param duration_s: Duration in seconds. If None, plays until stop_sine() is called.
         """
-        import sounddevice as sd  # noqa: E402
-
         self.stop_sine()
         self.update_sine_level(level_dbfs)
 
@@ -1801,7 +1789,6 @@ class Audio(IAudio):
 
     def stop_sine(self) -> None:
         """Stop continuous playback on the same thread that started it."""
-        import sounddevice as sd  # noqa: E402
 
         if (self._sine_com_context is not None
                 and self._sine_owner_thread != threading.get_ident()):
@@ -2169,7 +2156,5 @@ class AudioFactory:
 
 if __name__ == "__main__":
     # Helper to list devices if run directly
-    import sounddevice as sd  # noqa: E402
-
     print("\nAvailable Audio Devices:")
     print(sd.query_devices())
