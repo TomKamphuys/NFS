@@ -2,7 +2,7 @@
 import configparser
 import importlib
 import sys
-from typing import Optional
+from typing import Any, Optional
 
 if sys.version_info >= (3, 10):
     from importlib.metadata import entry_points
@@ -20,7 +20,7 @@ class ModuleInterface:
     """
 
     @staticmethod
-    def register(my_factory) -> None:
+    def register(my_factory: Any) -> None:
         """
         Register the necessary items in the measurement points factory.
         """

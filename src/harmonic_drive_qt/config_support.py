@@ -27,7 +27,6 @@ DISPLAY_LABELS = {
     "cal_tool_height": "Calibration tool height (mm)",
     "reflection_free_time_ms": "Reflection Free Time (ms)",
     "feed_rate": "Feed rate (mm/min)",
-    "safe_radius": "Safe radius (mm)",
     "homing_gap": "Homing gap (degrees)",
     "pole_gap": "Pole gap (mm)",
     "cap_spacing": "Cap spacing (mm)",
@@ -38,6 +37,8 @@ DISPLAY_LABELS = {
     "speaker_width": "Speaker width (mm)",
     "speaker_depth": "Speaker depth (mm)",
     "use_alternative_motion_controls": "Use alternative motion controls",
+    "show_motion_preview": "Show motion preview window",
+    "unsafe_point_policy": "Unsafe point handling",
 }
 
 # ---------------------------------------------------------------------------
@@ -54,13 +55,29 @@ DISPLAY_LABELS = {
 # __init__ signatures of the plugins in nfs.plugins.*.
 # ---------------------------------------------------------------------------
 MOTION_MANAGER_TYPES: Dict[str, List[SchemaEntry]] = {
+    "FastCylindricalMeasurementMotionManager": [
+        ("optimize_point_order", "bool", "Reduce physical travel distance while preserving every point and safety detours.", None),
+        ("unsafe_point_policy", "choice",
+         "What to do if a measurement point lies inside the no-fly zone: "
+         "'abort' stops the scan (safest); 'skip' logs a warning and moves on "
+         "to the next point without going to the unsafe one.",
+         ["abort", "skip"]),
+    ],
     "CylindricalMeasurementMotionManager": [
-        ("safe_radius", "optional_float",
-         "Optional extra-safe radius (mm) the motion manager retracts to before slewing. "
-         "Leave empty to default to 0 and avoid extra safe-radius intervention.", None),
+        ("optimize_point_order", "bool", "Reduce physical travel distance while preserving every point and safety detours.", None),
+        ("unsafe_point_policy", "choice",
+         "What to do if a measurement point lies inside the no-fly zone: "
+         "'abort' stops the scan (safest); 'skip' logs a warning and moves on "
+         "to the next point without going to the unsafe one.",
+         ["abort", "skip"]),
     ],
     "SphericalMeasurementMotionManager": [
-        # No extra parameters beyond the base ones.
+        ("optimize_point_order", "bool", "Reduce physical travel distance while preserving every point and safety detours.", None),
+        ("unsafe_point_policy", "choice",
+         "What to do if a measurement point lies inside the no-fly zone: "
+         "'abort' stops the scan (safest); 'skip' logs a warning and moves on "
+         "to the next point without going to the unsafe one.",
+         ["abort", "skip"]),
     ],
 }
 
@@ -218,6 +235,9 @@ EDITABLE_SCHEMA: Dict[str, List[SchemaEntry]] = {
          "Default parent folder used to create new session folders.", None),
         ("use_alternative_motion_controls", "bool",
          "Use a compact alternative layout for machine motion controls.", None),
+        ("show_motion_preview", "bool",
+         "Show a 'Motion Preview' view that animates the full planned arm motion "
+         "and the no-fly (keep-out) zone in the r/z plane for visual verification.", None),
     ],
     "debug": [
         ("direct_progress_ui", "bool",
@@ -329,6 +349,48 @@ def _serial_port_options(current: str = "") -> Dict[str, str]:
         options = {current: f"{current} (configured, not currently detected)", **options}
     return options
 
+
+
+def validate_dut_volume(config_file: str) -> list[str]:
+    """
+    Validate that the [dut_volume] section contains all required numeric fields.
+
+    The motion preview and measurement scan both depend on a complete DUT volume
+    definition. If any field is missing or not a valid number, the no-fly zone
+    cannot be constructed and the operator must be warned before proceeding.
+
+    :param config_file: Path to the config.ini file.
+    :return: A list of human-readable field names that are missing or invalid.
+        An empty list means the DUT volume is complete and valid.
+    """
+    required = [
+        ("top_r", "Top Radius (mm)"),
+        ("top_phi", "Top Phi (deg)"),
+        ("top_z", "Top Height (mm)"),
+        ("bot_r", "Bot Radius (mm)"),
+        ("bot_phi", "Bot Phi (deg)"),
+        ("bot_z", "Bot Height (mm)"),
+    ]
+    missing: list[str] = []
+    parser = configparser.ConfigParser(inline_comment_prefixes=("#", ";"))
+    parser.read(config_file)
+    if not parser.has_section("dut_volume"):
+        return [label for _, label in required]
+    radius_keys = {"top_r", "bot_r"}
+    for key, label in required:
+        raw = parser.get("dut_volume", key, fallback="").strip()
+        if not raw or raw.lower() == "none":
+            missing.append(label)
+        else:
+            try:
+                val = float(raw)
+                if not __import__("math").isfinite(val):
+                    missing.append(label)
+                elif key in radius_keys and val < 0:
+                    missing.append(label)
+            except ValueError:
+                missing.append(label)
+    return missing
 
 
 def save_config_values(

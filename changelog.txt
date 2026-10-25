@@ -15,6 +15,233 @@ marker even with zero latency.
 Added regression tests.
 
 --------
+25/10/26
+--------
+Follow-up to lazy audio backend (PR #59): keep hardware initialization and
+discovery on the existing audio worker.
+
+Issue: The previous lazy backend refactor initializes PortAudio on whichever
+thread first asks for hardware access. Starting a sine or sweep first already
+did this on the COM-initialized audio worker. However, Audio Setup queried
+devices directly from the GUI thread; if discovery happened first, PortAudio
+initialized there, while later streams were still created and closed on the
+audio worker.
+
+Changed: Routed Audio Setup device discovery and sample-rate probing through
+the Qt audio worker, so these requests initialize the lazy backend on the same
+thread that creates and closes streams. Backend initialization no longer moves
+to the GUI thread when Audio Setup requests the device list first.
+
+Removed the unnecessary global sounddevice.stop() call from sine cleanup:
+explicit streams are already closed, and stopping unused audio no longer
+initializes the backend.
+
+Preserved the existing ASIO-specific COM checks around stream creation. Worker
+COM initialization failures remain logged without rejecting all queued jobs,
+so mock and non-hardware operations are not blocked by COM availability.
+
+Added coverage for discovery/probing on the COM-initialized worker, lazy
+cleanup, and missing-backend shutdown. Retained coverage that worker jobs can
+run after worker COM initialization fails.
+
+--------
+25/10/26
+--------
+Lazy audio backend refactor (PR #59), building on the Windows ASIO stream
+lifecycle fix from 17/10/26 (PR #56).
+
+Moved sounddevice loading behind a shared lazy adapter in
+nfs/_audio_backend.py. Previously, importing nfs.audio also loaded and
+initialized PortAudio, even for DSP-only processing or mock measurements. A
+missing or unavailable audio backend could therefore prevent the module from
+importing at all.
+
+The adapter defers sounddevice loading until hardware is requested and sets
+SD_ENABLE_ASIO before that import. Replaced scattered sounddevice imports with
+the shared adapter, while preserving the existing stream lifecycle and COM
+handling. Device discovery and sample-rate probing return empty results when
+the backend is unavailable.
+
+Added import-without-sounddevice, ASIO configuration, retry and discovery
+fallback tests, and updated ASIO tests to inject a fake sounddevice module.
+The separate follow-up entry above adds explicit routing of GUI discovery to
+the audio worker.
+
+--------
+25/10/26
+--------
+Major release with significant improvements to motion safety, speed, and user experience.
+
+Added FastCylindricalMeasurementMotionManager: a faster motion manager for cylindrical
+scans that moves radial, angular and vertical axes simultaneously (single G0) for most
+moves, performing safe evasive maneuvers only when the path crosses the interior of the
+measurement grid. This reduces scan time by approximately 61% (~2.6x faster) while
+maintaining the safety invariant that the microphone arm never travels through the
+protected volume. See docs/fast_cylindrical_motion.md for details.
+
+Added no-fly zone support with configurable unsafe-point policies ("abort" and "skip")
+enforced by motion managers. The protected interior volume is validated against all
+movement paths, not just destinations, ensuring collision-free trajectories throughout
+a scan.
+
+Added DUT (Device Under Test) volume validation before motion preview and measurement
+start. The speaker geometry is checked against the measurement grid to prevent
+configurations where the DUT intersects the scanning path.
+
+Added elapsed time estimation for measurement sets, displayed in the GUI.
+
+Improved the GUI with no-fly zone configuration and visualization, jog button sizing
+and layout responsiveness, and synchronized frame widths.
+
+Added comprehensive type hints across the nfs package for better IDE support and
+static analysis.
+
+Added volume property to CylindricalPosition for cylindrical volume calculation.
+
+Improved angle computation in cylindrical_measurement_points to use DSPUtils helpers
+instead of manual atan2/radians calls.
+
+Miscellaneous improvements: cleaned up logging levels, removed unused parameters,
+improved documentation, and added extensive test coverage for motion safety and
+no-fly zone enforcement.
+
+Files touched:
+src/nfs/audio.py
+src/nfs/datatypes.py
+src/nfs/grbl_controller.py
+src/nfs/loader.py
+src/nfs/logging_config.py
+src/nfs/measurement_points.py
+src/nfs/motion_manager.py
+src/nfs/motion_simulation.py
+src/nfs/nfs.py
+src/nfs/plugins/cylindrical_measurement_points.py
+src/nfs/plugins/file_measurement_points.py
+src/nfs/plugins/spherical_measurement_points.py
+src/nfs/plugins/spherical_measurement_points_arcs.py
+src/nfs/plugins/spherical_measurement_points_arcs_random.py
+src/nfs/plugins/spherical_measurement_points_sorted.py
+src/nfs/point_ordering.py
+src/nfs/registry.py
+src/nfs/scanner.py
+src/nfs/utils/dsp.py
+src/harmonic_drive_qt/backend.py
+src/harmonic_drive_qt/config_support.py
+src/harmonic_drive_qt/control_pane.py
+src/harmonic_drive_qt/grid_pane.py
+src/harmonic_drive_qt/main_window.py
+src/harmonic_drive_qt/motion_preview.py
+src/harmonic_drive_qt/project.py
+src/harmonic_drive_qt/qt_compat.py
+src/harmonic_drive_qt/settings_dialog.py
+src/grid_generator/grid_gen.py
+src/grid_generator/path_plan.py
+tests/test_cylindrical_measurement_motion_manager.py
+tests/test_dut_volume.py
+tests/test_fast_cylindrical_measurement_motion_manager.py
+tests/test_file_measurement_points_evasive.py
+tests/test_motion_manager_factory.py
+tests/test_motion_simulation.py
+tests/test_near_field_scanner.py
+tests/test_nearfieldscannerfactory.py
+tests/test_no_fly_zone_endpoint_guard.py
+tests/test_point_ordering.py
+tests/test_qt_control_pane.py
+tests/test_qt_jog_workflow.py
+tests/test_qt_motion_preview.py
+tests/test_qt_settings_dialog.py
+tests/test_rft_calculator.py
+tests/test_spherical_measurement_motion_manager.py
+tests/test_spherical_measurement_points_arcs_random.py
+tests/full_system_mock_config.ini
+docs/architecture.md
+docs/conf.py
+docs/fast_cylindrical_motion.md
+docs/gui_testing.md
+docs/harmonic_drive_qt_architecture.md
+docs/index.rst
+docs/motion_preview.md
+docs/point_ordering.md
+docs/safety_analysis.md
+config.ini
+config_default.ini
+pyproject.toml
+README.md
+TODO.md
+uv.lock
+
+--------
+13/09/26
+--------
+Added FastCylindricalMeasurementMotionManager: a faster, concurrent-yet-safe
+motion manager for cylindrical scans. It moves the radial, angular and vertical
+axes simultaneously (single G0) for the many moves that stay on a measurement
+surface, and only performs the safe out-and-around evasive maneuver for the one
+interior-crossing transition per angular sector (flagged by the point generator
+via need_to_do_evasive_move). The microphone arm still never travels through the
+volume inside the measurement grid.
+
+Added Scanner.move_to(r, angle, z) for simultaneous three-axis moves, registered
+the new manager in the motion-manager factory, the Qt settings schema and the
+packaging entry points.
+
+Elaborate tests verify the safety invariant by simulating and densely sampling
+the full scan path (with a negative-control proving the keep-out check has
+teeth) and quantify the time gain: for a representative grid the modelled scan
+time drops from ~6.4 min to ~2.5 min (about 2.6x faster / ~61% saved). See
+docs/fast_cylindrical_motion.md for the safety proof and time-gain details.
+
+Files touched:
+src/nfs/scanner.py
+src/nfs/motion_manager.py
+src/harmonic_drive_qt/config_support.py
+pyproject.toml
+tests/test_fast_cylindrical_measurement_motion_manager.py
+docs/fast_cylindrical_motion.md
+
+--------
+16/10/26
+--------
+Fixed audio configuration boolean parsing: False, off and 0 now disable
+options instead of being treated as true because they are nonempty strings.
+This restores per-repeat alignment when first-marker alignment is disabled,
+and lets users disable debug saves and WASAPI exclusive mode. Invalid boolean
+values now raise a configuration error. Added parsing and factory regressions.
+
+--------
+17/10/26
+--------
+Original ASIO stream lifecycle and thread ownership fix (PR #56).
+
+Fixed Windows ASIO stream lifetime and repeated-capture failures. Initialize
+COM on the stream owner, close continuous sine before capture/reload/shutdown,
+and keep Qt audio creation and cleanup on its persistent worker.
+
+**Device lookup no longer restarts shared PortAudio; restart the app if newly
+attached devices are not listed.**
+
+Added COM ownership, channel routing and backend regressions.
+
+Files touched:
+audio.py
+Makes COM initialization follow the thread that owns each ASIO stream, removes
+PortAudio restarts from device lookup, and closes streams before replacing them.
+
+backend.py
+The Qt backend creates and controls the audio objects, so it must keep creation,
+playback, capture and cleanup on one persistent worker thread. It now initializes
+COM on that worker, stops any continuous sine before a sweep, reload or scan,
+and waits for stream cleanup during shutdown. No measurement DSP or scanner
+behaviour was changed here.
+
+test_audio_asio.py
+Adds focused COM, ASIO routing, discovery and stream lifetime regressions.
+
+test_qt_backend.py
+Confirms that Qt audio operations stay on the owner thread and that active
+playback is stopped before capture, reload and shutdown.
+
+--------
 09/10/26
 --------
 Added Reflection Free Time (ms) to the SCANNER settings, with an inline

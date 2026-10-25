@@ -1,7 +1,20 @@
 """Small PySide6 import shim with a friendly error."""
 
 try:
-    from PySide6.QtCore import Qt, QTimer, QObject, Signal, Slot, QRunnable, QThreadPool, QSize, QLocale, QEvent
+    from PySide6.QtCore import (
+        Qt,
+        QTimer,
+        QObject,
+        Signal,
+        Slot,
+        QRunnable,
+        QThreadPool,
+        QSize,
+        QLocale,
+        QEvent,
+        QPropertyAnimation,
+        QEasingCurve,
+    )
     from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPen, QPixmap, QPolygonF
     from PySide6.QtWidgets import (
         QAbstractSpinBox,

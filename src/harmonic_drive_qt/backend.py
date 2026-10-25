@@ -18,7 +18,10 @@ from typing import Any, Callable, Optional
 from loguru import logger
 
 from nfs import NearFieldScannerFactory, ScannerFactory
-from nfs.audio import AudioFactory, get_audio_meter_state
+from nfs.audio import (
+    AudioFactory, get_audio_meter_state, get_devices_and_channels,
+    get_supported_sample_rates,
+)
 from nfs.datatypes import CylindricalPosition
 from nfs.logging_config import setup_logging
 
@@ -61,6 +64,44 @@ def format_nfs_error(exc: Exception) -> str:
     return f"Near Field Scanner unavailable: {text}"
 
 
+def format_measurement_error(exc: Exception | str) -> dict[str, str]:
+    """Format a measurement execution error into structured user-friendly feedback."""
+    msg = str(exc)
+    exc_type = exc.__class__.__name__ if isinstance(exc, Exception) else ""
+    if "no-fly zone" in msg.lower() or "unsafemeasurementpoint" in exc_type.lower():
+        pos_match = re.search(r"Measurement point \(([^)]+)\)", msg)
+        pos_text = pos_match.group(1) if pos_match else "A measurement point"
+        return {
+            "title": "Safety Alert: Point Inside DUT Volume (No-Fly Zone)",
+            "summary": (
+                f"Measurement scan aborted to prevent a physical collision:\n"
+                f"{pos_text} is located inside the configured DUT Volume / No-Fly Zone."
+            ),
+            "details": (
+                "What happened:\n"
+                f"• {msg}\n\n"
+                "Why this is protected:\n"
+                "• The scanner automatically enforces a safety keep-out zone around your loudspeaker (DUT) "
+                "to prevent the microphone or arm from colliding with the device under test.\n\n"
+                "How to fix:\n"
+                "1. Adjust DUT Volume: Check the 'DUT Volume' section and adjust Top & Bot waypoints (Radius, Height) "
+                "so the boundary closely matches the actual speaker dimensions.\n"
+                "2. Regenerate Grid: In 'Grid Generation & Planning', generate or load measurement points with radii "
+                "and heights that remain outside the DUT Volume boundaries."
+            ),
+            "how_to_fix": (
+                "1. Check and adjust Top/Bot waypoints in the 'DUT Volume' section.\n"
+                "2. Regenerate your grid points in 'Grid Generation & Planning' to stay outside the DUT Volume."
+            ),
+        }
+    return {
+        "title": "Measurement Set Failed",
+        "summary": f"An error occurred during the measurement set: {msg}",
+        "details": msg,
+        "how_to_fix": "Review the system log (logs/Scanner.log) and check hardware and audio connections.",
+    }
+
+
 class BackendManager:
     """Owns scanner/audio objects and exposes thread-safe UI operations."""
 
@@ -93,10 +134,16 @@ class BackendManager:
             return Path.cwd()
 
     def _audio_worker(self) -> None:
+        com_owned = False
         try:
             if sys.platform == "win32":
-                ctypes.windll.ole32.CoInitializeEx(None, 2)
-                logger.info("Qt audio worker thread COM initialized.")
+                result = ctypes.windll.ole32.CoInitializeEx(None, 2) & 0xFFFFFFFF
+                # S_OK and S_FALSE both acquire a reference. A different
+                # existing apartment does not give us a reference to release.
+                com_owned = result in (0, 1)
+                if result not in (0, 1, 0x80010106):
+                    raise RuntimeError(f"COM initialization failed: 0x{result:08X}")
+                logger.info("Qt audio worker COM ready (0x{:08X}).", result)
         except Exception as exc:
             logger.warning(f"Qt audio worker COM initialization failed: {exc}")
 
@@ -116,12 +163,17 @@ class BackendManager:
                 self._audio_queue.task_done()
 
         try:
-            if sys.platform == "win32":
+            if com_owned:
                 ctypes.windll.ole32.CoUninitialize()
         except Exception:
             pass
 
     def _run_audio(self, func: Callable, *args, **kwargs):
+        # Nested audio operations must not enqueue work and wait on themselves.
+        if threading.current_thread() is self._audio_thread:
+            return func(*args, **kwargs)
+        if not self._audio_thread.is_alive():
+            raise RuntimeError("Audio worker has stopped")
         done_event = threading.Event()
         result_holder: dict[str, Any] = {}
         self._audio_queue.put((func, args, kwargs, done_event, result_holder))
@@ -130,12 +182,26 @@ class BackendManager:
             raise result_holder["error"]
         return result_holder.get("result")
 
+    def get_audio_devices(self) -> dict:
+        # Discovery can trigger the first sounddevice import / Pa_Initialize.
+        # Keep it on the persistent COM-initialized stream owner, not the GUI.
+        return self._run_audio(get_devices_and_channels)
+
+    def get_audio_sample_rates(self, input_device_id, output_device_id) -> list[int]:
+        return self._run_audio(
+            get_supported_sample_rates, input_device_id, output_device_id)
+
     def load(self, status: Callable[[str], None] | None = None) -> None:
+        # Keep object creation, stream use and cleanup on one owning thread.
+        if threading.current_thread() is not self._audio_thread:
+            return self._run_audio(self.load, status)
         def set_status(message: str) -> None:
             logger.info(message)
             if status is not None:
                 status(message)
 
+        # Close any active stream on its owner before discarding audio objects.
+        self.stop_sine()
         set_status("(Re)loading configuration")
         setup_logging(self.config_file, force=True)
         set_status("Connecting to GRBL")
@@ -150,16 +216,20 @@ class BackendManager:
             set_status("Scanner unavailable; continuing without motion hardware")
 
         if self.scanner is not None:
-            try:
-                set_status("Initializing Near Field Scanner")
-                self.nfs = NearFieldScannerFactory.create(self.scanner, self.config_file)
-            except Exception as exc:
-                self.load_warning = format_nfs_error(exc)
-                logger.error(self.load_warning)
-                if is_audio_setup_error(self.load_warning):
-                    set_status("Audio setup unavailable; continuing")
-                else:
-                    set_status("Near Field Scanner unavailable; continuing")
+            self.reload_nfs()
+
+    def reload_nfs(self) -> None:
+        """(Re)instantiate NearFieldScanner using the current scanner and config_file."""
+        if self.scanner is None:
+            return
+        try:
+            self.nfs = NearFieldScannerFactory.create(self.scanner, self.config_file)
+            if self.project_dir is not None and hasattr(self.nfs, "set_project_directory"):
+                self.nfs.set_project_directory(self.project_dir)
+            self.load_warning = None
+        except Exception as exc:
+            self.load_warning = format_nfs_error(exc)
+            logger.warning("{}: {}", self.load_warning, exc)
 
         if self.project_dir is not None:
             self.set_project_dir(self.project_dir)
@@ -188,6 +258,15 @@ class BackendManager:
             return None
         return self.scanner.get_state()
 
+    def is_homed(self) -> bool:
+        if self.scanner is None:
+            return False
+        return self.scanner.is_homed()
+
+    def is_scanner_loaded(self) -> bool:
+        """Return whether the scanner has been successfully loaded."""
+        return self.scanner is not None
+
     def jog(self, method_name: str, value: float) -> None:
         if self.scanner is None:
             raise RuntimeError(self.load_warning or "Scanner is not loaded")
@@ -209,12 +288,20 @@ class BackendManager:
         self.scanner.set_speaker_center_above_stool(height)
 
     def take_single_measurement(self) -> None:
+        # Keep object creation, stream use and cleanup on one owning thread.
+        if threading.current_thread() is not self._audio_thread:
+            return self._run_audio(self.take_single_measurement)
         if self.nfs is None:
             raise RuntimeError("NFS backend is not loaded")
         self.clear_preview_ir()
+        self.stop_sine()
         self._run_audio(self.nfs.take_single_measurement)
 
     def test_sweep(self):
+        # Keep object creation, stream use and cleanup on one owning thread.
+        if threading.current_thread() is not self._audio_thread:
+            return self._run_audio(self.test_sweep)
+        self.stop_sine()
         if hasattr(self.nfs, "test_sweep"):
             result = self._run_audio(self.nfs.test_sweep)
             if isinstance(result, dict):
@@ -247,8 +334,9 @@ class BackendManager:
         progress_callback: Callable[[dict[str, Any]], None],
         overwrite: bool = False,
     ) -> None:
+        self.reload_nfs()
         if self.nfs is None:
-            raise RuntimeError("NFS backend is not loaded")
+            raise RuntimeError(self.load_warning or "NFS backend is not loaded")
         if self.is_measurement_set_running():
             return
         self.clear_preview_ir()
@@ -263,14 +351,35 @@ class BackendManager:
 
     def _run_measurement_set(self, name: str, overwrite: bool) -> None:
         try:
+            self.reload_nfs()
+            if self.nfs is None:
+                raise RuntimeError(self.load_warning or "NFS backend is not loaded")
             self._run_audio(
-                self.nfs.take_measurement_set,
+                self._capture_measurement_set,
                 name,
                 overwrite,
                 self._progress_callback,
             )
-        except Exception:
-            logger.exception("Measurement set failed")
+        except Exception as exc:
+            logger.exception(f"Measurement set failed: {exc}")
+            if self._progress_callback is not None:
+                err_info = format_measurement_error(exc)
+                try:
+                    self._progress_callback({
+                        "status": "failed",
+                        "current": 0,
+                        "total": 0,
+                        "error": str(exc),
+                        "exception": exc,
+                        "error_info": err_info,
+                    })
+                except Exception as cb_exc:
+                    logger.warning(f"Failed to emit measurement error progress event: {cb_exc}")
+
+    def _capture_measurement_set(self, name, overwrite, progress_callback) -> None:
+        # Closing a continuous tone and starting the scan are one queued task.
+        self.stop_sine()
+        self.nfs.take_measurement_set(name, overwrite, progress_callback)
 
     def pause_measurement_set(self) -> None:
         if self.nfs is not None and hasattr(self.nfs, "pause_measurement_set"):
@@ -300,13 +409,17 @@ class BackendManager:
 
     def get_measurement_progress(self) -> dict[str, Any]:
         if self.nfs is None or not hasattr(self.nfs, "get_measurement_progress"):
-            return {"status": "ready", "current": 0, "total": 0, "eta_seconds": None}
+            return {"status": "ready", "current": 0, "total": 0, "eta_seconds": None, "elapsed_seconds": 0.0}
         return self.nfs.get_measurement_progress()
 
     def get_audio_meter_state(self) -> dict[str, Any]:
         return get_audio_meter_state()
 
     def play_sine(self, frequency: float, level: float, duration: Optional[float]) -> None:
+        # Keep object creation, stream use and cleanup on one owning thread.
+        if threading.current_thread() is not self._audio_thread:
+            return self._run_audio(self.play_sine, frequency, level, duration)
+        self.stop_sine()
         if self.nfs is not None and hasattr(self.nfs, "play_sine"):
             return self._run_audio(self.nfs.play_sine, frequency, level, duration)
         if self.sine_audio is None:
@@ -325,21 +438,31 @@ class BackendManager:
             self._run_audio(target.update_sine_level, level)
 
     def stop_sine(self) -> None:
+        # Keep object creation, stream use and cleanup on one owning thread.
+        if threading.current_thread() is not self._audio_thread:
+            return self._run_audio(self.stop_sine)
         if self.nfs is not None and hasattr(self.nfs, "stop_sine"):
-            self.nfs.stop_sine()
+            self._run_audio(self.nfs.stop_sine)
         if self.audio is not None and hasattr(self.audio, "stop_sine"):
-            self.audio.stop_sine()
+            self._run_audio(self.audio.stop_sine)
         if self.sine_audio is not None and hasattr(self.sine_audio, "stop_sine"):
-            self.sine_audio.stop_sine()
+            self._run_audio(self.sine_audio.stop_sine)
 
     def shutdown(self) -> None:
+        if not self._audio_thread.is_alive():
+            return
         try:
             self.stop_sine()
         except Exception:
             logger.exception("Could not stop sine audio")
-        if self.nfs is not None and hasattr(self.nfs, "shutdown"):
-            self.nfs.shutdown()
-        self._audio_queue.put(None)
+        try:
+            if self.nfs is not None and hasattr(self.nfs, "shutdown"):
+                self._run_audio(self.nfs.shutdown)
+        finally:
+            # Stop/close and COM release complete before the worker exits.
+            self._audio_queue.put(None)
+            if threading.current_thread() is not self._audio_thread:
+                self._audio_thread.join(timeout=5.0)
 
 
 class WorkerSignals(QObject):

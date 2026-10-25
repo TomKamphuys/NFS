@@ -1,4 +1,6 @@
 import configparser
+from typing import Callable
+
 from loguru import logger
 from .logging_config import setup_logging
 
@@ -14,7 +16,7 @@ class Scanner:
     def __init__(
         self,
         grbl_controller: IGrblController,
-        feed_rate,
+        feed_rate: float,
         cal_tool_height: float = 0.0,
     ):
         """
@@ -32,7 +34,7 @@ class Scanner:
         if self.get_position().r() != r:
             self._grbl_controller.send_and_wait_for_move_ready(f'G0 Y{r:.4f}')
 
-    def planar_move_to(self, r: float, z: float):
+    def planar_move_to(self, r: float, z: float) -> None:
         """
         Move to a specified planar position (radial and vertical).
 
@@ -40,6 +42,25 @@ class Scanner:
         :param z: The vertical coordinate (X axis).
         """
         self._grbl_controller.send_and_wait_for_move_ready(f'G0 X{z:.4f} Y{r:.4f}')
+
+    def move_to(self, r: float, angle: float, z: float) -> None:
+        """
+        Move all three axes (radial, angular, vertical) simultaneously.
+
+        This issues a single ``G0`` rapid command containing every axis so the
+        controller interpolates them together (one accelerate/decelerate cycle)
+        instead of running three separate, sequential moves.
+
+        Mapping (see class docstring / other move methods):
+        ``z`` -> X axis, ``r`` -> Y axis, ``angle`` -> Z axis.
+
+        :param r: The target radial coordinate (Y axis, mm).
+        :param angle: The target angular coordinate (Z axis, degrees).
+        :param z: The target vertical coordinate (X axis, mm).
+        """
+        self._grbl_controller.send_and_wait_for_move_ready(
+            f'G0 X{z:.4f} Y{r:.4f} Z{angle:.1f}'
+        )
 
     def cw_arc_move_to(self, r: float, z: float, radius: float) -> None:
         """Move in a clockwise arc to the specified radial and vertical position."""
@@ -100,7 +121,9 @@ class Scanner:
         """Return the raw mode string last reported by GRBL/FluidNC (e.g. 'Hold:0')."""
         return self._grbl_controller.get_state_raw()
 
-    def set_on_state_update_callback(self, callback) -> None:
+    def set_on_state_update_callback(
+        self, callback: Callable[[CylindricalPosition, GrblMachineState, CylindricalPosition | None], None]
+    ) -> None:
         """Register a callback for state and position updates."""
         self._grbl_controller.set_on_state_update_callback(callback)
 
@@ -127,6 +150,14 @@ class Scanner:
         :return: True if in alarm state, False otherwise.
         """
         return self.get_state() == GrblMachineState.ALARM
+
+    def is_homed(self) -> bool:
+        """
+        Return whether the machine has completed a homing cycle.
+
+        :return: True if homed, False otherwise.
+        """
+        return self._grbl_controller.is_homed()
 
     def set_as_zero(self) -> None:
         """Reset scanner Work Coordinate System (Persistent)."""
@@ -184,11 +215,16 @@ class Scanner:
         """Shutdown the scanner's movers."""
         self._grbl_controller.shutdown()
 
-    def __enter__(self):
+    def __enter__(self) -> 'Scanner':
         """Context manager enter."""
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: object | None,
+    ) -> None:
         """Context manager exit, ensures shutdown is called."""
         self.shutdown()
 

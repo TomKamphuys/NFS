@@ -22,7 +22,7 @@ class Registry:
             raise ValueError(f"Unknown {self.name} type: {name!r}")
         return self._registry[name]
 
-    def list(self):
+    def list(self) -> list[str]:
         """List all registered components."""
         return list(self._registry.keys())
 

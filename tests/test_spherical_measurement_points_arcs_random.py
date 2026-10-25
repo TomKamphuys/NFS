@@ -5,7 +5,8 @@ from nfs.plugins.spherical_measurement_points_arcs_random import SphericalMeasur
 
 def test_spherical_initialization():
     smpar = SphericalMeasurementPointsArcsRandom(nr_of_points=100, wall_spacing=1.0, radius=100.0, homing_gap=10.0, pole_gap=30.0)
-    assert smpar.get_radius() == 100.0
+    assert smpar._radius == 100.0
+    assert smpar.total_points() > 0
 
 
 def test_spherical_next():

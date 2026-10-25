@@ -42,3 +42,17 @@ jobs:
              
     - name: Test with pytest
       run: uv run pytest tests
+
+  windows-gui-smoke:
+    runs-on: windows-latest
+    env:
+      QT_QPA_PLATFORM: windows
+    steps:
+    - uses: actions/checkout@v5
+    - uses: astral-sh/setup-uv@v7
+      with:
+        enable-cache: true
+    - name: Install the project
+      run: uv sync --locked --all-extras --dev
+    - name: Test real-window startup and jogging
+      run: uv run pytest tests/test_qt_jog_workflow.py -v
