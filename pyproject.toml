@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nfs"
-version = "0.2.1"
+version = "0.4.0"
 description = "Near Field Scanner utilities and CLI"
 readme = "README.md"
 requires-python = "==3.13.5"
