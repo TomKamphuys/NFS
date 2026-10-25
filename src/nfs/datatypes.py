@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import math
 from enum import Enum
 
@@ -162,7 +164,7 @@ class CylindricalPosition:
         self._t = t
         self._z = z
 
-    def __eq__(self, other) -> bool:
+    def __eq__(self, other: object) -> bool:
         """
         Compares the current object with another object for equality. The comparison
         is performed by comparing the results of `r()`, `t()`, and `z()` methods from
@@ -174,9 +176,11 @@ class CylindricalPosition:
                  provided `other` object based on the comparison of `r()`, `t()`,
                  and `z()` method results.
         """
+        if not isinstance(other, CylindricalPosition):
+            return NotImplemented
         return (self.r(), self.t(), self.z()) == (other.r(), other.t(), other.z())
 
-    def __sub__(self, other: 'CylindricalPosition') -> 'CylindricalPosition':
+    def __sub__(self, other: CylindricalPosition) -> CylindricalPosition:
         """
         Subtracts another CylindricalPosition from this one.
         

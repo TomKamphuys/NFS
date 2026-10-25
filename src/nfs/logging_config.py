@@ -3,12 +3,15 @@ import configparser
 import sys
 import subprocess
 import platform
+from typing import Any, Optional
+
 from loguru import logger
 
 _initialized = False
+_configured_level: str = "INFO"
 
 
-def get_git_info(repo_path: str = None):
+def get_git_info(repo_path: Optional[str] = None) -> Optional[dict[str, str]]:
     """
     Retrieves git versioning information.
 
@@ -44,7 +47,11 @@ def get_git_info(repo_path: str = None):
         return None
 
 
-def log_version_info(project_name: str = "NFS Project", repo_path: str = None, log_env: bool = True):
+def log_version_info(
+    project_name: str = "NFS Project",
+    repo_path: Optional[str] = None,
+    log_env: bool = True,
+) -> None:
     """
     Logs the software version and optionally environment details.
 
@@ -77,7 +84,7 @@ def setup_logging(
     config_file: str = "config.ini",
     project_name: str = "NFS Project",
     force: bool = False,
-):
+) -> None:
     """
     Sets up logging for the application using loguru.
     Configures loggers based on settings in the provided configuration file.
@@ -89,7 +96,7 @@ def setup_logging(
     rotation = 10 MB
     retention = 1 week
     """
-    global _initialized
+    global _initialized, _configured_level
     was_initialized = _initialized
     if _initialized and not force:
         return
@@ -121,6 +128,8 @@ def setup_logging(
 
     if serial_comms_debug and level not in {"TRACE", "DEBUG"}:
         level = "DEBUG"
+
+    _configured_level = level
 
     # Add stderr handler. In a windowed (no-console) build - e.g. a PyInstaller
     # ``console=False`` executable - ``sys.stderr`` is ``None``. Passing ``None``
@@ -160,6 +169,11 @@ def setup_logging(
     _initialized = True
 
 
-def get_logger():
+def get_logger() -> Any:
     """Returns the loguru logger instance."""
     return logger
+
+
+def get_configured_level() -> str:
+    """Returns the log level currently configured by setup_logging()."""
+    return _configured_level

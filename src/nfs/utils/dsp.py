@@ -1,12 +1,13 @@
+from typing import Any, Tuple
+
 import numpy as np
-from typing import Tuple
 
 
 class DSPUtils:
     """Static utilities for pure mathematical operations."""
 
     @staticmethod
-    def fmt_num_for_name(val) -> str:
+    def fmt_num_for_name(val: Any) -> str:
         """Formats a number for safe filenames (e.g., 4.5 -> '4p5')."""
         if val is None:
             return "NA"
