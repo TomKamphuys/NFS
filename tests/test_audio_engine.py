@@ -474,7 +474,7 @@ def test_device_catalog_returns_empty_when_sounddevice_is_unavailable(monkeypatc
     assert get_devices_and_channels() == {}
 
 
-@pytest.mark.parametrize("failed_operation", ["_initialize", "query_devices"])
+@pytest.mark.parametrize("failed_operation", ["query_hostapis", "query_devices"])
 def test_device_catalog_returns_empty_when_portaudio_discovery_fails(monkeypatch, failed_operation):
     sounddevice = ModuleType("sounddevice")
     sounddevice._terminate = Mock()

@@ -1813,7 +1813,8 @@ class Audio(IAudio):
             self._sine_meter_worker = None
         with self._sine_level_lock:
             self._sine_level_dbfs = None
-        sd.stop()
+        # Explicit streams are already closed above. sounddevice.stop() only
+        # handles play/rec convenience functions and would load an unused backend.
         reset_audio_meter_state(active=False)
 
 

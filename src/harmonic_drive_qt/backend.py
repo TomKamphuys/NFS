@@ -18,7 +18,10 @@ from typing import Any, Callable, Optional
 from loguru import logger
 
 from nfs import NearFieldScannerFactory, ScannerFactory
-from nfs.audio import AudioFactory, get_audio_meter_state
+from nfs.audio import (
+    AudioFactory, get_audio_meter_state, get_devices_and_channels,
+    get_supported_sample_rates,
+)
 from nfs.datatypes import CylindricalPosition
 from nfs.logging_config import setup_logging
 
@@ -178,6 +181,15 @@ class BackendManager:
         if "error" in result_holder:
             raise result_holder["error"]
         return result_holder.get("result")
+
+    def get_audio_devices(self) -> dict:
+        # Discovery can trigger the first sounddevice import / Pa_Initialize.
+        # Keep it on the persistent COM-initialized stream owner, not the GUI.
+        return self._run_audio(get_devices_and_channels)
+
+    def get_audio_sample_rates(self, input_device_id, output_device_id) -> list[int]:
+        return self._run_audio(
+            get_supported_sample_rates, input_device_id, output_device_id)
 
     def load(self, status: Callable[[str], None] | None = None) -> None:
         # Keep object creation, stream use and cleanup on one owning thread.

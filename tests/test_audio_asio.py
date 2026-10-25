@@ -47,6 +47,16 @@ def ole32(monkeypatch):
     return ole
 
 
+def test_stopping_unused_audio_does_not_load_backend(monkeypatch):
+    def forbidden(name):
+        pytest.fail("Stopping unused audio must not import sounddevice")
+
+    monkeypatch.setattr(audio.sd, "import_module", forbidden)
+    engine = make_engine()
+    engine.stop_sine()
+    engine.stop_sine()
+
+
 @pytest.mark.parametrize("result,releases", [(0, 1), (1, 1), (-2147417850, 0)])
 def test_com_reference_ownership(ole32, result, releases):
     ole32.CoInitializeEx.return_value = result

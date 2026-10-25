@@ -277,8 +277,88 @@ def test_audio_worker_balances_its_com_reference(monkeypatch, result, releases):
     monkeypatch.setattr(qt_backend.ctypes, 'windll', SimpleNamespace(ole32=ole), raising=False)
     manager = BackendManager('config.ini')
     try:
+        # Worker COM failure must not reject non-hardware or mock jobs.
+        # ASIO streams retain their own COM checks when they are opened.
         assert manager._run_audio(lambda: 42) == 42
     finally:
         manager.shutdown()
     ole.CoInitializeEx.assert_called_once_with(None, 2)
     assert ole.CoUninitialize.call_count == releases
+
+
+@pytest.mark.parametrize("first_operation", ["devices", "rates"])
+def test_discovery_loads_backend_on_com_initialized_audio_owner(monkeypatch, first_operation):
+    import threading
+    from types import SimpleNamespace
+    from nfs import _audio_backend
+
+    events = []
+    owner = []
+
+    def initialize(*args):
+        owner.append(threading.get_ident())
+        events.append("com_init")
+        return 0
+
+    def check_owner(event):
+        assert threading.get_ident() == owner[0]
+        assert threading.get_ident() != threading.main_thread().ident
+        assert events[0] == "com_init"
+        assert "com_release" not in events
+        events.append(event)
+
+    def release():
+        check_owner("com_release")
+
+    def query_apis():
+        check_owner("devices")
+        return [{"name": "ASIO"}]
+
+    def check_settings(**kwargs):
+        check_owner("probe")
+        assert kwargs["device"] == 0
+
+    device = dict(name="Test ASIO", hostapi=0, max_input_channels=2, max_output_channels=2)
+    fake = SimpleNamespace(query_hostapis=query_apis, query_devices=lambda: [device],
+                           check_input_settings=check_settings, check_output_settings=check_settings)
+
+    def load(name):
+        assert name == "sounddevice"
+        check_owner("load")
+        return fake
+
+    monkeypatch.setattr(qt_backend.sys, "platform", "win32")
+    monkeypatch.setattr(qt_backend.ctypes, "windll", SimpleNamespace(
+        ole32=SimpleNamespace(CoInitializeEx=initialize, CoUninitialize=release)), raising=False)
+    monkeypatch.setattr(_audio_backend, "import_module", load)
+    manager = BackendManager("config.ini")
+    try:
+        # Creating a worker and doing non-hardware work must remain lazy.
+        manager._run_audio(lambda: None)
+        assert events == ["com_init"]
+        if first_operation == "rates":
+            assert 48000 in manager.get_audio_sample_rates(0, 0)
+        assert manager.get_audio_devices()[0]["name"] == "Test ASIO"
+        assert 48000 in manager.get_audio_sample_rates(0, 0)
+        # Nested calls execute directly instead of queuing onto themselves.
+        assert manager._run_audio(manager.get_audio_devices)[0]["hostapi"] == "ASIO"
+    finally:
+        manager.shutdown()
+    assert events[-1] == "com_release"
+    assert not manager._audio_thread.is_alive()
+
+
+def test_missing_audio_backend_does_not_break_worker_shutdown(monkeypatch):
+    from nfs import _audio_backend
+
+    def unavailable(name):
+        raise OSError("PortAudio unavailable")
+
+    monkeypatch.setattr(_audio_backend, "import_module", unavailable)
+    manager = BackendManager("config.ini")
+    try:
+        assert manager.get_audio_devices() == {}
+        assert manager.get_audio_sample_rates(0, 0) == []
+    finally:
+        manager.shutdown()
+    assert not manager._audio_thread.is_alive()

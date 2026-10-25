@@ -18,7 +18,7 @@ from .config_support import (
     _strip_inline_comment,
     save_config_values,
 )
-from nfs.audio import get_audio_meter_state, get_devices_and_channels, get_supported_sample_rates
+from nfs.audio import get_audio_meter_state
 
 from .backend import BackendManager, Worker
 from .styles import primary_button, toggle_style
@@ -209,7 +209,7 @@ class AudioSetupPane(QWidget):
         self.config_file = config_file
         self.show_live_capture = show_live_capture
         self.pool = QThreadPool.globalInstance()
-        self.catalog = get_devices_and_channels()
+        self.catalog = self.backend.get_audio_devices()
         self.auto_apply_enabled = False
         self.sine_running = False
         self.held_cal_level_dbfs: float | None = None
@@ -931,7 +931,8 @@ class AudioSetupPane(QWidget):
             self._set_combo_items(combo, opts, current)
 
     def _populate_sample_rates(self, current=None, prefer_default: bool = False) -> None:
-        rates = get_supported_sample_rates(self.selected_device_id("in"), self.selected_device_id("out"))
+        rates = self.backend.get_audio_sample_rates(
+            self.selected_device_id("in"), self.selected_device_id("out"))
         if not rates and current:
             rates = [int(current)]
         elif rates:
