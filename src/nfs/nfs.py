@@ -271,8 +271,6 @@ class NearFieldScanner:
                     break
 
                 self._measurement_motion_manager.next()
-                if self._measurement_motion_manager.ready():
-                    break
 
                 if self._measurement_stop_requested.is_set():
                     logger.info("Measurement set stopped after current move.")
