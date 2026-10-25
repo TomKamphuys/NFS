@@ -1,6 +1,59 @@
 --------
 25/10/26
 --------
+Follow-up to lazy audio backend (PR #59): keep hardware initialization and
+discovery on the existing audio worker.
+
+Issue: The previous lazy backend refactor initializes PortAudio on whichever
+thread first asks for hardware access. Starting a sine or sweep first already
+did this on the COM-initialized audio worker. However, Audio Setup queried
+devices directly from the GUI thread; if discovery happened first, PortAudio
+initialized there, while later streams were still created and closed on the
+audio worker.
+
+Changed: Routed Audio Setup device discovery and sample-rate probing through
+the Qt audio worker, so these requests initialize the lazy backend on the same
+thread that creates and closes streams. Backend initialization no longer moves
+to the GUI thread when Audio Setup requests the device list first.
+
+Removed the unnecessary global sounddevice.stop() call from sine cleanup:
+explicit streams are already closed, and stopping unused audio no longer
+initializes the backend.
+
+Preserved the existing ASIO-specific COM checks around stream creation. Worker
+COM initialization failures remain logged without rejecting all queued jobs,
+so mock and non-hardware operations are not blocked by COM availability.
+
+Added coverage for discovery/probing on the COM-initialized worker, lazy
+cleanup, and missing-backend shutdown. Retained coverage that worker jobs can
+run after worker COM initialization fails.
+
+--------
+25/10/26
+--------
+Lazy audio backend refactor (PR #59), building on the Windows ASIO stream
+lifecycle fix from 17/10/26 (PR #56).
+
+Moved sounddevice loading behind a shared lazy adapter in
+nfs/_audio_backend.py. Previously, importing nfs.audio also loaded and
+initialized PortAudio, even for DSP-only processing or mock measurements. A
+missing or unavailable audio backend could therefore prevent the module from
+importing at all.
+
+The adapter defers sounddevice loading until hardware is requested and sets
+SD_ENABLE_ASIO before that import. Replaced scattered sounddevice imports with
+the shared adapter, while preserving the existing stream lifecycle and COM
+handling. Device discovery and sample-rate probing return empty results when
+the backend is unavailable.
+
+Added import-without-sounddevice, ASIO configuration, retry and discovery
+fallback tests, and updated ASIO tests to inject a fake sounddevice module.
+The separate follow-up entry above adds explicit routing of GUI discovery to
+the audio worker.
+
+--------
+25/10/26
+--------
 Major release with significant improvements to motion safety, speed, and user experience.
 
 Added FastCylindricalMeasurementMotionManager: a faster motion manager for cylindrical
@@ -138,6 +191,39 @@ options instead of being treated as true because they are nonempty strings.
 This restores per-repeat alignment when first-marker alignment is disabled,
 and lets users disable debug saves and WASAPI exclusive mode. Invalid boolean
 values now raise a configuration error. Added parsing and factory regressions.
+
+--------
+17/10/26
+--------
+Original ASIO stream lifecycle and thread ownership fix (PR #56).
+
+Fixed Windows ASIO stream lifetime and repeated-capture failures. Initialize
+COM on the stream owner, close continuous sine before capture/reload/shutdown,
+and keep Qt audio creation and cleanup on its persistent worker.
+
+**Device lookup no longer restarts shared PortAudio; restart the app if newly
+attached devices are not listed.**
+
+Added COM ownership, channel routing and backend regressions.
+
+Files touched:
+audio.py
+Makes COM initialization follow the thread that owns each ASIO stream, removes
+PortAudio restarts from device lookup, and closes streams before replacing them.
+
+backend.py
+The Qt backend creates and controls the audio objects, so it must keep creation,
+playback, capture and cleanup on one persistent worker thread. It now initializes
+COM on that worker, stops any continuous sine before a sweep, reload or scan,
+and waits for stream cleanup during shutdown. No measurement DSP or scanner
+behaviour was changed here.
+
+test_audio_asio.py
+Adds focused COM, ASIO routing, discovery and stream lifetime regressions.
+
+test_qt_backend.py
+Confirms that Qt audio operations stay on the owner thread and that active
+playback is stopped before capture, reload and shutdown.
 
 --------
 09/10/26

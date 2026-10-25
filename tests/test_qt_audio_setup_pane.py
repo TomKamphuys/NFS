@@ -86,13 +86,11 @@ def test_plain_audio_combos_use_content_sizing_without_custom_popup(tmp_path, mo
         },
     }
 
-    monkeypatch.setattr("harmonic_drive_qt.audio_setup_pane.get_devices_and_channels", lambda: catalog)
-    monkeypatch.setattr(
-        "harmonic_drive_qt.audio_setup_pane.get_supported_sample_rates",
-        lambda _in_dev, _out_dev: [44100, 48000, 96000],
-    )
+    backend = Mock()
+    backend.get_audio_devices.return_value = catalog
+    backend.get_audio_sample_rates.return_value = [44100, 48000, 96000]
 
-    pane = AudioSetupPane(Mock(), str(config_file))
+    pane = AudioSetupPane(backend, str(config_file))
     try:
         for combo in (pane.api_select, pane.fs):
             style = combo.styleSheet()
@@ -171,13 +169,11 @@ def test_audio_pane_saves_comma_decimal_text_fields_as_dot_decimals(tmp_path, mo
         2: {"name": "Output", "hostapi": "ASIO", "input_channels": [], "output_channels": [0, 1]},
     }
 
-    monkeypatch.setattr("harmonic_drive_qt.audio_setup_pane.get_devices_and_channels", lambda: catalog)
-    monkeypatch.setattr(
-        "harmonic_drive_qt.audio_setup_pane.get_supported_sample_rates",
-        lambda _in_dev, _out_dev: [48000],
-    )
+    backend = Mock()
+    backend.get_audio_devices.return_value = catalog
+    backend.get_audio_sample_rates.return_value = [48000]
 
-    pane = AudioSetupPane(Mock(), str(config_file))
+    pane = AudioSetupPane(backend, str(config_file))
     try:
         pane.hpf_enable.setChecked(True)
         pane.hpf.setText("600,5")
@@ -233,13 +229,10 @@ def test_audio_spin_edits_save_only_after_editing_finished(tmp_path, monkeypatch
         1: {"name": "Input", "hostapi": "ASIO", "input_channels": [0, 1], "output_channels": []},
         2: {"name": "Output", "hostapi": "ASIO", "input_channels": [], "output_channels": [0, 1]},
     }
-    backend = Mock()
 
-    monkeypatch.setattr("harmonic_drive_qt.audio_setup_pane.get_devices_and_channels", lambda: catalog)
-    monkeypatch.setattr(
-        "harmonic_drive_qt.audio_setup_pane.get_supported_sample_rates",
-        lambda _in_dev, _out_dev: [48000],
-    )
+    backend = Mock()
+    backend.get_audio_devices.return_value = catalog
+    backend.get_audio_sample_rates.return_value = [48000]
 
     pane = AudioSetupPane(backend, str(config_file))
     try:
@@ -304,13 +297,10 @@ def test_output_level_spin_arrows_save_without_reload_and_update_running_sine(tm
         1: {"name": "Input", "hostapi": "ASIO", "input_channels": [0, 1], "output_channels": []},
         2: {"name": "Output", "hostapi": "ASIO", "input_channels": [], "output_channels": [0, 1]},
     }
-    backend = Mock()
 
-    monkeypatch.setattr("harmonic_drive_qt.audio_setup_pane.get_devices_and_channels", lambda: catalog)
-    monkeypatch.setattr(
-        "harmonic_drive_qt.audio_setup_pane.get_supported_sample_rates",
-        lambda _in_dev, _out_dev: [48000],
-    )
+    backend = Mock()
+    backend.get_audio_devices.return_value = catalog
+    backend.get_audio_sample_rates.return_value = [48000]
 
     pane = AudioSetupPane(backend, str(config_file))
     try:
@@ -384,13 +374,11 @@ def test_audio_pane_prefers_saved_name_and_hostapi_over_stale_id(tmp_path, monke
         },
     }
 
-    monkeypatch.setattr("harmonic_drive_qt.audio_setup_pane.get_devices_and_channels", lambda: catalog)
-    monkeypatch.setattr(
-        "harmonic_drive_qt.audio_setup_pane.get_supported_sample_rates",
-        lambda _in_dev, _out_dev: [48000],
-    )
+    backend = Mock()
+    backend.get_audio_devices.return_value = catalog
+    backend.get_audio_sample_rates.return_value = [48000]
 
-    pane = AudioSetupPane(Mock(), str(config_file))
+    pane = AudioSetupPane(backend, str(config_file))
     try:
         assert pane.api_select.currentText() == "ASIO"
         assert pane.selected_device_id("in") == 20
@@ -428,12 +416,9 @@ def test_audio_pane_prompts_when_saved_devices_are_not_found(tmp_path, monkeypat
         },
     }
 
-    monkeypatch.setattr("harmonic_drive_qt.audio_setup_pane.get_devices_and_channels", lambda: catalog)
-    monkeypatch.setattr(
-        "harmonic_drive_qt.audio_setup_pane.get_supported_sample_rates",
-        lambda _in_dev, _out_dev: [48000],
-    )
     backend = Mock()
+    backend.get_audio_devices.return_value = catalog
+    backend.get_audio_sample_rates.return_value = [48000]
 
     pane = AudioSetupPane(backend, str(config_file))
     try:
@@ -527,13 +512,11 @@ def test_audio_pane_resets_channels_to_first_then_second_on_api_change(tmp_path,
         },
     }
 
-    monkeypatch.setattr("harmonic_drive_qt.audio_setup_pane.get_devices_and_channels", lambda: catalog)
-    monkeypatch.setattr(
-        "harmonic_drive_qt.audio_setup_pane.get_supported_sample_rates",
-        lambda _in_dev, _out_dev: [48000],
-    )
+    backend = Mock()
+    backend.get_audio_devices.return_value = catalog
+    backend.get_audio_sample_rates.return_value = [48000]
 
-    pane = AudioSetupPane(Mock(), str(config_file))
+    pane = AudioSetupPane(backend, str(config_file))
     try:
         assert pane.in_mic_channel.currentData() == 1
         assert pane.in_loop_channel.currentData() == 0
@@ -600,13 +583,11 @@ def test_audio_pane_prefers_48khz_when_api_changes(tmp_path, monkeypatch):
         },
     }
 
-    monkeypatch.setattr("harmonic_drive_qt.audio_setup_pane.get_devices_and_channels", lambda: catalog)
-    monkeypatch.setattr(
-        "harmonic_drive_qt.audio_setup_pane.get_supported_sample_rates",
-        lambda _in_dev, _out_dev: [48000, 96000],
-    )
+    backend = Mock()
+    backend.get_audio_devices.return_value = catalog
+    backend.get_audio_sample_rates.return_value = [48000, 96000]
 
-    pane = AudioSetupPane(Mock(), str(config_file))
+    pane = AudioSetupPane(backend, str(config_file))
     try:
         assert pane.fs.currentData() == 96000
 
@@ -663,13 +644,11 @@ def test_disabled_protection_hpf_shows_500hz_default_and_saves_when_enabled(tmp_
         },
     }
 
-    monkeypatch.setattr("harmonic_drive_qt.audio_setup_pane.get_devices_and_channels", lambda: catalog)
-    monkeypatch.setattr(
-        "harmonic_drive_qt.audio_setup_pane.get_supported_sample_rates",
-        lambda _in_dev, _out_dev: [48000],
-    )
+    backend = Mock()
+    backend.get_audio_devices.return_value = catalog
+    backend.get_audio_sample_rates.return_value = [48000]
 
-    pane = AudioSetupPane(Mock(), str(config_file))
+    pane = AudioSetupPane(backend, str(config_file))
     try:
         assert pane.hpf.text() == "500.0"
         assert not pane.hpf.isEnabled()
@@ -742,11 +721,9 @@ def test_audio_pane_updates_config_and_project_memory_without_project_json(tmp_p
         2: {"name": "Output", "hostapi": "ASIO", "input_channels": [], "output_channels": [0, 1]},
     }
 
-    monkeypatch.setattr("harmonic_drive_qt.audio_setup_pane.get_devices_and_channels", lambda: catalog)
-    monkeypatch.setattr(
-        "harmonic_drive_qt.audio_setup_pane.get_supported_sample_rates",
-        lambda _in_dev, _out_dev: [48000],
-    )
+    backend = Mock()
+    backend.get_audio_devices.return_value = catalog
+    backend.get_audio_sample_rates.return_value = [48000]
     monkeypatch.setattr(QMessageBox, "information", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         QMessageBox,
@@ -756,7 +733,7 @@ def test_audio_pane_updates_config_and_project_memory_without_project_json(tmp_p
 
     session_dir = tmp_path / "session"
     project.set_project_dir(session_dir, str(config_file))
-    pane = AudioSetupPane(Mock(), str(config_file))
+    pane = AudioSetupPane(backend, str(config_file))
     try:
         pane.level.setValue(-12.0)
         pane.sweep_dur.setValue(2.5)
@@ -826,11 +803,9 @@ def test_audio_auto_apply_does_not_overwrite_saved_calibration(tmp_path, monkeyp
         2: {"name": "Output", "hostapi": "ASIO", "input_channels": [], "output_channels": [0, 1]},
     }
 
-    monkeypatch.setattr("harmonic_drive_qt.audio_setup_pane.get_devices_and_channels", lambda: catalog)
-    monkeypatch.setattr(
-        "harmonic_drive_qt.audio_setup_pane.get_supported_sample_rates",
-        lambda _in_dev, _out_dev: [48000],
-    )
+    backend = Mock()
+    backend.get_audio_devices.return_value = catalog
+    backend.get_audio_sample_rates.return_value = [48000]
 
     project.set_project_dir(tmp_path / "session", str(config_file))
     project.update_spl_calibration(
@@ -840,7 +815,7 @@ def test_audio_auto_apply_does_not_overwrite_saved_calibration(tmp_path, monkeyp
             "reference_input_rms_dbfs": -20.0,
         }
     )
-    pane = AudioSetupPane(Mock(), str(config_file))
+    pane = AudioSetupPane(backend, str(config_file))
     try:
         pane.held_cal_level_dbfs = -30.0
         pane.spl_reading.setValue(90.0)
@@ -897,11 +872,9 @@ def test_audio_pane_loads_saved_calibration_fields_without_live_mic_level(tmp_pa
         2: {"name": "Output", "hostapi": "ASIO", "input_channels": [], "output_channels": [0, 1]},
     }
 
-    monkeypatch.setattr("harmonic_drive_qt.audio_setup_pane.get_devices_and_channels", lambda: catalog)
-    monkeypatch.setattr(
-        "harmonic_drive_qt.audio_setup_pane.get_supported_sample_rates",
-        lambda _in_dev, _out_dev: [48000],
-    )
+    backend = Mock()
+    backend.get_audio_devices.return_value = catalog
+    backend.get_audio_sample_rates.return_value = [48000]
 
     project.set_project_dir(tmp_path / "session", str(config_file))
     project.update_system_calibration(
@@ -924,7 +897,7 @@ def test_audio_pane_loads_saved_calibration_fields_without_live_mic_level(tmp_pa
         }
     )
 
-    pane = AudioSetupPane(Mock(), str(config_file))
+    pane = AudioSetupPane(backend, str(config_file))
     try:
         assert pane.spl_offset.value() == 109.75
         assert pane.spl_reading.value() == 82.0
@@ -982,15 +955,13 @@ def test_spl_calibration_weighting_selector_changes_meter_source_and_label(tmp_p
         "c_weighted_inputs": [{"peak_dbfs": -90.0, "rms_dbfs": -95.0}, {"peak_dbfs": -17.0, "rms_dbfs": -20.0}],
     }
 
-    monkeypatch.setattr("harmonic_drive_qt.audio_setup_pane.get_devices_and_channels", lambda: catalog)
-    monkeypatch.setattr(
-        "harmonic_drive_qt.audio_setup_pane.get_supported_sample_rates",
-        lambda _in_dev, _out_dev: [48000],
-    )
+    backend = Mock()
+    backend.get_audio_devices.return_value = catalog
+    backend.get_audio_sample_rates.return_value = [48000]
     monkeypatch.setattr("harmonic_drive_qt.audio_setup_pane.get_audio_meter_state", lambda: meter_state)
 
     project.set_project_dir(tmp_path / "session", str(config_file))
-    pane = AudioSetupPane(Mock(), str(config_file))
+    pane = AudioSetupPane(backend, str(config_file))
     try:
         assert pane.cal_weighting.currentData() == "c_weighted_inputs"
         for _ in range(5):
@@ -1064,11 +1035,9 @@ def test_save_spl_calibration_can_create_missing_project_json_after_prompt(tmp_p
         2: {"name": "Output", "hostapi": "ASIO", "input_channels": [], "output_channels": [0, 1]},
     }
 
-    monkeypatch.setattr("harmonic_drive_qt.audio_setup_pane.get_devices_and_channels", lambda: catalog)
-    monkeypatch.setattr(
-        "harmonic_drive_qt.audio_setup_pane.get_supported_sample_rates",
-        lambda _in_dev, _out_dev: [48000],
-    )
+    backend = Mock()
+    backend.get_audio_devices.return_value = catalog
+    backend.get_audio_sample_rates.return_value = [48000]
     monkeypatch.setattr(QMessageBox, "information", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         QMessageBox,
@@ -1080,7 +1049,7 @@ def test_save_spl_calibration_can_create_missing_project_json_after_prompt(tmp_p
     project.set_project_dir(session_dir, str(config_file))
     project.set_project_name("Speaker A")
     project.update_grid_vars({"output_filename": "Speaker_A_grid.csv"})
-    pane = AudioSetupPane(Mock(), str(config_file))
+    pane = AudioSetupPane(backend, str(config_file))
     try:
         pane.sweep_dur.setValue(2.5)
         pane.held_cal_level_dbfs = -27.5
@@ -1146,11 +1115,9 @@ def test_voltage_calibration_can_save_output_only_then_input_spl(tmp_path, monke
         "c_weighted_inputs": [{"peak_dbfs": -90.0, "rms_dbfs": -95.0}, {"peak_dbfs": -12.0, "rms_dbfs": -30.0}],
     }
 
-    monkeypatch.setattr("harmonic_drive_qt.audio_setup_pane.get_devices_and_channels", lambda: catalog)
-    monkeypatch.setattr(
-        "harmonic_drive_qt.audio_setup_pane.get_supported_sample_rates",
-        lambda _in_dev, _out_dev: [48000],
-    )
+    backend = Mock()
+    backend.get_audio_devices.return_value = catalog
+    backend.get_audio_sample_rates.return_value = [48000]
     monkeypatch.setattr("harmonic_drive_qt.audio_setup_pane.get_audio_meter_state", lambda: meter_state)
     monkeypatch.setattr(QMessageBox, "information", lambda *args, **kwargs: None)
     monkeypatch.setattr(
@@ -1162,7 +1129,7 @@ def test_voltage_calibration_can_save_output_only_then_input_spl(tmp_path, monke
     session_dir = tmp_path / "session"
     project.set_project_dir(session_dir, str(config_file))
     project.set_project_name("Voltage Speaker")
-    pane = AudioSetupPane(Mock(), str(config_file))
+    pane = AudioSetupPane(backend, str(config_file))
     try:
         assert not any("Measured output" in group.toolTip() for group in pane.findChildren(QGroupBox))
         assert any(
