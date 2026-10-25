@@ -439,10 +439,10 @@ def test_verification_warnings(fs):
     assert any("POOR ALIGNMENT" in w for w in verifier.verify({'psr': 2.0}))
 
 
-@patch("nfs.audio.sd.query_devices")
-@patch("nfs.audio.sd.query_hostapis")
-@patch("nfs.audio.sd._initialize")
-@patch("nfs.audio.sd._terminate")
+@patch("sounddevice.query_devices")
+@patch("sounddevice.query_hostapis")
+@patch("sounddevice._initialize")
+@patch("sounddevice._terminate")
 def test_device_catalog_uses_zero_based_channels_for_all_host_apis(
     _terminate,
     _initialize,

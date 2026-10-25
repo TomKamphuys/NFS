@@ -52,7 +52,9 @@ from .utils.dsp import DSPUtils
 # Enable ASIO build of PortAudio in python-sounddevice (Windows).
 # This environment variable triggers the loading of ASIO drivers if available.
 os.environ["SD_ENABLE_ASIO"] = "1"
-import sounddevice as sd  # noqa: E402
+# sounddevice is imported lazily to avoid PortAudio initialization at module load time
+# (e.g., on headless CI runners without PulseAudio).
+sd = None  # type: ignore
 
 
 _METER_EPS = 1e-12
@@ -487,6 +489,8 @@ def get_devices_and_channels() -> dict:
     Channel indices are 0-based because they are used directly as sounddevice
     stream buffer indices.
     """
+    import sounddevice as sd  # noqa: E402
+
     # Hard refresh PortAudio state to catch any recent device changes
     sd._terminate()
     sd._initialize()
@@ -526,6 +530,8 @@ def get_supported_sample_rates(input_device_id: Optional[int], output_device_id:
     PortAudio does not expose a guaranteed exhaustive list for every host API, so
     probe standard audio rates and keep those accepted by all selected devices.
     """
+    import sounddevice as sd  # noqa: E402
+
     common_rates = [44100, 48000, 88200, 96000, 176400, 192000]
     supported = []
 
@@ -1308,6 +1314,8 @@ class Audio(IAudio):
         :param dev_index: Device index.
         :return: API name.
         """
+        import sounddevice as sd  # noqa: E402
+
         try:
             d = sd.query_devices(dev_index)
             return sd.query_hostapis()[d['hostapi']]['name'].upper()
@@ -1335,6 +1343,8 @@ class Audio(IAudio):
         Executes the playback and recording of the composite signal.
         Handles stream synchronization, multiple sweep averaging, and loopback alignment.
         """
+        import sounddevice as sd  # noqa: E402
+
         # 1. Generate Signals
         s_fund, phase, inv_sweep = self.sweep_gen.generate()
 
@@ -1580,6 +1590,8 @@ class Audio(IAudio):
         :param level_dbfs: Level in dBFS.
         :param duration_s: Duration in seconds. If None, plays until stop_sine() is called.
         """
+        import sounddevice as sd  # noqa: E402
+
         self.stop_sine()
         self.update_sine_level(level_dbfs)
 
@@ -1749,6 +1761,8 @@ class Audio(IAudio):
 
     def stop_sine(self) -> None:
         """Stops any active sine wave playback."""
+        import sounddevice as sd  # noqa: E402
+
         if self._sine_stream is not None:
             logger.info("Stopping indefinite sine playback")
             try:
@@ -2098,5 +2112,7 @@ class AudioFactory:
 
 if __name__ == "__main__":
     # Helper to list devices if run directly
+    import sounddevice as sd  # noqa: E402
+
     print("\nAvailable Audio Devices:")
     print(sd.query_devices())
