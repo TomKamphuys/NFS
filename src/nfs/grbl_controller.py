@@ -156,7 +156,6 @@ class GrblControllerMock(IGrblController):
         logger.trace(f'Mocking sending message: {message}')
         # Handle coordinate extraction if needed, but for now we just track Y/Z/X
         # In nfs, R=Y, T=Z, Z=X
-        import re
         x_match = re.search(r'X([-+]?\d*\.?\d+)', message)
         y_match = re.search(r'Y([-+]?\d*\.?\d+)', message)
         z_match = re.search(r'Z([-+]?\d*\.?\d+)', message)

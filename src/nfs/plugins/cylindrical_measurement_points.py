@@ -71,7 +71,7 @@ class CylindricalMeasurementPoints:
 
             # if last points of cap, set stuff for wall
             if new_position.r() >= self._radius:
-                logger.info('Bottom cap ready; switching to wall')
+                logger.debug('Bottom cap ready; switching to wall')
                 self._bottom_cap = False
                 self._wall = True
                 self._top_cap = False
@@ -81,7 +81,7 @@ class CylindricalMeasurementPoints:
 
             # if last position of wall, set stuff for top cap
             if new_position.z() >= self._height:
-                logger.info('Wall ready, switching to top cap')
+                logger.debug('Wall ready, switching to top cap')
                 self._bottom_cap = False
                 self._wall = False
                 self._top_cap = True
@@ -92,7 +92,7 @@ class CylindricalMeasurementPoints:
 
             # if last position of cap, get ready for new angle
             if new_position.r() >= self._radius:
-                logger.info('Top cap ready, switching to new angle')
+                logger.debug('Top cap ready, switching to new angle')
                 self._bottom_cap = True
                 self._wall = False
                 self._top_cap = False
@@ -107,7 +107,7 @@ class CylindricalMeasurementPoints:
                 return CylindricalPosition(self._current_radius, self._current_angle, self._current_height)
             return new_position
         else:
-            logger.critical('This is not possible!')
+            logger.error('This is not possible!')
             raise Exception("This is not possible!")
 
     def outwards_cap(self) -> CylindricalPosition:

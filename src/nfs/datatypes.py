@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import math
 from enum import Enum
 
@@ -174,9 +176,11 @@ class CylindricalPosition:
                  provided `other` object based on the comparison of `r()`, `t()`,
                  and `z()` method results.
         """
+        if not isinstance(other, CylindricalPosition):
+            return NotImplemented
         return (self.r(), self.t(), self.z()) == (other.r(), other.t(), other.z())
 
-    def __sub__(self, other: 'CylindricalPosition') -> 'CylindricalPosition':
+    def __sub__(self, other: CylindricalPosition) -> CylindricalPosition:
         """
         Subtracts another CylindricalPosition from this one.
         

@@ -1,12 +1,10 @@
 import configparser
+import datetime
 import shutil
 import threading
 import time
 from pathlib import Path
-from typing import Any, Callable, Optional, TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from .datatypes import CylindricalPosition
+from typing import Any, Callable, Optional
 
 from .logging_config import setup_logging, log_version_info
 from loguru import logger
@@ -98,7 +96,6 @@ class NearFieldScanner:
             cleaned = "_".join(part for part in cleaned.split("_") if part)
             if cleaned:
                 return cleaned
-        import datetime
         return datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 
     def _clear_position_log(self) -> None:

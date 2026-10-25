@@ -846,12 +846,12 @@ class HarmonicInjector:
         # Adds artificial distortion to verify that the Farina separation logic works.
         if self.h2_db is not None:
             amp_h2 = DSPUtils.db_to_lin(self.h2_db)
-            logger.info(f"► INJECTING H2 @ {self.h2_db} dB")
+            logger.debug(f"► INJECTING H2 @ {self.h2_db} dB")
             s_composite += amp_h2 * np.sin(2 * phase)
 
         if self.h3_db is not None:
             amp_h3 = DSPUtils.db_to_lin(self.h3_db)
-            logger.info(f"► INJECTING H3 @ {self.h3_db} dB")
+            logger.debug(f"► INJECTING H3 @ {self.h3_db} dB")
             s_composite += amp_h3 * np.sin(3 * phase)
 
         return s_composite
@@ -887,7 +887,7 @@ class ProtectionFilter:
         if self.sos is None:
             return sig
 
-        logger.info(f"► Applying Protection HPF: {self.freq_hz}Hz, Order={self.order} (Min Phase)")
+        logger.debug(f"► Applying Protection HPF: {self.freq_hz}Hz, Order={self.order} (Min Phase)")
         return scipy.signal.sosfilt(self.sos, sig).astype(np.float32)
 
     def get_correction_mask(self, n_bins: int) -> np.ndarray:
@@ -898,7 +898,7 @@ class ProtectionFilter:
         if self.sos is None or not self.hpf_correction:
             return np.ones(n_bins, dtype=np.complex64)
 
-        logger.info(f"► Generating HPF Correction Mask (Max Gain: +{self.hpf_corr_db_cap}dB)")
+        logger.debug(f"► Generating HPF Correction Mask (Max Gain: +{self.hpf_corr_db_cap}dB)")
 
         # 1. Calculate the exact complex frequency response of the applied IIR filter
         _, H = scipy.signal.sosfreqz(self.sos, worN=n_bins, fs=self.fs)
@@ -1855,7 +1855,7 @@ class MockInterfaceAudio(Audio):
             noise = np.random.normal(0, 1e-5, len(y))
             return (y + noise).astype(np.float32)
 
-        logger.info("► Loopback Mode: Applying CS4272 FIR, 15Hz HPF, and 20ms delay.")
+        logger.debug("► Loopback Mode: Applying CS4272 FIR, 15Hz HPF, and 20ms delay.")
         rec_mic = apply_hardware_sim(tx_sweep)
         rec_loop = apply_hardware_sim(tx_ref)
 
@@ -1881,16 +1881,16 @@ class MockInterfaceAudio(Audio):
         :param level_dbfs: Level in dBFS.
         :param duration_s: Duration in seconds. If None, plays until stop_sine() is called.
         """
-        logger.info(
+        logger.debug(
             f"[MOCK-INTERFACE] Playing sine: {frequency} Hz, {level_dbfs} dBFS, {'until stopped' if duration_s is None else f'for {duration_s} s'}")
         self.update_sine_level(level_dbfs)
 
     def update_sine_level(self, level_dbfs: float) -> None:
-        logger.info(f"[MOCK-INTERFACE] Updated sine level: {level_dbfs} dBFS")
+        logger.debug(f"[MOCK-INTERFACE] Updated sine level: {level_dbfs} dBFS")
 
     def stop_sine(self) -> None:
         """Stops sine playback."""
-        logger.info("[MOCK-INTERFACE] Stopped sine playback")
+        logger.debug("[MOCK-INTERFACE] Stopped sine playback")
         reset_audio_meter_state(active=False)
 
 
@@ -1908,7 +1908,7 @@ class AudioMock(IAudio):
         :param position: The scanner position.
         :param order_id: An optional order ID for file naming.
         """
-        logger.info(f"[MOCK] Measured {position}, ID={order_id}")
+        logger.debug(f"[MOCK] Measured {position}, ID={order_id}")
         # time.sleep(1.0)  # Simulate sweep duration
         return {}
 
@@ -1920,16 +1920,16 @@ class AudioMock(IAudio):
         :param level_dbfs: Level in dBFS.
         :param duration_s: Duration in seconds. If None, plays until stop_sine() is called.
         """
-        logger.info(
+        logger.debug(
             f"[MOCK] Playing sine: {frequency} Hz, {level_dbfs} dBFS, {'until stopped' if duration_s is None else f'for {duration_s} s'}")
         self.update_sine_level(level_dbfs)
 
     def update_sine_level(self, level_dbfs: float) -> None:
-        logger.info(f"[MOCK] Updated sine level: {level_dbfs} dBFS")
+        logger.debug(f"[MOCK] Updated sine level: {level_dbfs} dBFS")
 
     def stop_sine(self) -> None:
         """Stops sine playback."""
-        logger.info("[MOCK] Stopped sine playback")
+        logger.debug("[MOCK] Stopped sine playback")
         reset_audio_meter_state(active=False)
 
 

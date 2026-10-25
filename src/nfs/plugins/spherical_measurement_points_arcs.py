@@ -102,7 +102,7 @@ class SphericalMeasurementPointsArcs:
 
     def next(self) -> CylindricalPosition:
         i = self._current_index
-        logger.info(f'Point {i} of {self._actual_nr_of_points}')
+        logger.debug(f'Point {i} of {self._actual_nr_of_points}')
 
         r = self._r_cyl[i]
         theta = self._theta_cyl[i]
