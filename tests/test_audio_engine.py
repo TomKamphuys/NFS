@@ -4,15 +4,17 @@ import scipy.signal
 import configparser
 import json
 import os
+import sys
 import threading
 from pathlib import Path
+from types import ModuleType
 from unittest.mock import Mock, patch
 import nfs.audio as audio_module
 from nfs.audio import (
     MarkerGenerator, SweepGenerator, HarmonicInjector,
     ProtectionFilter, DeconvolutionEngine, AlignmentEngine,
     DSPVerificationTool, AudioFactory, find_device_id_by_name, get_devices_and_channels,
-    resolve_device_id_by_saved_identity,
+    get_supported_sample_rates, resolve_device_id_by_saved_identity,
     SINE_RMS_FROM_PEAK,
     _AudioMeterWorker,
 )
@@ -439,34 +441,56 @@ def test_verification_warnings(fs):
     assert any("POOR ALIGNMENT" in w for w in verifier.verify({'psr': 2.0}))
 
 
-@patch("sounddevice.query_devices")
-@patch("sounddevice.query_hostapis")
-@patch("sounddevice._initialize")
-@patch("sounddevice._terminate")
 def test_device_catalog_uses_zero_based_channels_for_all_host_apis(
-    _terminate,
-    _initialize,
-    mock_hostapis,
-    mock_devices,
+    monkeypatch,
 ):
-    mock_hostapis.return_value = [
+    sounddevice = ModuleType("sounddevice")
+    sounddevice._terminate = Mock()
+    sounddevice._initialize = Mock()
+    sounddevice.query_hostapis = Mock(return_value=[
         {"name": "MME"},
         {"name": "Windows DirectSound"},
         {"name": "Windows WASAPI"},
         {"name": "ASIO"},
-    ]
-    mock_devices.return_value = [
+    ])
+    sounddevice.query_devices = Mock(return_value=[
         {"name": "MME Device", "hostapi": 0, "max_input_channels": 2, "max_output_channels": 2},
         {"name": "DS Device", "hostapi": 1, "max_input_channels": 2, "max_output_channels": 2},
         {"name": "WASAPI Device", "hostapi": 2, "max_input_channels": 2, "max_output_channels": 2},
         {"name": "ASIO Device", "hostapi": 3, "max_input_channels": 2, "max_output_channels": 2},
-    ]
+    ])
+    monkeypatch.setitem(sys.modules, "sounddevice", sounddevice)
 
     catalog = get_devices_and_channels()
 
     for info in catalog.values():
         assert info["input_channels"] == [0, 1]
         assert info["output_channels"] == [0, 1]
+
+
+def test_device_catalog_returns_empty_when_sounddevice_is_unavailable(monkeypatch):
+    monkeypatch.setitem(sys.modules, "sounddevice", None)
+
+    assert get_devices_and_channels() == {}
+
+
+@pytest.mark.parametrize("failed_operation", ["_initialize", "query_devices"])
+def test_device_catalog_returns_empty_when_portaudio_discovery_fails(monkeypatch, failed_operation):
+    sounddevice = ModuleType("sounddevice")
+    sounddevice._terminate = Mock()
+    sounddevice._initialize = Mock()
+    sounddevice.query_hostapis = Mock(return_value=[])
+    sounddevice.query_devices = Mock(return_value=[])
+    getattr(sounddevice, failed_operation).side_effect = RuntimeError("PortAudio unavailable")
+    monkeypatch.setitem(sys.modules, "sounddevice", sounddevice)
+
+    assert get_devices_and_channels() == {}
+
+
+def test_supported_sample_rates_returns_empty_when_sounddevice_is_unavailable(monkeypatch):
+    monkeypatch.setitem(sys.modules, "sounddevice", None)
+
+    assert get_supported_sample_rates(0, 0) == []
 
 
 # -----------------------------------------------------------------------------

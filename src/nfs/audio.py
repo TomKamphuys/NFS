@@ -52,9 +52,6 @@ from .utils.dsp import DSPUtils
 # Enable ASIO build of PortAudio in python-sounddevice (Windows).
 # This environment variable triggers the loading of ASIO drivers if available.
 os.environ["SD_ENABLE_ASIO"] = "1"
-# sounddevice is imported lazily to avoid PortAudio initialization at module load time
-# (e.g., on headless CI runners without PulseAudio).
-sd = None  # type: ignore
 
 
 _METER_EPS = 1e-12
@@ -489,14 +486,18 @@ def get_devices_and_channels() -> dict:
     Channel indices are 0-based because they are used directly as sounddevice
     stream buffer indices.
     """
-    import sounddevice as sd  # noqa: E402
+    try:
+        import sounddevice as sd  # noqa: E402
 
-    # Hard refresh PortAudio state to catch any recent device changes
-    sd._terminate()
-    sd._initialize()
+        # Hard refresh PortAudio state to catch any recent device changes
+        sd._terminate()
+        sd._initialize()
 
-    apis = sd.query_hostapis()
-    devs = sd.query_devices()
+        apis = sd.query_hostapis()
+        devs = sd.query_devices()
+    except Exception as exc:
+        logger.warning("Unable to discover audio devices: {}", exc)
+        return {}
 
     device_catalog = {}
 
@@ -530,7 +531,11 @@ def get_supported_sample_rates(input_device_id: Optional[int], output_device_id:
     PortAudio does not expose a guaranteed exhaustive list for every host API, so
     probe standard audio rates and keep those accepted by all selected devices.
     """
-    import sounddevice as sd  # noqa: E402
+    try:
+        import sounddevice as sd  # noqa: E402
+    except Exception as exc:
+        logger.warning("Unable to discover supported audio sample rates: {}", exc)
+        return []
 
     common_rates = [44100, 48000, 88200, 96000, 176400, 192000]
     supported = []

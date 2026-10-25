@@ -2,6 +2,7 @@
 
 import configparser
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -23,6 +24,7 @@ pytestmark = pytest.mark.gui_smoke
 
 @pytest.fixture
 def window(qtbot, tmp_path, monkeypatch):
+    monkeypatch.setitem(sys.modules, "sounddevice", None)
     config = configparser.ConfigParser()
     config.read(Path(__file__).resolve().parents[1] / "config_default.ini")
     config["grbl_streamer"]["type"] = "MockSimulatedDRO"
