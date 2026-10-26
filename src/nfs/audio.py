@@ -31,7 +31,9 @@ Key Features:
 """
 
 import configparser
-import os
+import ctypes
+import sys
+from contextlib import contextmanager
 import threading
 import time
 from abc import ABC, abstractmethod
@@ -48,12 +50,33 @@ from loguru import logger
 
 from .datatypes import CylindricalPosition
 from .utils.dsp import DSPUtils
+from . import _audio_backend as sd
 from .naming import IRNamingConvention, NamingConventionFactory
 from .debug_artifacts import DebugArtifactHandler, DebugArtifactFactory
 
-# Enable ASIO build of PortAudio in python-sounddevice (Windows).
-# This environment variable triggers the loading of ASIO drivers if available.
-os.environ["SD_ENABLE_ASIO"] = "1"
+
+@contextmanager
+def _asio_thread_context(enabled: bool):
+    """Keep Windows COM initialized on the calling thread until ASIO closes."""
+    # COM is thread-specific. The thread that opens an ASIO stream must set it
+    # up first, then keep it available until the stream has been closed.
+    if not enabled or sys.platform != "win32":
+        yield
+        return
+    ole32 = ctypes.windll.ole32
+    # COINIT_APARTMENTTHREADED = 2. Mask to unsigned so Windows error codes
+    # compare the same way whether ctypes returns a signed or unsigned value.
+    result = ole32.CoInitializeEx(None, 2) & 0xFFFFFFFF
+    # 0: new apartment; 1: already initialized here; RPC_E_CHANGED_MODE:
+    # another apartment model is active, and we do not own a COM reference.
+    if result not in (0, 1, 0x80010106):
+        raise RuntimeError(f"ASIO COM initialization failed (HRESULT 0x{result:08X})")
+    try:
+        yield
+    finally:
+        # Balance our own successful initialization, even if the stream fails.
+        if result in (0, 1):
+            ole32.CoUninitialize()
 
 
 _METER_EPS = 1e-12
@@ -488,13 +511,11 @@ def get_devices_and_channels() -> dict:
     Channel indices are 0-based because they are used directly as sounddevice
     stream buffer indices.
     """
+    # Device lookup must be read-only: PortAudio is shared by every stream.
+    # Restarting it here can invalidate an active driver, or reload ASIO on
+    # a temporary UI worker that exits before the next capture. Restart the
+    # application after hot-plugging hardware if the catalog has not updated.
     try:
-        import sounddevice as sd  # noqa: E402
-
-        # Hard refresh PortAudio state to catch any recent device changes
-        sd._terminate()
-        sd._initialize()
-
         apis = sd.query_hostapis()
         devs = sd.query_devices()
     except Exception as exc:
@@ -534,7 +555,8 @@ def get_supported_sample_rates(input_device_id: Optional[int], output_device_id:
     probe standard audio rates and keep those accepted by all selected devices.
     """
     try:
-        import sounddevice as sd  # noqa: E402
+        check_input_settings = sd.check_input_settings
+        check_output_settings = sd.check_output_settings
     except Exception as exc:
         logger.warning("Unable to discover supported audio sample rates: {}", exc)
         return []
@@ -545,9 +567,9 @@ def get_supported_sample_rates(input_device_id: Optional[int], output_device_id:
     for rate in common_rates:
         try:
             if input_device_id is not None:
-                sd.check_input_settings(device=input_device_id, samplerate=rate)
+                check_input_settings(device=input_device_id, samplerate=rate)
             if output_device_id is not None:
-                sd.check_output_settings(device=output_device_id, samplerate=rate)
+                check_output_settings(device=output_device_id, samplerate=rate)
         except Exception:
             continue
         supported.append(rate)
@@ -663,7 +685,8 @@ class DSPVerificationTool:
         """
         self.fs = fs
 
-    def calculate_metrics(self, h_full: np.ndarray, h_linear: np.ndarray, psr: float) -> Dict[str, float]:
+    def calculate_metrics(self, h_full: np.ndarray, h_linear: np.ndarray, psr: float,
+                          psr_reference: Optional[float] = None) -> Dict[str, float]:
         """
         Calculates a suite of DSP quality metrics.
         
@@ -698,6 +721,15 @@ class DSPVerificationTool:
 
         # 3. Alignment Quality
         metrics['psr'] = float(psr)
+        metrics['psr_db'] = float(20.0 * np.log10(psr)) if psr > 0 else 0.0
+        if psr_reference is not None and psr_reference > 1.0:
+            reference_db = float(20.0 * np.log10(psr_reference))
+            metrics['psr_reference_db'] = reference_db
+            # This is a relative clarity score, not a probability that the
+            # alignment is correct. The raw PSR remains in the saved metrics.
+            metrics['alignment_score_10'] = round(float(np.clip(
+                10.0 * metrics['psr_db'] / reference_db, 0.0, 10.0
+            )), 1)
 
         # 4. Crest Factor of IR (Indicates impulsive vs smeared)
         # Ratio of peak amplitude to RMS value. A high crest factor means a sharp, clean impulse.
@@ -713,7 +745,16 @@ class DSPVerificationTool:
         if metrics.get('thd_pct', 0) > 10:
             warnings.append(f"HIGH DISTORTION: {metrics['thd_pct']:.2f}%. Check for clipping or transducer stress.")
         if metrics.get('psr', 10) < 3.0:
-            warnings.append(f"POOR ALIGNMENT: PSR is {metrics['psr']:.1f}. Possible clock drift or phase smear.")
+            if 'alignment_score_10' in metrics:
+                warnings.append(
+                    f"POOR ALIGNMENT: Marker clarity is {metrics['psr_db']:.1f} dB / "
+                    f"{metrics['psr_reference_db']:.1f} dB reference "
+                    f"({metrics['alignment_score_10']:.1f}/10)."
+                )
+            else:
+                warnings.append(
+                    f"POOR ALIGNMENT: Marker clarity is {metrics.get('psr_db', 0.0):.1f} dB."
+                )
 
         return warnings
 
@@ -968,6 +1009,38 @@ class AlignmentEngine:
         self.align_to_first_marker = align_to_first_marker
         self.mic_tail_taper_ms = mic_tail_taper_ms
         self.marker_dur_ms = marker_dur_ms
+        self.last_psr_reference = 0.0
+
+    def _calculate_psr(self, lags: np.ndarray, corr: np.ndarray, peak_lag: int,
+                       peak_val: float, ref_len: int) -> float:
+        """Compare a selected peak with the marker's surrounding correlation peaks."""
+        chip_dur_s = (self.marker_dur_ms / 1000.0) / 13.0
+        exclusion_samps = int((chip_dur_s * 2.0) * self.fs)
+        quality_start = max(0, peak_lag - ref_len)
+        quality_end = min(int(lags[-1]), peak_lag + ref_len)
+        sidelobe_windows = (
+            (lags >= quality_start) & (lags <= quality_end)
+            & (np.abs(lags - peak_lag) > exclusion_samps)
+        )
+        sidelobe_val = float(np.max(corr[sidelobe_windows], initial=0.0))
+        return peak_val / (sidelobe_val + 1e-12) if sidelobe_val > 0 else 0.0
+
+    def reference_psr(self, ref: np.ndarray) -> float:
+        """Return the ideal digital-loopback PSR for the current marker waveform."""
+        marker_start = len(ref)
+        ideal_recording = np.pad(ref, (marker_start, marker_start))
+        lags, corr = DSPUtils.rfft_xcorr(ideal_recording, ref)
+        peak_val = float(corr[lags == marker_start][0])
+        return self._calculate_psr(lags, corr, marker_start, peak_val, len(ref))
+
+    def _format_marker_clarity(self, psr: float) -> str:
+        """Format the internal ratio as the user-facing dB and relative score."""
+        measured_db = float(20.0 * np.log10(psr)) if psr > 0 else 0.0
+        if self.last_psr_reference > 1.0:
+            reference_db = float(20.0 * np.log10(self.last_psr_reference))
+            score = float(np.clip(10.0 * measured_db / reference_db, 0.0, 10.0))
+            return f"{measured_db:.1f} dB / {reference_db:.1f} dB reference ({score:.1f}/10)"
+        return f"{measured_db:.1f} dB"
 
     def _matched_filter_detect(self, x: np.ndarray, ref: np.ndarray, search_start: int = None,
                                search_end: int = None) -> Tuple[int, float, float]:
@@ -990,22 +1063,15 @@ class AlignmentEngine:
         peak_val = float(corr_sel[i])
 
         # --- BEGIN QUALITY / PSR CHECK ---
-        # Barker-13 autocorrelation main lobe is 2 chips wide. 
-        # We dynamically calculate this width to mask only the main peak.
-        chip_dur_s = (self.marker_dur_ms / 1000.0) / 13.0
-        exclusion_samps = int((chip_dur_s * 2.0) * self.fs)
-        mask_start = max(0, i - exclusion_samps)
-        mask_end = min(len(corr_sel), i + exclusion_samps)
+        peak_lag = int(lags_sel[i])
+        psr = self._calculate_psr(lags, corr, peak_lag, peak_val, len(ref))
 
-        corr_masked = corr_sel.copy()
-        corr_masked[mask_start:mask_end] = 0.0  # Zero out the main lobe
-
-        sidelobe_val = float(np.max(corr_masked))
-        psr = peak_val / (sidelobe_val + 1e-12) if sidelobe_val > 0 else 99.0
-
-        # If the peak is less than 2.5x the height of the sidelobes, alignment is dangerously smeared.
+        # A small ratio warns that the chosen marker is not clearly isolated.
+        # It does not by itself prove phase smearing in the acoustic path.
         if psr < 2.5:
-            logger.warning(f"POOR MARKER ALIGNMENT: Correlation Peak Sharpness is {psr:.1f}. Phase smearing detected.")
+            logger.warning(
+                f"Marker clarity is {self._format_marker_clarity(psr)}; check alignment quality."
+            )
         # --- END QUALITY / PSR CHECK ---
 
         # --- BEGIN DEBUG DATA SAVE BLOCK ---
@@ -1049,25 +1115,34 @@ class AlignmentEngine:
         # --- Alignment & Averaging ---
         mic_slices = []
         loop_slices = []
+        self.last_psr_reference = self.reference_psr(marker_single)
         capture_len = sweep_len + int(round(self.mic_tail_taper_ms / 1000.0 * self.fs))
 
         # --- FIXED ALIGNMENT LOGIC ---
         # 1. Find a global anchor (first marker) using Matched Filter
-        search_limit = pre_samps_settle + slot_len
+        # The first marker must be inside the first half of its sweep slot.
+        # Stopping here keeps the following marker (and its correlation peak)
+        # out of the initial search, even in a zero-latency loopback.
+        search_limit = pre_samps_settle + (slot_len // 2)
         k_first_marker, _, psr = self._matched_filter_detect(rec_loop, marker_single, search_end=search_limit)
 
         # The correlation peak IS the start.
         t0_first_sweep = k_first_marker
-        logger.debug(f"Marker found at {k_first_marker}. Using this as T0. PSR={psr:.1f}")
+        logger.debug(
+            f"Marker found at {k_first_marker}. Using this as T0. "
+            f"Clarity={self._format_marker_clarity(psr)}"
+        )
 
         window_samps = int(0.005 * self.fs)  # 5ms search window for re-sync
 
+        repeat_psrs = []
         for i in range(self.num_sweeps):
             expected_t0 = t0_first_sweep + (i * slot_len)
 
             if self.align_to_first_marker:
                 # Sample-based cut: Rely on the first marker and constant sample rate
                 start_idx = expected_t0
+                psr_local = psr
             else:
                 # Per-sweep alignment: Re-sync to the marker for *every* sweep
                 # Corrects for minor clock drift in very long sequences
@@ -1076,17 +1151,18 @@ class AlignmentEngine:
                 k_local, _, psr_local = self._matched_filter_detect(rec_loop, marker_single, search_start=s_start,
                                                                     search_end=s_end)
                 start_idx = k_local
-                if i == 0:
-                    psr = psr_local  # Use first sweep PSR as representative if per-sweep
 
             end_idx = start_idx + capture_len
             # Stores aligned capture window copies into accumulation lists
             if end_idx <= len(rec_mic) and start_idx >= 0:
+                repeat_psrs.append(psr_local)
                 mic_slices.append(rec_mic[start_idx: end_idx].copy())
                 loop_slices.append(rec_loop[start_idx: end_idx].copy())
 
         if not mic_slices:
             raise RuntimeError("No valid sweeps captured (Alignment failed).")
+
+        psr = float(min(repeat_psrs))
 
         # Synchronous Averaging to lower the noise floor
         # By averaging multiple sweeps, the correlated signal (the sweep) adds coherently,
@@ -1276,6 +1352,8 @@ class Audio(IAudio):
         self.hw = hw_config
         self.cap = capture_config
         self._sine_stream = None
+        self._sine_com_context = None
+        self._sine_owner_thread = None
         self._sine_meter_worker: _AudioMeterWorker | None = None
         self._sine_level_lock = threading.Lock()
         self._sine_level_dbfs: float | None = None
@@ -1320,8 +1398,6 @@ class Audio(IAudio):
         :param dev_index: Device index.
         :return: API name.
         """
-        import sounddevice as sd  # noqa: E402
-
         try:
             d = sd.query_devices(dev_index)
             return sd.query_hostapis()[d['hostapi']]['name'].upper()
@@ -1349,8 +1425,6 @@ class Audio(IAudio):
         Executes the playback and recording of the composite signal.
         Handles stream synchronization, multiple sweep averaging, and loopback alignment.
         """
-        import sounddevice as sd  # noqa: E402
-
         # 1. Generate Signals
         s_fund, phase, inv_sweep = self.sweep_gen.generate()
 
@@ -1480,7 +1554,7 @@ class Audio(IAudio):
 
         # 7. Start Stream
         try:
-            with sd.Stream(device=(self.hw['dev_in'], self.hw['dev_out']), samplerate=self.hw['fs'],
+            with _asio_thread_context(use_asio_in or use_asio_out), sd.Stream(device=(self.hw['dev_in'], self.hw['dev_out']), samplerate=self.hw['fs'],
                            blocksize=self.hw['blocksize'],
                            dtype="float32", channels=(in_args[0], out_args[0]), dither_off=True,
                            extra_settings=(in_args[1], out_args[1]), callback=callback):
@@ -1499,7 +1573,8 @@ class Audio(IAudio):
             "rx_mic_conditioned": avg_mic,
             "rx_loop_aligned": avg_loop,
             "debug_mic_slices": mic_slices,
-            "psr": psr
+            "psr": psr,
+            "psr_reference": self.alignment_engine.last_psr_reference
         }
 
     def capture_ir(self, ir_path: Path, dist_path: Path) -> dict[str, Any]:
@@ -1535,9 +1610,14 @@ class Audio(IAudio):
         )
 
         # 4. DSP Verification
-        metrics = self.verifier.calculate_metrics(ir_full, ir_linear, result.get("psr", 0.0))
+        metrics = self.verifier.calculate_metrics(
+            ir_full, ir_linear, result.get("psr", 0.0), result.get("psr_reference")
+        )
         logger.info(
-            f"DSP Metrics: SNR={metrics['snr_db']:.1f}dB, THD={metrics['thd_pct']:.2f}%, PSR={metrics['psr']:.1f}")
+            f"DSP Metrics: SNR={metrics['snr_db']:.1f}dB, THD={metrics['thd_pct']:.2f}%, "
+            f"marker clarity={metrics['psr_db']:.1f}dB / "
+            f"{metrics.get('psr_reference_db', 0.0):.1f}dB reference "
+            f"({metrics.get('alignment_score_10', 0.0):.1f}/10)")
 
         warnings = self.verifier.verify(metrics)
         for w in warnings:
@@ -1598,8 +1678,6 @@ class Audio(IAudio):
         :param level_dbfs: Level in dBFS.
         :param duration_s: Duration in seconds. If None, plays until stop_sine() is called.
         """
-        import sounddevice as sd  # noqa: E402
-
         self.stop_sine()
         self.update_sine_level(level_dbfs)
 
@@ -1684,7 +1762,7 @@ class Audio(IAudio):
                     done_evt.set()
 
             try:
-                with sd.Stream(
+                with _asio_thread_context(use_asio_in or use_asio_out), sd.Stream(
                     device=(in_dev, out_dev),
                     samplerate=fs,
                     blocksize=self.hw['blocksize'],
@@ -1744,6 +1822,12 @@ class Audio(IAudio):
                 out_args_extra = sd.WasapiSettings(exclusive=self.hw['wasapi_exclusive']) if "WASAPI" in out_api else None
 
             try:
+                # Continuous playback outlives this method. Keep the COM
+                # reference until stop_sine closes the stream on this thread.
+                context = _asio_thread_context(use_asio_in or use_asio_out)
+                context.__enter__()
+                self._sine_com_context = context
+                self._sine_owner_thread = threading.get_ident()
                 self._sine_stream = sd.Stream(
                     device=(in_dev, out_dev),
                     samplerate=fs,
@@ -1756,10 +1840,9 @@ class Audio(IAudio):
                 )
                 self._sine_stream.start()
             except Exception:
-                self._sine_stream = None
-                self._sine_meter_worker.stop()
-                self._sine_meter_worker = None
-                reset_audio_meter_state(active=False)
+                # Also close an allocated stream when start(), rather than
+                # construction, fails; release COM only after closing it.
+                self.stop_sine()
                 raise
 
     def update_sine_level(self, level_dbfs: float) -> None:
@@ -1768,23 +1851,33 @@ class Audio(IAudio):
             self._sine_level_dbfs = float(level_dbfs)
 
     def stop_sine(self) -> None:
-        """Stops any active sine wave playback."""
-        import sounddevice as sd  # noqa: E402
+        """Stop continuous playback on the same thread that started it."""
 
+        if (self._sine_com_context is not None
+                and self._sine_owner_thread != threading.get_ident()):
+            raise RuntimeError("Continuous audio must be stopped on its owning audio thread")
         if self._sine_stream is not None:
             logger.info("Stopping indefinite sine playback")
             try:
-                self._sine_stream.stop()
-                self._sine_stream.close()
+                try:
+                    self._sine_stream.stop()
+                finally:
+                    self._sine_stream.close()
             except Exception as e:
                 logger.debug(f"Error closing sine stream: {e}")
             self._sine_stream = None
+        if self._sine_com_context is not None:
+            context = self._sine_com_context
+            self._sine_com_context = None
+            self._sine_owner_thread = None
+            context.__exit__(None, None, None)
         if self._sine_meter_worker is not None:
             self._sine_meter_worker.stop()
             self._sine_meter_worker = None
         with self._sine_level_lock:
             self._sine_level_dbfs = None
-        sd.stop()
+        # Explicit streams are already closed above. sounddevice.stop() only
+        # handles play/rec convenience functions and would load an unused backend.
         reset_audio_meter_state(active=False)
 
 
@@ -1892,7 +1985,8 @@ class MockInterfaceAudio(Audio):
             "rx_mic_conditioned": avg_mic,
             "rx_loop_aligned": avg_loop,
             "debug_mic_slices": mic_slices,
-            "psr": psr
+            "psr": psr,
+            "psr_reference": self.alignment_engine.last_psr_reference
         }
 
     def play_sine(self, frequency: float, level_dbfs: float, duration_s: Optional[float] = 1.0) -> None:
@@ -2134,7 +2228,5 @@ class AudioFactory:
 
 if __name__ == "__main__":
     # Helper to list devices if run directly
-    import sounddevice as sd  # noqa: E402
-
     print("\nAvailable Audio Devices:")
     print(sd.query_devices())

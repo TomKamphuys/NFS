@@ -59,21 +59,19 @@ def test_take_measurement_set(mocks):
     # 1. move_to_safe_starting_radius()
     # 2. while not ready():
     # 3.   next()
-    # 4.   if ready(): break
-    # 5.   get_position(), log, capture_ir()
-    # 6. loop...
-    # 7. reset(), move_to_park_position()
+    # 4.   get_position(), log, capture_ir()
+    # 5. loop...
+    # 6. reset(), move_to_park_position()
 
     mocks['motion_manager'].ready.side_effect = [
         False, # first while check
-        False, # check after first next()
-        False, # second while check
-        True,  # check after second next() -> BREAK
-        True   # (not reached by loop but maybe by other checks)
+        False, # after first next() — measure point 1
+        True,  # second while check — loop exits (point 2 was already measured)
     ]
-    
+
     pos1 = CylindricalPosition(100, 0, 10)
-    mocks['scanner'].get_position.return_value = pos1
+    pos2 = CylindricalPosition(110, 5, 10)
+    mocks['scanner'].get_position.side_effect = [pos1, pos2]
     mocks['motion_manager'].total_points.return_value = 2
 
     with patch("builtins.open", mock_open()) as mocked_file:
@@ -84,24 +82,25 @@ def test_take_measurement_set(mocks):
     assert mocks['motion_manager'].move_to_safe_starting_radius.call_count == 1
     mocks['motion_manager'].move_to_park_position.assert_called_once()
     mocks['motion_manager'].reset.assert_called_once()
-    
-    # capture_ir called once (first point). Second point loop breaks before capture_ir.
+
+    # Both points are measured
     mocks['audio'].set_session_directory.assert_called_with(Path.cwd() / "measurement_set")
     assert (Path.cwd() / "logs").exists()
-    assert mocks['audio'].capture_ir.call_count == 1
+    assert mocks['audio'].measure_ir.call_count == 2
+    mocks['audio'].capture_ir.assert_any_call(pos1)
+    mocks['audio'].capture_ir.assert_any_call(pos2)
 
 
 def test_take_measurement_set_reports_progress(mocks):
+    # 4 points: ready returns False for first 3 while-checks, True on 4th
+    # Each iteration: next() then measure, then while checks ready()
     mocks['motion_manager'].ready.side_effect = [
-        False,  # first while check
-        False,  # after first move
-        False,  # second while check
-        False,  # after second move
-        False,  # third while check
-        False,  # after third move
-        True,   # exit loop
+        False,  # first while check — enter loop
+        False,  # after point 1 measured
+        False,  # after point 2 measured
+        True,   # after point 3 measured — loop exits
     ]
-    mocks['motion_manager'].total_points.return_value = 4
+    mocks['motion_manager'].total_points.return_value = 3
     pos1 = CylindricalPosition(100, 0, 10)
     pos2 = CylindricalPosition(120, 10, 10)
     pos3 = CylindricalPosition(140, 20, 10)
@@ -113,11 +112,11 @@ def test_take_measurement_set_reports_progress(mocks):
         nfs.take_measurement_set(progress_callback=progress_events.append)
 
     assert [(event["status"], event["current"], event["total"]) for event in progress_events] == [
-        ("started", 0, 4),
-        ("point_complete", 1, 4),
-        ("point_complete", 2, 4),
-        ("point_complete", 3, 4),
-        ("finished", 4, 4),
+        ("started", 0, 3),
+        ("point_complete", 1, 3),
+        ("point_complete", 2, 3),
+        ("point_complete", 3, 3),
+        ("finished", 3, 3),
     ]
     assert all("timestamp" in event for event in progress_events)
     assert progress_events[0]["eta_seconds"] is None
@@ -128,15 +127,15 @@ def test_take_measurement_set_reports_progress(mocks):
     assert progress_events[3]["eta_seconds"] >= 0
     progress = nfs.get_measurement_progress()
     assert progress["status"] == "finished"
-    assert progress["current"] == 4
-    assert progress["total"] == 4
+    assert progress["current"] == 3
+    assert progress["total"] == 3
 
 
 def test_take_measurement_set_keeps_progress_if_callback_fails(mocks):
+    # 1 point: ready returns False at while-check, then True after measuring
     mocks['motion_manager'].ready.side_effect = [
-        False,
-        False,
-        True,
+        False,  # while check — enter loop
+        True,   # after point 1 measured — loop exits
     ]
     mocks['motion_manager'].total_points.return_value = 1
     pos1 = CylindricalPosition(100, 0, 10)
@@ -182,8 +181,8 @@ def test_take_measurement_set_can_overwrite_existing_outputs(mocks, tmp_path):
 def test_measurement_set_stop_finishes_current_point_then_returns_safe(mocks):
     mocks['motion_manager'].ready.side_effect = [
         False,  # first while check
-        False,  # after first move
-        False,  # next while check, then stop request breaks before next move
+        False,  # after first move — stop requested during measure
+        True,   # next while check — stop flag causes break
     ]
     mocks['motion_manager'].total_points.return_value = 4
     pos1 = CylindricalPosition(100, 0, 10)
