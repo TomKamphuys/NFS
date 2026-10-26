@@ -230,6 +230,11 @@ def test_capture_handoff_closes_sine_on_owner(monkeypatch, operation):
             assert 'stop' in events[events.index('sine') + 1:-1]
             return {}
 
+        def preview_ir(self):
+            self.check('capture')
+            assert 'stop' in events[events.index('sine') + 1:-1]
+            return {}
+
         test_sweep = measure_ir
         take_single_measurement = measure_ir
         take_measurement_set = measure_ir

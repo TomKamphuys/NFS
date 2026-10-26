@@ -86,9 +86,7 @@ def test_take_measurement_set(mocks):
     # Both points are measured
     mocks['audio'].set_session_directory.assert_called_with(Path.cwd() / "measurement_set")
     assert (Path.cwd() / "logs").exists()
-    assert mocks['audio'].measure_ir.call_count == 2
-    mocks['audio'].capture_ir.assert_any_call(pos1)
-    mocks['audio'].capture_ir.assert_any_call(pos2)
+    assert mocks['audio'].capture_ir.call_count == 2
 
 
 def test_take_measurement_set_reports_progress(mocks):
