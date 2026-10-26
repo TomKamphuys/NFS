@@ -1115,7 +1115,7 @@ class LiveCapturePane(QWidget):
             if preview_ir is not None and preview_fs is not None:
                 ir = np.asarray(preview_ir, dtype=float)
                 fs = int(preview_fs)
-                title_name = str(preview.get("name") or "Test Sweep Preview")
+                title_name = "Test Sweep Preview"
         if ir is None or fs is None:
             self.imp_section.set_detail("Waiting for impulse response...")
             self.freq_section.set_detail("Waiting for frequency response...")

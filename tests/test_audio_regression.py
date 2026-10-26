@@ -60,19 +60,20 @@ def test_measure_ir_regression(mock_config, tmp_path):
         # Set session directory
         audio.set_session_directory(tmp_path)
 
-        # Fixed position and ID
+        # Fixed position
         pos = CylindricalPosition(100.0, 0.0, 10.0)
-        order_id = "REGRESSION"
 
         # Set random seed for reproducibility
         np.random.seed(42)
 
-        # Run measurement
-        audio.measure_ir(pos, order_id)
+        # Build paths using naming convention and capture
+        ir_path = audio.naming_convention.build_ir_path(pos, tmp_path)
+        dist_path = audio.naming_convention.build_dist_path(pos, tmp_path)
+        audio.capture_ir(ir_path, dist_path)
 
         # Expected paths based on naming_convention='dimitri'
         # r100.0 -> r100p0, ph0.0 -> ph0p0, z10.0 -> z10p0
-        base_name = "REGRESSION_r100p0_ph0p0_z10p0"
+        base_name = "r100p0_ph0p0_z10p0"
 
         # Audio class uses the session directory directly for IR files and debug output.
 

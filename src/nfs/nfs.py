@@ -125,7 +125,10 @@ class NearFieldScanner:
         """
         if hasattr(self._audio, 'set_session_directory'):
             self._audio.set_session_directory(self._single_measurements_dir())
-        self._audio.measure_ir(self._scanner.get_position())
+        position = self._scanner.get_position()
+        ir_path = self._audio.naming_convention.build_ir_path(position, self._single_measurements_dir(), None)
+        dist_path = self._audio.naming_convention.build_dist_path(position, self._single_measurements_dir(), None)
+        self._audio.capture_ir(ir_path, dist_path)
 
     def test_sweep(self) -> dict[str, Any]:
         """
@@ -134,7 +137,7 @@ class NearFieldScanner:
         This is intended for level/protection setup. The returned IR can be shown
         in the live-capture plots without creating permanent measurement output.
         """
-        return self._audio.measure_ir(self._scanner.get_position(), "TEST", save=False)
+        return self._audio.preview_ir()
 
     def pause_measurement_set(self) -> None:
         """Request a clean pause before the next measurement point."""
@@ -286,7 +289,9 @@ class NearFieldScanner:
                 position = self._scanner.get_position()
                 self._append_position_to_file(position)
 
-                self._audio.measure_ir(position)
+                ir_path = self._audio.naming_convention.build_ir_path(position, measurement_dir, session_name)
+                dist_path = self._audio.naming_convention.build_dist_path(position, measurement_dir, session_name)
+                self._audio.capture_ir(ir_path, dist_path)
                 timestamp = time.monotonic()
                 if started_at is not None:
                     elapsed_seconds = timestamp - started_at

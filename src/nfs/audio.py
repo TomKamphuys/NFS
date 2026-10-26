@@ -48,6 +48,8 @@ from loguru import logger
 
 from .datatypes import CylindricalPosition
 from .utils.dsp import DSPUtils
+from .naming import IRNamingConvention, NamingConventionFactory
+from .debug_artifacts import DebugArtifactHandler, DebugArtifactFactory
 
 # Enable ASIO build of PortAudio in python-sounddevice (Windows).
 # This environment variable triggers the loading of ASIO drivers if available.
@@ -1222,13 +1224,15 @@ class DeconvolutionEngine:
         return h_full, h_linear
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  INTERFACES
-# ─────────────────────────────────────────────────────────────────────────────
-
 class IAudio(ABC):
     @abstractmethod
-    def measure_ir(self, position: CylindricalPosition, order_id: str = "NA", save: bool = True) -> dict[str, Any]:
+    def capture_ir(self, ir_path: Path, dist_path: Path) -> dict[str, Any]:
+        """Capture, process, and save IR to the given paths."""
+        pass
+
+    @abstractmethod
+    def preview_ir(self) -> dict[str, Any]:
+        """Capture and process IR without saving (for test/preview)."""
         pass
 
     @abstractmethod
@@ -1264,6 +1268,8 @@ class Audio(IAudio):
                  marker_gen: MarkerGenerator,
                  alignment_engine: AlignmentEngine,
                  deconv_engine: DeconvolutionEngine,
+                 naming_convention: IRNamingConvention,
+                 debug_handler: DebugArtifactHandler,
                  harmonic_injector: Optional[HarmonicInjector] = None,
                  protection_filter: Optional[ProtectionFilter] = None):
 
@@ -1278,6 +1284,8 @@ class Audio(IAudio):
         self.marker_gen = marker_gen
         self.alignment_engine = alignment_engine
         self.deconv_engine = deconv_engine
+        self.naming_convention = naming_convention
+        self.debug_handler = debug_handler
         self.harmonic_injector = harmonic_injector
         self.protection_filter = protection_filter
         self.verifier = DSPVerificationTool(self.hw['fs'])
@@ -1285,19 +1293,12 @@ class Audio(IAudio):
         # Directories
         self.rec_dir = Path("./Recordings")
         self.dist_dir = self.rec_dir / "Distortion"
-        self.debug_dir = None
 
         self._log_config()
 
     def _ensure_directories(self) -> None:
         self.rec_dir.mkdir(parents=True, exist_ok=True)
         self.dist_dir.mkdir(parents=True, exist_ok=True)
-
-        if self.cap['debug_saves']:
-            self.debug_dir = self.rec_dir / "debug"
-            self.debug_dir.mkdir(parents=True, exist_ok=True)
-        else:
-            self.debug_dir = None
 
     def set_session_directory(self, session_path: Path) -> None:
         """Updates internal recording and debug directories to a measurement session path."""
@@ -1501,53 +1502,39 @@ class Audio(IAudio):
             "psr": psr
         }
 
-    def measure_ir(self, position: CylindricalPosition, order_id: str = "NA", save: bool = True) -> dict[str, Any]:
+    def capture_ir(self, ir_path: Path, dist_path: Path) -> dict[str, Any]:
         """
-        Public entry point. Coordinates capture, processing, and file saving.
+        Capture, process, and save IR to the given paths.
+
+        The caller is responsible for constructing the output paths using the
+        naming convention. This method focuses on audio capture and processing.
         """
-        logger.info(f"Measuring IR at {position} (ID: {order_id})")
-        if save:
-            self._ensure_directories()
+        ir_path.parent.mkdir(parents=True, exist_ok=True)
+        dist_path.parent.mkdir(parents=True, exist_ok=True)
 
         # 1. Capture Raw Data (Run Sweeps)
         result = self._run_sweep()
 
-        # 2. Filename formatting
-        if self.cap.get('naming_convention') == 'tom':
-            # tom's Format: (r, t, z).wav
-            base_name = f"({position.r():.1f}, {position.t():.1f}, {position.z():.1f})"
-            main_file_name = f"{base_name}.wav"
-            dist_file_name = f"{base_name}_dist.wav"
-        else:
-            # dimitri's Format: ID_rX_phY_zZ_ir.wav
-            base_name = (
-                f"{order_id}_"
-                f"r{DSPUtils.fmt_num_for_name(position.r())}_"
-                f"ph{DSPUtils.fmt_num_for_name(position.t())}_"
-                f"z{DSPUtils.fmt_num_for_name(position.z())}"
-            )
-            main_file_name = f"{base_name}_ir.wav"
-            dist_file_name = f"{base_name}_ir_dist.wav"
+        # 2. Debug Saves (delegated to injected handler)
+        base_label = ir_path.stem
+        if base_label.endswith("_ir"):
+            base_label = base_label[:-3]  # strip _ir suffix for debug labels
+        self.debug_handler.save_wav(result["rx_mic_conditioned"],
+                                    f"{base_label}_mic_conditioned", self.rec_dir)
+        self.debug_handler.save_wav(result["rx_loop_aligned"],
+                                    f"{base_label}_loop_aligned", self.rec_dir)
+        for i, slice_data in enumerate(result["debug_mic_slices"]):
+            self.debug_handler.save_wav(slice_data,
+                                        f"{base_label}_sweep{i + 1:02d}", self.rec_dir)
 
-        # 3. Debug Saves (Optional - write intermediate files)
-        if save and self.cap['debug_saves']:
-            logger.info("Saving debug artifacts...")
-            self._save_wav_with_metadata(self.debug_dir / f"{base_name}_mic_conditioned.wav",
-                                         result["rx_mic_conditioned"], f"{base_name}_mic_conditioned.wav")
-            self._save_wav_with_metadata(self.debug_dir / f"{base_name}_loop_aligned.wav", result["rx_loop_aligned"],
-                                         f"{base_name}_loop_aligned.wav")
-            for i, slice_data in enumerate(result["debug_mic_slices"]):
-                filename = f"{base_name}_sweep{i + 1:02d}.wav"
-                self._save_wav_with_metadata(self.debug_dir / filename, slice_data, filename)
-
-        # 4. Process IR (Deconvolution)
+        # 3. Process IR (Deconvolution)
         ir_full, ir_linear = self.deconv_engine.process_ir(
-            result["rx_mic_conditioned"], 
-            result["inv_sweep"], 
+            result["rx_mic_conditioned"],
+            result["inv_sweep"],
             self.protection_filter
         )
 
-        # 5. DSP Verification
+        # 4. DSP Verification
         metrics = self.verifier.calculate_metrics(ir_full, ir_linear, result.get("psr", 0.0))
         logger.info(
             f"DSP Metrics: SNR={metrics['snr_db']:.1f}dB, THD={metrics['thd_pct']:.2f}%, PSR={metrics['psr']:.1f}")
@@ -1556,35 +1543,51 @@ class Audio(IAudio):
         for w in warnings:
             logger.warning(f"VERIFICATION FAILURE: {w}")
 
-        if save:
-            # 6. Save Final Files
-            # Main (Linear)
-            linear_path = self.rec_dir / main_file_name
-            self._save_wav_with_metadata(linear_path, ir_linear, main_file_name, subtype='FLOAT')
-            logger.info(f"Saved Linear IR: {linear_path.name}")
+        # 5. Save Final Files
+        self._save_wav_with_metadata(ir_path, ir_linear, ir_path.name, subtype='FLOAT')
+        logger.info(f"Saved Linear IR: {ir_path.name}")
 
-            # Secondary (Distortion)
-            dist_path = self.dist_dir / dist_file_name
-            self._save_wav_with_metadata(dist_path, ir_full, dist_file_name, subtype='FLOAT')
-            logger.info(f"Saved Distortion IR: {dist_path.name}")
+        self._save_wav_with_metadata(dist_path, ir_full, dist_path.name, subtype='FLOAT')
+        logger.info(f"Saved Distortion IR: {dist_path.name}")
 
-        # Save metrics to debug if enabled
-        if save and self.cap['debug_saves']:
-            try:
-                import json
-                with open(self.debug_dir / f"{base_name}_metrics.json", "w") as f:
-                    json.dump(metrics, f, indent=4)
-            except Exception as e:
-                logger.warning(f"Failed to save metrics JSON: {e}")
+        # 6. Save metrics via debug handler
+        self.debug_handler.save_metrics(metrics, base_label, self.rec_dir)
 
         return {
-            "name": main_file_name,
-            "position": position,
             "fs": self.hw["fs"],
             "ir_linear": ir_linear,
             "ir_full": ir_full,
             "metrics": metrics,
-            "saved": save,
+        }
+
+    def preview_ir(self) -> dict[str, Any]:
+        """
+        Capture and process IR without saving (for test/preview).
+        """
+        # 1. Capture Raw Data (Run Sweeps)
+        result = self._run_sweep()
+
+        # 2. Process IR (Deconvolution)
+        ir_full, ir_linear = self.deconv_engine.process_ir(
+            result["rx_mic_conditioned"],
+            result["inv_sweep"],
+            self.protection_filter
+        )
+
+        # 3. DSP Verification
+        metrics = self.verifier.calculate_metrics(ir_full, ir_linear, result.get("psr", 0.0))
+        logger.info(
+            f"DSP Metrics: SNR={metrics['snr_db']:.1f}dB, THD={metrics['thd_pct']:.2f}%, PSR={metrics['psr']:.1f}")
+
+        warnings = self.verifier.verify(metrics)
+        for w in warnings:
+            logger.warning(f"VERIFICATION FAILURE: {w}")
+
+        return {
+            "fs": self.hw["fs"],
+            "ir_linear": ir_linear,
+            "ir_full": ir_full,
+            "metrics": metrics,
         }
 
     def play_sine(self, frequency: float, level_dbfs: float, duration_s: Optional[float] = 1.0) -> None:
@@ -1920,16 +1923,16 @@ class MockInterfaceAudio(Audio):
 class AudioMock(IAudio):
     """Simulation class for when hardware is unavailable."""
 
-    def measure_ir(self, position: CylindricalPosition, order_id: str = "NA", save: bool = True) -> dict[str, Any]:
-        """
-        Measure the impulse response at a given position.
+    def __init__(self):
+        self.naming_convention: IRNamingConvention = NamingConventionFactory.create('dimitri')
 
-        :param position: The scanner position.
-        :param order_id: An optional order ID for file naming.
-        """
-        logger.debug(f"[MOCK] Measured {position}, ID={order_id}")
-        # time.sleep(1.0)  # Simulate sweep duration
-        return {}
+    def capture_ir(self, ir_path: Path, dist_path: Path) -> dict[str, Any]:
+        logger.debug(f"[MOCK] Captured IR → {ir_path.name}")
+        return {"fs": 48000, "ir_linear": np.zeros(1000), "ir_full": np.zeros(1000), "metrics": {}}
+
+    def preview_ir(self) -> dict[str, Any]:
+        logger.debug("[MOCK] Preview IR")
+        return {"fs": 48000, "ir_linear": np.zeros(1000), "ir_full": np.zeros(1000), "metrics": {}}
 
     def play_sine(self, frequency: float, level_dbfs: float, duration_s: Optional[float] = 1.0) -> None:
         """
@@ -2064,9 +2067,14 @@ class AudioFactory:
             'wasapi_exclusive': AudioFactory._get_required_config(config, audio_section, 'wasapi_exclusive', bool),
         }
 
+        naming_convention_str = config.get(sweep_section, 'naming_convention', fallback='dimitri').strip()
+        naming_convention: IRNamingConvention = NamingConventionFactory.create(naming_convention_str)
+
+        debug_saves = AudioFactory._get_required_config(config, sweep_section, 'debug_saves', bool)
+        debug_handler: DebugArtifactHandler = DebugArtifactFactory.create(debug_saves, hw_config)
+
         cap_config = {
-            'naming_convention': config.get(sweep_section, 'naming_convention', fallback='dimitri').strip(),
-            'debug_saves': AudioFactory._get_required_config(config, sweep_section, 'debug_saves', bool),
+            'debug_saves': debug_saves,
             'sweep_dur_s': sweep_dur_s,
             'sweep_level_dbfs': sweep_level_dbfs,
             'num_sweeps': AudioFactory._get_required_config(config, sweep_section, 'num_sweeps', int),
@@ -2111,6 +2119,8 @@ class AudioFactory:
             'marker_gen': marker_gen,
             'alignment_engine': alignment_engine,
             'deconv_engine': deconv_engine,
+            'naming_convention': naming_convention,
+            'debug_handler': debug_handler,
             'harmonic_injector': injector,
             'protection_filter': filter_engine
         }

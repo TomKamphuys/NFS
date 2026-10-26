@@ -136,14 +136,16 @@ def test_integration_with_mock_audio(tmp_path):
         audio = AudioFactory.create(str(config_path))
         pos = CylindricalPosition(100.0, 0.0, 10.0)
 
-        # This will trigger measure_ir -> _run_sweep -> metrics calculation
+        # This will trigger capture_ir -> _run_sweep -> metrics calculation
         # Since it's MockInterfaceAudio, it should have good metrics
-        audio.measure_ir(pos, "DSP_TEST")
+        ir_path = audio.naming_convention.build_ir_path(pos, Path("Recordings"))
+        dist_path = audio.naming_convention.build_dist_path(pos, Path("Recordings"))
+        audio.capture_ir(ir_path, dist_path)
 
         # Check if metrics file was created
         # The filename depends on the naming convention (default: dimitri)
         # r100.0 -> r100p0, ph0.0 -> ph0p0, z10.0 -> z10p0
-        metrics_file = Path("Recordings/debug/DSP_TEST_r100p0_ph0p0_z10p0_metrics.json")
+        metrics_file = Path("Recordings/debug/r100p0_ph0p0_z10p0_metrics.json")
         assert metrics_file.exists(), f"Metrics file not found at {metrics_file}. Files: {list(Path('Recordings/debug').glob('*'))}"
 
     finally:

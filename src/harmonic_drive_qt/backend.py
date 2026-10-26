@@ -19,7 +19,6 @@ from loguru import logger
 
 from nfs import NearFieldScannerFactory, ScannerFactory
 from nfs.audio import AudioFactory, get_audio_meter_state
-from nfs.datatypes import CylindricalPosition
 from nfs.logging_config import setup_logging
 
 from .qt_compat import QObject, QRunnable, Signal, Slot
@@ -276,12 +275,7 @@ class BackendManager:
         else:
             if self.audio is None:
                 self.audio = AudioFactory.create(self.config_file)
-            position = (
-                self.scanner.get_position()
-                if self.scanner is not None
-                else CylindricalPosition(0.0, 0.0, 0.0)
-            )
-            result = self._run_audio(self.audio.measure_ir, position, "TEST", False)
+            result = self._run_audio(self.audio.preview_ir)
         if isinstance(result, dict):
             self.preview_ir = {**result, "preview_created_at": time.time()}
         return result
