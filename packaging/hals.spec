@@ -76,6 +76,9 @@ hiddenimports = [
     "rft_calc",
     "rft_calc.dialog",
     "rft_calc.rft_calculator",
+    "PySide6.QtSvg",
+    "harmonic_drive_qt.qt_compat",
+    "harmonic_drive_qt.styles",
 ]
 hiddenimports += collect_submodules("nfs.plugins")
 
