@@ -55,6 +55,12 @@ datas += collect_data_files("harmonic_drive_qt", includes=["icons/*", "**/*.png"
 # The nfs package ships a bundled config.ini as package data.
 datas += collect_data_files("nfs")
 
+# The grid_generator package ships diagram images for the grid generation GUI.
+datas += collect_data_files("grid_generator")
+
+# The rft_calc package ships SVG assets for the RFT calculator diagram.
+datas += collect_data_files("rft_calc")
+
 # --- Plugin discovery ------------------------------------------------------
 # Plugins are loaded at runtime through importlib.metadata entry points
 # (see nfs/loader.py). PyInstaller cannot follow those dynamic imports, so the
