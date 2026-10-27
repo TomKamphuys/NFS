@@ -73,6 +73,9 @@ hiddenimports = [
     "nfs.plugins.spherical_measurement_points",
     "nfs.plugins.spherical_measurement_points_arcs_random",
     "nfs.plugins.file_measurement_points",
+    "rft_calc",
+    "rft_calc.dialog",
+    "rft_calc.rft_calculator",
 ]
 hiddenimports += collect_submodules("nfs.plugins")
 
