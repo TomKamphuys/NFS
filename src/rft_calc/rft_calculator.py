@@ -9,9 +9,34 @@ for common octave resolutions.
 
 import math
 from pathlib import Path
-import re
-import tkinter as tk
-from tkinter import ttk
+
+# Lazy imports — tkinter/ttk/re are only needed by the standalone
+# RFTCalculatorWindow (tkinter GUI), not by calculate_rft used by the
+# Qt dialog. Since PyInstaller excludes tkinter from the frozen app,
+# these imports must be deferred so the module itself can load.
+_tk = None
+_ttk = None
+_re = None
+
+
+def _tkinter():
+    """Return (tk, ttk) modules, importing lazily on first call."""
+    global _tk, _ttk
+    if _tk is None:
+        import tkinter as tk
+        from tkinter import ttk
+        _tk = tk
+        _ttk = ttk
+    return _tk, _ttk
+
+
+def _re_module():
+    """Return the re module, importing lazily on first call."""
+    global _re
+    if _re is None:
+        import re
+        _re = re
+    return _re
 
 
 COMMON_OCTAVE_RESOLUTIONS = (3, 6, 12, 24)
@@ -49,19 +74,23 @@ def transition_frequency_hz(rft_ms, oct_res):
 
 
 class RFTCalculatorWindow:
+    # Uses lazy imports (_tkinter(), _re_module()) so the module loads
+    # without tkinter — the Qt dialog only needs calculate_rft().
     def __init__(self, parent=None, initial_rft_ms=None, on_apply=None):
+        self.tk, self.ttk = _tkinter()
+
         self.parent = parent
         self.on_apply = on_apply
-        self.root = tk.Toplevel(parent) if parent is not None else tk.Tk()
+        self.root = self.tk.Toplevel(parent) if parent is not None else self.tk.Tk()
         self.root.title("Reflection Free Time Calculator")
         self.root.geometry("760x520")
         self.root.minsize(680, 480)
         self.speaker_paths = None
 
-        self.horizontal_mm = tk.StringVar(value="100")
-        self.source_height_mm = tk.StringVar(value="1100")
-        self.mic_height_mm = tk.StringVar(value="1100")
-        self.rft_result_ms = tk.StringVar(value="")
+        self.horizontal_mm = self.tk.StringVar(value="100")
+        self.source_height_mm = self.tk.StringVar(value="1100")
+        self.mic_height_mm = self.tk.StringVar(value="1100")
+        self.rft_result_ms = self.tk.StringVar(value="")
 
         if initial_rft_ms not in (None, ""):
             self.rft_result_ms.set(f"{float(initial_rft_ms):.2f}")
@@ -71,6 +100,7 @@ class RFTCalculatorWindow:
         self._recalculate()
 
     def _build_ui(self):
+        tk, ttk = self.tk, self.ttk
         main = ttk.Frame(self.root, padding=12)
         main.pack(fill=tk.BOTH, expand=True)
 
@@ -111,6 +141,7 @@ class RFTCalculatorWindow:
         ttk.Button(buttons, text="Close", command=self._close).pack(side=tk.RIGHT)
 
     def _add_entry(self, parent, label, var, unit):
+        tk, ttk = self.tk, self.ttk
         row = ttk.Frame(parent)
         row.pack(fill=tk.X, pady=3)
         ttk.Label(row, text=label, width=20).pack(side=tk.LEFT)
@@ -118,6 +149,7 @@ class RFTCalculatorWindow:
         ttk.Label(row, text=unit).pack(side=tk.LEFT, padx=(5, 0))
 
     def _add_readout(self, parent, label, var, unit):
+        tk, ttk = self.tk, self.ttk
         row = ttk.Frame(parent)
         row.pack(fill=tk.X, pady=3)
         ttk.Label(row, text=label, width=20).pack(side=tk.LEFT)
@@ -189,14 +221,16 @@ class RFTCalculatorWindow:
         self._draw_speaker(c, speaker_center_x, source_y)
 
     def _draw_dimension_line(self, canvas, x, y_top, y_bottom, label):
+        tk = self.tk
         label_y = (y_top + y_bottom) / 2
         gap = 18
         canvas.create_line(x, y_top, x, label_y - gap, fill="#1f5fbf")
         canvas.create_line(x, label_y + gap, x, y_bottom, fill="#1f5fbf", arrow=tk.LAST)
         self._create_text_with_bg(canvas, x, label_y, label)
 
-    def _create_text_with_bg(self, canvas, x, y, text, anchor=tk.CENTER):
-        text_id = canvas.create_text(x, y, text=text, fill="#111111", anchor=anchor)
+    def _create_text_with_bg(self, canvas, x, y, text, anchor=None):
+        tk = self.tk
+        text_id = canvas.create_text(x, y, text=text, fill="#111111", anchor=anchor or tk.CENTER)
         bbox = canvas.bbox(text_id)
         if bbox:
             pad_x, pad_y = 3, 1
@@ -225,11 +259,13 @@ class RFTCalculatorWindow:
                 canvas.create_polygon(points, fill="#202326", outline="#202326")
 
     def _load_svg_paths(self, svg_path):
+        re = _re_module()
         text = svg_path.read_text(encoding="iso-8859-1")
         paths = re.findall(r'<path\s+d="([^"]+)"', text, flags=re.IGNORECASE | re.DOTALL)
         return [self._sample_svg_path(path_d) for path_d in paths]
 
     def _sample_svg_path(self, path_d):
+        re = _re_module()
         tokens = re.findall(r"[A-Za-z]|[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?", path_d)
         points = []
         i = 0
@@ -320,6 +356,7 @@ class RFTCalculatorWindow:
         return points
 
     def _update_table(self, rft_ms):
+        tk = self.tk
         for item in self.tree.get_children():
             self.tree.delete(item)
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from importlib.metadata import version as _get_package_version
 from pathlib import Path
 import configparser
 
@@ -92,6 +93,9 @@ class MainWindow(QMainWindow):
         title = QLabel("HALS Control")
         title.setStyleSheet("font-size: 18px; font-weight: 800; color: #ffffff; border: none;")
 
+        version_label = QLabel(f"v{_get_package_version('nfs')}")
+        version_label.setStyleSheet("font-size: 13px; font-weight: 400; color: #93c5fd; border: none;")
+
         self.project_path = QLineEdit(self._project_path_display())
         self.project_path.setReadOnly(True)
         self.project_path.setFixedWidth(440)
@@ -115,6 +119,7 @@ class MainWindow(QMainWindow):
         header_layout.addWidget(self.menu_toggle)
         header_layout.addSpacing(10)
         header_layout.addWidget(title)
+        header_layout.addWidget(version_label)
         header_layout.addSpacing(52)
         
         lbl_folder = QLabel("Session Folder")
