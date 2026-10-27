@@ -34,8 +34,8 @@ def test_gen_settings_column_not_in_csv(tmp_path):
 
     # gen_settings column should not exist anymore
     assert "gen_settings" not in planned.columns
-    # CSV should only contain coordinate columns plus order_idx
-    assert set(planned.columns) == {"order_idx", "r_xy_mm", "phi_deg", "z_mm"}
+    # CSV should only contain coordinate columns
+    assert set(planned.columns) == {"r_xy_mm", "phi_deg", "z_mm"}
     # Confirm the CSV file on disk also lacks gen_settings
     csv_text = output_path.read_text(encoding="utf-8")
     assert "gen_settings" not in csv_text
