@@ -160,17 +160,7 @@ def plan_path(
             print(f"Warning: {len(missing)} points were recovered.")
 
     # ── Save Output ──────────────────────────────────────────────────────────────
-    out = df.copy()
-    out["order_idx"] = -1
-    out.loc[order_indices, "order_idx"] = np.arange(N)
-    out = out.sort_values("order_idx").reset_index(drop=True)
-
-    # Ensure 'order_idx' is placed before 'gen_settings'
-    cols = list(out.columns)
-    if "gen_settings" in cols:
-        cols.remove("order_idx")
-        cols.insert(cols.index("gen_settings"), "order_idx")
-        out = out[cols]
+    out = df.iloc[order_indices].reset_index(drop=True)
 
     if output_path is not None:
         out.to_csv(output_path, index=False)

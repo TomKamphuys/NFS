@@ -187,67 +187,31 @@ class GridGeneratorPane(QWidget):
         subtitle.setStyleSheet("font-size: 14px; font-weight: bold; color: #1e293b; border: none; margin-top: 8px;")
         gen_layout.addWidget(subtitle)
         
-        desc = QLabel("Top and Bottom waypoints can define the cylinder, or the advanced grid settings can be used directly.\nTweeter, Ref Origin, baffle corners, and additional points help visualise exported response data.")
+        desc = QLabel("Top and Bottom waypoints define the measurement cylinder, or the advanced grid settings can be used directly.")
         desc.setStyleSheet("color: #64748b; font-size: 12px; border: none;")
         desc.setWordWrap(True)
         gen_layout.addWidget(desc)
         gen_layout.addSpacing(12)
         
+        # Build advanced settings first so num_points and az_density are available
+        advanced_settings = self._build_settings_group()
+
         form_block = QVBoxLayout()
         form_block.setSpacing(8)
         form_row = QHBoxLayout()
         form_row.setSpacing(4)
-        
+
         left_col = QVBoxLayout()
         right_col = QVBoxLayout()
         left_col.setSpacing(6)
         right_col.setSpacing(6)
-        
+
         left_col.addWidget(self._build_waypoint_row("Top Waypoint:", "top", "waypoint_top.png"))
         left_col.addWidget(self._build_waypoint_row("Bot Waypoint:", "bottom", "waypoint_bottom.png"))
-        left_col.addWidget(self._build_waypoint_row("Tweeter Point:", "tweeter", "tweeter_point.png"))
-        
-        right_col.addWidget(self._build_waypoint_row("Ref Origin:", "ref_origin"))
-        right_col.addWidget(self._build_waypoint_row("Baffle Bot L:", "baffle_bot_l"))
-        right_col.addWidget(self._build_waypoint_row("Baffle Top L:", "baffle_top_l"))
-        right_col.addWidget(self._build_waypoint_row("Baffle Top R:", "baffle_top_r"))
-        advanced_settings = self._build_settings_group()
-        
-        # Stats below right col
-        stats_row = QHBoxLayout()
-        stats_row.addWidget(self._labeled_stat("Total Points", self.num_points))
-        stats_row.addWidget(self._labeled_stat("Azimuth Density Ratio", self.az_density))
-        right_col.addLayout(stats_row)
-        right_col.addStretch(1)
-        
-        self.extra_positions_layout = QVBoxLayout()
-        self.extra_positions_layout.setSpacing(6)
-        left_col.addLayout(self.extra_positions_layout)
-        for position in self.pending_extra_positions:
-            self._add_extra_position(position)
 
-        extra_widget = QWidget()
-        extra_widget.setStyleSheet("border: none; background: transparent;")
-        extra_widget.setFixedHeight(42)
-        extra_row = QHBoxLayout(extra_widget)
-        extra_row.setContentsMargins(16, 0, 0, 0)
-        extra_row.setSpacing(8)
-        add_btn = QPushButton("+")
-        add_btn.setFixedSize(32, 30)
-        add_btn.setStyleSheet("color: #3b82f6; font-size: 24px; font-weight: 900; border: none; background: transparent; padding: 0; min-width: 0;")
-        add_btn.clicked.connect(self._add_extra_position)
-        rem_btn = QPushButton("-")
-        rem_btn.setFixedSize(32, 30)
-        rem_btn.setStyleSheet("color: #ef4444; font-size: 24px; font-weight: 900; border: none; background: transparent; padding: 0; min-width: 0;")
-        rem_btn.clicked.connect(self._remove_extra_position)
-        extra_row.addWidget(add_btn)
-        extra_row.addWidget(rem_btn)
-        extra_lbl = QLabel("Additional Points")
-        extra_lbl.setStyleSheet("font-weight: bold; border: none;")
-        extra_row.addWidget(extra_lbl)
-        extra_row.addStretch(1)
-        left_col.addWidget(extra_widget)
-        left_col.addStretch(1)
+        right_col.addWidget(self._labeled_stat("Total Points", self.num_points))
+        right_col.addWidget(self._labeled_stat("Azimuth Density Ratio", self.az_density))
+        right_col.addStretch(1)
 
         form_row.addLayout(left_col, 1)
         form_row.addLayout(right_col, 1)
@@ -334,13 +298,14 @@ class GridGeneratorPane(QWidget):
         parser = configparser.ConfigParser(inline_comment_prefixes=("#", ";"))
         parser.read(self.config_file)
         has_dut_section = parser.has_section("dut_volume")
-        top_r = parser.get("dut_volume", "top_r", fallback="200.0") if has_dut_section else ""
-        top_phi = parser.get("dut_volume", "top_phi", fallback="45.0") if has_dut_section else ""
-        top_z = parser.get("dut_volume", "top_z", fallback="350.0") if has_dut_section else ""
-        bot_r = parser.get("dut_volume", "bot_r", fallback="40.0") if has_dut_section else ""
-        bot_phi = parser.get("dut_volume", "bot_phi", fallback="0.0") if has_dut_section else ""
-        bot_z = parser.get("dut_volume", "bot_z", fallback="-50.0") if has_dut_section else ""
+        top_r = parser.get("dut_volume", "top_r", fallback="") if has_dut_section else ""
+        top_phi = parser.get("dut_volume", "top_phi", fallback="") if has_dut_section else ""
+        top_z = parser.get("dut_volume", "top_z", fallback="") if has_dut_section else ""
+        bot_r = parser.get("dut_volume", "bot_r", fallback="") if has_dut_section else ""
+        bot_phi = parser.get("dut_volume", "bot_phi", fallback="") if has_dut_section else ""
+        bot_z = parser.get("dut_volume", "bot_z", fallback="") if has_dut_section else ""
 
+        # DUT Volume inputs - the primary source for Top/Bottom
         self.dut_inputs["top"] = (
             self._optional_coord(top_r),
             self._optional_coord(top_phi),
@@ -356,26 +321,29 @@ class GridGeneratorPane(QWidget):
             for edit in self.dut_inputs[dut_k]:
                 edit.textEdited.connect(lambda _text, k=dut_k: self._on_dut_input_edited(k))
 
+        # All waypoint rows including DUT-specific ones
         rows = [
-            ("Top", "top", "wp_top", 200.0, 45.0, 350.0),
-            ("Bottom", "bottom", "wp_bot", 40.0, 0.0, -50.0),
-            ("Tweeter", "tweeter", "wp_tw", 150.0, 0.0, 250.0),
-            ("Ref Origin", "ref_origin", "wp_ref_origin", 90.0, 0.0, 170.0),
-            ("Baffle Bot L", "baffle_bot_l", "wp_baffle_bl", 90.0, -45.0, 80.0),
-            ("Baffle Top L", "baffle_top_l", "wp_baffle_tl", 90.0, -45.0, 240.0),
-            ("Baffle Top R", "baffle_top_r", "wp_baffle_tr", 90.0, 45.0, 240.0),
+            ("Top", "top", "wp_top"),
+            ("Bottom", "bottom", "wp_bot"),
+            ("Tweeter", "tweeter", "wp_tw"),
+            ("Ref Origin", "ref_origin", "wp_ref_origin"),
+            ("Baffle Bot L", "baffle_bot_l", "wp_baffle_bl"),
+            ("Baffle Top L", "baffle_top_l", "wp_baffle_tl"),
+            ("Baffle Top R", "baffle_top_r", "wp_baffle_tr"),
         ]
         grid_vars = project.get_project_data().get("grid_vars", {})
         grid_vars = grid_vars if isinstance(grid_vars, dict) else {}
-        for (_label, key, saved_key, _r_default, _phi_default, _z_default) in rows:
+        for (_label, key, saved_key) in rows:
             saved_r = grid_vars.get(f"{saved_key}_r")
             saved_phi = grid_vars.get(f"{saved_key}_phi")
             saved_z = grid_vars.get(f"{saved_key}_z")
             if key in ("top", "bottom"):
+                # Top/Bottom in Grid Generation are slaved to DUT Volume by default
                 if saved_r is not None or saved_phi is not None or saved_z is not None:
                     r = self._optional_coord(saved_r)
                     phi = self._optional_coord(saved_phi)
                     z = self._optional_coord(saved_z)
+                    # Check if saved values differ from DUT Volume - if so, break slave
                     dut_r_txt = self.dut_inputs[key][0].text().strip()
                     dut_phi_txt = self.dut_inputs[key][1].text().strip()
                     dut_z_txt = self.dut_inputs[key][2].text().strip()
@@ -387,11 +355,13 @@ class GridGeneratorPane(QWidget):
                         else:
                             self.slave_bottom = False
                 else:
+                    # No saved grid vars - slave to DUT Volume
                     dut_r, dut_phi, dut_z = self.dut_inputs[key]
                     r = self._optional_coord(dut_r.text())
                     phi = self._optional_coord(dut_phi.text())
                     z = self._optional_coord(dut_z.text())
             else:
+                # Non-Top/Bottom waypoints: blank unless saved
                 r = self._optional_coord(saved_r)
                 phi = self._optional_coord(saved_phi)
                 z = self._optional_coord(saved_z)
@@ -399,7 +369,7 @@ class GridGeneratorPane(QWidget):
             if key in ("top", "bottom"):
                 for edit in (r, phi, z):
                     edit.textEdited.connect(lambda _text, k=key: self._break_slave(k))
-            
+        
         saved_positions = grid_vars.get("user_positions")
         if isinstance(saved_positions, list):
             for position in saved_positions:
@@ -412,17 +382,18 @@ class GridGeneratorPane(QWidget):
         dut_layout = QVBoxLayout(dut_card)
         dut_layout.setContentsMargins(20, 20, 20, 20)
 
-        title = QLabel("DUT Volume")
+        title = QLabel("DUT Properties")
         title.setStyleSheet("font-size: 20px; font-weight: 800; color: #000000; border: none;")
         dut_layout.addWidget(title)
 
-        subtitle = QLabel("DUT Critical Waypoints - Defines the Cylindrical No-Fly Zone")
+        subtitle = QLabel("DUT Waypoints - Defines the Cylindrical No-Fly Zone and Reference Points")
         subtitle.setStyleSheet("font-size: 14px; font-weight: bold; color: #1e293b; border: none; margin-top: 8px;")
         dut_layout.addWidget(subtitle)
 
         desc = QLabel(
             "Jog to position and click 'SET' or enter coordinates. Top and Bottom waypoints determine "
-            "the cylindrical keep-out volume and are saved in the configuration."
+            "the cylindrical keep-out volume. Tweeter, Ref Origin, baffle corners, and additional points "
+            "help visualise exported response data."
         )
         desc.setStyleSheet("color: #64748b; font-size: 12px; border: none;")
         desc.setWordWrap(True)
@@ -437,10 +408,48 @@ class GridGeneratorPane(QWidget):
         right_col.setSpacing(6)
 
         left_col.addWidget(self._build_dut_waypoint_row("Top Waypoint:", "top", "waypoint_top.png"))
-        right_col.addWidget(self._build_dut_waypoint_row("Bot Waypoint:", "bottom", "waypoint_bottom.png"))
+        left_col.addWidget(self._build_dut_waypoint_row("Bot Waypoint:", "bottom", "waypoint_bottom.png"))
+        left_col.addWidget(self._build_dut_waypoint_row("Tweeter Point:", "tweeter", "tweeter_point.png"))
+
+        right_col.addWidget(self._build_dut_waypoint_row("Ref Origin:", "ref_origin"))
+        right_col.addWidget(self._build_dut_waypoint_row("Baffle Bot L:", "baffle_bot_l"))
+        right_col.addWidget(self._build_dut_waypoint_row("Baffle Top L:", "baffle_top_l"))
+        right_col.addWidget(self._build_dut_waypoint_row("Baffle Top R:", "baffle_top_r"))
+
+        self.extra_positions_layout = QVBoxLayout()
+        self.extra_positions_layout.setSpacing(6)
+        left_col.addLayout(self.extra_positions_layout)
+        for position in self.pending_extra_positions:
+            self._add_extra_position_to_dut(position)
+
+        extra_widget = QWidget()
+        extra_widget.setStyleSheet("border: none; background: transparent;")
+        extra_widget.setFixedHeight(42)
+        extra_row = QHBoxLayout(extra_widget)
+        extra_row.setContentsMargins(16, 0, 0, 0)
+        extra_row.setSpacing(8)
+        add_btn = QPushButton("+")
+        add_btn.setFixedSize(32, 30)
+        add_btn.setStyleSheet("color: #3b82f6; font-size: 24px; font-weight: 900; border: none; background: transparent; padding: 0; min-width: 0;")
+        add_btn.clicked.connect(self._add_extra_position_to_dut)
+        rem_btn = QPushButton("-")
+        rem_btn.setFixedSize(32, 30)
+        rem_btn.setStyleSheet("color: #ef4444; font-size: 24px; font-weight: 900; border: none; background: transparent; padding: 0; min-width: 0;")
+        rem_btn.clicked.connect(self._remove_extra_position)
+        extra_row.addWidget(add_btn)
+        extra_row.addWidget(rem_btn)
+        extra_lbl = QLabel("Additional Points")
+        extra_lbl.setStyleSheet("font-weight: bold; border: none;")
+        extra_row.addWidget(extra_lbl)
+        extra_row.addStretch(1)
+        left_col.addWidget(extra_widget)
+        left_col.addStretch(1)
+
+        right_col.addStretch(1)
 
         form_row.addLayout(left_col, 1)
         form_row.addLayout(right_col, 1)
+        form_row.setAlignment(Qt.AlignmentFlag.AlignTop)
         dut_layout.addLayout(form_row)
         return dut_card
 
@@ -464,7 +473,7 @@ class GridGeneratorPane(QWidget):
         label_box.addWidget(diagram)
         layout.addLayout(label_box)
 
-        r, phi, z = self.dut_inputs[key]
+        r, phi, z = self.dut_inputs[key] if key in ("top", "bottom") else self.waypoint_inputs[key]
 
         for name, spin in [("Radius (mm)", r), ("Phi (deg)", phi), ("Height (mm)", z)]:
             sl = QVBoxLayout()
@@ -531,12 +540,16 @@ class GridGeneratorPane(QWidget):
         if pos is None:
             QMessageBox.warning(self, "Scanner", "No scanner position is available.")
             return
-        r, phi, z = self.dut_inputs[key]
+        if key in ("top", "bottom"):
+            r, phi, z = self.dut_inputs[key]
+        else:
+            r, phi, z = self.waypoint_inputs[key]
         r.setText(f"{float(pos.r()):.1f}")
         phi.setText(f"{float(pos.t()):.1f}")
         z.setText(f"{float(pos.z()):.1f}")
-        self._save_dut_volume_to_config()
-        self._sync_slaved_grid_waypoint(key)
+        if key in ("top", "bottom"):
+            self._save_dut_volume_to_config()
+            self._sync_slaved_grid_waypoint(key)
 
     def _save_dut_volume_to_config(self) -> None:
         parser = configparser.ConfigParser(inline_comment_prefixes=("#", ";"))
@@ -911,7 +924,8 @@ class GridGeneratorPane(QWidget):
             return None
         return values  # type: ignore[return-value]
 
-    def _add_extra_position(self, saved: dict | None = None) -> None:
+    def _add_extra_position_to_dut(self, saved: dict | None = None) -> None:
+        """Add an extra position row to the DUT Volume card."""
         saved = saved or {}
         name = QLineEdit(str(saved.get("name") or f"point_{len(self.extra_position_rows) + 1}"))
         r = self._spin(float(_normalize_decimal_text(str(saved.get("r") or 0.0))), -2000, 2000, "")
@@ -951,10 +965,14 @@ class GridGeneratorPane(QWidget):
         btn.setFixedSize(62, 32)
         btn.clicked.connect(lambda _=False, row={"r": r, "phi": phi, "z": z}: self._set_extra_position_from_scanner(row))
         l.addWidget(btn)
-        
+
         self.extra_positions_layout.addWidget(w)
         widgets = [w]
         self.extra_position_rows.append({"name": name, "r": r, "phi": phi, "z": z, "widgets": widgets, "set_button": btn})
+
+    def _add_extra_position(self, saved: dict | None = None) -> None:
+        """Alias for backward compatibility - delegates to _add_extra_position_to_dut."""
+        self._add_extra_position_to_dut(saved)
 
     def _remove_extra_position(self) -> None:
         if not self.extra_position_rows:
@@ -1203,8 +1221,9 @@ class GridGeneratorPane(QWidget):
     def _load_dataframe_on_ui(self, df: pd.DataFrame, path_text: str) -> None:
         path = Path(path_text)
         self.current_viewer_input = df.copy()
+        settings = self._get_viewer_settings()
         try:
-            self.engine.load_data(self.current_viewer_input)
+            self.engine.load_data(self.current_viewer_input, settings)
         except Exception as exc:
             if not self._fallback_to_matplotlib_viewer(exc, "generated grid load"):
                 logger.exception("Could not load generated grid into viewer")
@@ -1226,8 +1245,9 @@ class GridGeneratorPane(QWidget):
 
     def _load_csv_path(self, path: Path) -> None:
         self.current_viewer_input = str(path)
+        settings = self._get_viewer_settings()
         try:
-            self.engine.load_data(self.current_viewer_input)
+            self.engine.load_data(self.current_viewer_input, settings)
             self._redraw_viewer()
             self._update_slider_range()
             self.status_label.setText(f"Loaded {self.engine.N} points from {path.name}")
@@ -1238,6 +1258,45 @@ class GridGeneratorPane(QWidget):
                 return
             logger.exception("Could not load grid CSV")
             QMessageBox.warning(self, "Load Grid", str(exc))
+
+    def _get_viewer_settings(self) -> dict[str, str] | None:
+        """Build a settings dict from project.json grid_vars for the 3D viewer."""
+        grid_vars = project.get_project_data().get("grid_vars", {})
+        if not isinstance(grid_vars, dict) or not grid_vars:
+            return None
+        settings: dict[str, str] = {}
+        cyl_radius = grid_vars.get("cyl_radius_mm")
+        cyl_height = grid_vars.get("cyl_height_mm")
+        wall_thickness = grid_vars.get("wall_thickness_mm")
+        if cyl_radius is not None:
+            settings["cyl_radius_mm"] = str(cyl_radius)
+        if cyl_height is not None:
+            settings["cyl_height_mm"] = str(cyl_height)
+        if wall_thickness is not None:
+            settings["wall_thickness_mm"] = str(wall_thickness)
+            try:
+                r = float(cyl_radius or 0)
+                wt = float(wall_thickness)
+                settings["cyl_radius_internal"] = f"{r / 1000.0:.3f}"
+                settings["cyl_radius_external"] = f"{(r + wt) / 1000.0:.3f}"
+                h = float(cyl_height or 0)
+                settings["cyl_height_internal"] = f"{h / 1000.0:.3f}"
+                settings["cyl_height_external"] = f"{(h + 2 * wt) / 1000.0:.3f}"
+            except (ValueError, TypeError):
+                pass
+        z_mid = grid_vars.get("z_midpoint_zero")
+        if z_mid is not None:
+            settings["z_midpoint_zero"] = str(z_mid).capitalize()
+        # Compute z_offset from top/bottom waypoints if available
+        top_z = grid_vars.get("wp_top_z")
+        bot_z = grid_vars.get("wp_bot_z")
+        if top_z is not None and bot_z is not None:
+            try:
+                z_offset = (float(top_z) + float(bot_z)) / 2.0
+                settings["z_offset_mm"] = str(z_offset)
+            except (ValueError, TypeError):
+                pass
+        return settings if settings else None
 
     def _load_existing_project_grid(self) -> None:
         grid_vars = project.get_project_data().get("grid_vars", {})

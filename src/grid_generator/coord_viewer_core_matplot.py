@@ -25,7 +25,6 @@ import matplotlib.colors as mcolors  # Used to create custom color gradients
 import matplotlib.animation as animation  # Used to create background loops for playback
 import pandas as pd  # Used for handling tabular data (DataFrames)
 import json  # Used for parsing settings embedded in columns
-import ast
 import colorsys
 
 
@@ -184,7 +183,7 @@ class CoordViewerEngine:
             except TypeError:
                 self.ax.view_init(elev=elev, azim=azim)
 
-    def load_data(self, input_data):
+    def load_data(self, input_data, settings: dict[str, str] | None = None):
         # Determine what type of data was passed in and standardize it into a Pandas DataFrame
         if isinstance(input_data, pd.DataFrame):
             df = input_data
@@ -211,33 +210,14 @@ class CoordViewerEngine:
         self.base_pts.set_data(self.x, self.y)
         self.base_pts.set_3d_properties(self.z)
 
-        # Determine bounds from CSV columns or JSON gen_settings if possible
-        gen_settings = {}
-        if "gen_settings" in df.columns:
-            # Scan rows for a valid gen_settings entry (in case row 0 is NaN)
-            # The gen_settings column contains key=value pairs, one per row.
-            # We need to iterate through the column and build a dictionary.
-            for item in df["gen_settings"].dropna():
-                item_str = str(item).strip()
-                if not item_str or "=" not in item_str:
-                    continue
-                
-                key, value = item_str.split("=", 1)
-                key = key.strip()
-                value = value.strip()
+        # Determine bounds from provided settings dict
+        if settings is None:
+            settings = {}
 
-                try:
-                    # ast.literal_eval is a safe way to evaluate Python literals
-                    gen_settings[key] = ast.literal_eval(value)
-                except (ValueError, SyntaxError, MemoryError, TypeError):
-                    # If it's not a valid literal (e.g., just a string like 'Auto'), keep it as a string.
-                    gen_settings[key] = value
-        
         def get_val(key, default=None):
             val = None
-            # Prioritize gen_settings as it's the most explicit source.
-            if key in gen_settings:
-                val = gen_settings[key]
+            if key in settings:
+                val = settings[key]
             elif key in df.columns:
                 val = df[key].iloc[0]
             

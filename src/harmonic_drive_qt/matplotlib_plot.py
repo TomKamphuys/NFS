@@ -41,6 +41,8 @@ class MatplotlibPlot(FigureCanvasQTAgg):
         self.default_y_range: tuple[float, float] | None = None
         self._x_values = np.array([], dtype=float)
         self._y_values = np.array([], dtype=float)
+        self._completed_x = np.array([], dtype=float)
+        self._completed_y = np.array([], dtype=float)
         self._message = "Waiting for data..."
         self._selector: RectangleSelector | None = None
         self._pan_start: tuple[
@@ -84,10 +86,39 @@ class MatplotlibPlot(FigureCanvasQTAgg):
         self.default_x_range = tuple(float(value) for value in self.axes.get_xlim())
         self.default_y_range = tuple(float(value) for value in self.axes.get_ylim())
 
+    def set_data_with_progress(
+        self,
+        grid_x: Iterable[float],
+        grid_y: Iterable[float],
+        completed_x: Iterable[float],
+        completed_y: Iterable[float],
+        *,
+        title: str | None = None,
+        x_range: tuple[float, float] | None = None,
+        y_range: tuple[float, float] | None = None,
+    ) -> None:
+        """Show grid points in gray and completed points colored by elevation."""
+        self._pan_start = None
+        self._x_values = np.asarray(list(grid_x), dtype=float)
+        self._y_values = np.asarray(list(grid_y), dtype=float)
+        self._completed_x = np.asarray(list(completed_x), dtype=float)
+        self._completed_y = np.asarray(list(completed_y), dtype=float)
+        if title is not None:
+            self.title = title
+        self.scatter = True
+        self.x_range = x_range
+        self.y_range = y_range
+        self._message = ""
+        self._render_with_progress()
+        self.default_x_range = tuple(float(value) for value in self.axes.get_xlim())
+        self.default_y_range = tuple(float(value) for value in self.axes.get_ylim())
+
     def clear_data(self, message: str, title: str | None = None) -> None:
         self._pan_start = None
         self._x_values = np.array([], dtype=float)
         self._y_values = np.array([], dtype=float)
+        self._completed_x = np.array([], dtype=float)
+        self._completed_y = np.array([], dtype=float)
         self._message = message
         if title is not None:
             self.title = title
@@ -146,22 +177,57 @@ class MatplotlibPlot(FigureCanvasQTAgg):
             self.axes.set_xticks([])
             self.axes.set_yticks([])
         elif self.scatter:
-            colors = self._y_values if self.color_points_by_y else "#2563eb"
-            self.axes.scatter(
-                self._x_values,
-                self._y_values,
-                c=colors,
-                cmap=_POSITION_CMAP if self.color_points_by_y else None,
-                s=28,
-                edgecolors="none",
-            )
-            self._apply_limits()
+            if self._completed_x.size > 0:
+                self._render_with_progress()
+            else:
+                colors = self._y_values if self.color_points_by_y else "#2563eb"
+                self.axes.scatter(
+                    self._x_values,
+                    self._y_values,
+                    c=colors,
+                    cmap=_POSITION_CMAP if self.color_points_by_y else None,
+                    s=28,
+                    edgecolors="none",
+                )
+                self._apply_limits()
         else:
             self.axes.plot(self._x_values, self._y_values, color="#2563eb", linewidth=1.6)
             self._apply_limits()
 
         if self.y_axis_mode == "symmetric_dbfs":
             self.axes.yaxis.set_major_formatter(FuncFormatter(self._symmetric_dbfs_label))
+        self._replace_selector()
+        self.draw_idle()
+
+    def _render_with_progress(self) -> None:
+        """Render grid points in gray and completed points colored by elevation."""
+        self.axes.clear()
+        self._style_axes()
+
+        # Grid points in gray
+        if self._x_values.size > 0:
+            self.axes.scatter(
+                self._x_values,
+                self._y_values,
+                c="#d1d5db",
+                s=20,
+                edgecolors="none",
+                zorder=2,
+            )
+
+        # Completed points colored by elevation
+        if self._completed_x.size > 0:
+            self.axes.scatter(
+                self._completed_x,
+                self._completed_y,
+                c=self._completed_y,
+                cmap=_POSITION_CMAP,
+                s=32,
+                edgecolors="none",
+                zorder=3,
+            )
+
+        self._apply_limits()
         self._replace_selector()
         self.draw_idle()
 

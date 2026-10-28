@@ -8,19 +8,25 @@ import numpy as np
 import pytest
 
 import nfs.audio as audio
+from nfs.naming import NamingConventionFactory
+from nfs.debug_artifacts import DebugArtifactFactory
 
 
 def make_engine():
     fs = 48000
+    hw = dict(dev_in=18, dev_out=18, ch_in_loop=1, ch_in_mic=0,
+              ch_out_spkr=0, ch_out_ref=1, fs=fs, blocksize=256, wasapi_exclusive=False)
+    cap = dict(num_sweeps=1, sweep_dur_s=.5, sweep_level_dbfs=-12,
+               pre_sil_ms=50, post_sil_ms=50, debug_saves=False)
     return audio.Audio(
-        dict(dev_in=18, dev_out=18, ch_in_loop=1, ch_in_mic=0,
-             ch_out_spkr=0, ch_out_ref=1, fs=fs, blocksize=256, wasapi_exclusive=False),
-        dict(num_sweeps=1, sweep_dur_s=.5, sweep_level_dbfs=-12,
-             pre_sil_ms=50, post_sil_ms=50, debug_saves=False),
+        hw,
+        cap,
         audio.SweepGenerator(fs, .5, 1, -12),
         audio.MarkerGenerator(fs, 100, (500, 5000), -12),
         audio.AlignmentEngine(fs, 1, False, 20, 100),
         audio.DeconvolutionEngine(fs),
+        NamingConventionFactory.create('dimitri'),
+        DebugArtifactFactory.create(False, hw),
     )
 
 
@@ -120,6 +126,8 @@ def test_stream_closes_before_com_release_and_uses_asio_roles(
         audio.MarkerGenerator(fs, 100, (500, 5000), -12),
         audio.AlignmentEngine(fs, 1, False, 20, 100),
         audio.DeconvolutionEngine(fs),
+        NamingConventionFactory.create('dimitri'),
+        DebugArtifactFactory.create(False, hw),
     )
     monkeypatch.setattr(engine, "_get_api_name", lambda dev: "ASIO")
     meter = Mock()

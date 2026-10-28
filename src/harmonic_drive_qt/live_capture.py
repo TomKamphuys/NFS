@@ -210,6 +210,50 @@ def _load_grid_dataframe() -> pd.DataFrame | None:
         return None
 
 
+def _get_viewer_settings() -> dict[str, str] | None:
+    """Build a settings dict from project.json grid_vars for the 3D viewer."""
+    try:
+        from . import project
+
+        grid_vars = project.get_project_data().get("grid_vars")
+        if not isinstance(grid_vars, dict) or not grid_vars:
+            return None
+        settings: dict[str, str] = {}
+        cyl_radius = grid_vars.get("cyl_radius_mm")
+        cyl_height = grid_vars.get("cyl_height_mm")
+        wall_thickness = grid_vars.get("wall_thickness_mm")
+        if cyl_radius is not None:
+            settings["cyl_radius_mm"] = str(cyl_radius)
+        if cyl_height is not None:
+            settings["cyl_height_mm"] = str(cyl_height)
+        if wall_thickness is not None:
+            settings["wall_thickness_mm"] = str(wall_thickness)
+            try:
+                r = float(cyl_radius or 0)
+                wt = float(wall_thickness)
+                settings["cyl_radius_internal"] = f"{r / 1000.0:.3f}"
+                settings["cyl_radius_external"] = f"{(r + wt) / 1000.0:.3f}"
+                h = float(cyl_height or 0)
+                settings["cyl_height_internal"] = f"{h / 1000.0:.3f}"
+                settings["cyl_height_external"] = f"{(h + 2 * wt) / 1000.0:.3f}"
+            except (ValueError, TypeError):
+                pass
+        z_mid = grid_vars.get("z_midpoint_zero")
+        if z_mid is not None:
+            settings["z_midpoint_zero"] = str(z_mid).capitalize()
+        top_z = grid_vars.get("wp_top_z")
+        bot_z = grid_vars.get("wp_bot_z")
+        if top_z is not None and bot_z is not None:
+            try:
+                z_offset = (float(top_z) + float(bot_z)) / 2.0
+                settings["z_offset_mm"] = str(z_offset)
+            except (ValueError, TypeError):
+                pass
+        return settings if settings else None
+    except Exception:
+        return None
+
+
 def _find_latest_ir_file() -> Path | None:
     root = _project_dir()
     dirs = [
@@ -504,10 +548,10 @@ class LiveCapturePane(QWidget):
         self.backend = backend
         self.config_file = config_file
         self.visible_active = True
-        self.last_measurement_mtime = 0.0
         self.last_ir_mtime = 0.0
         self.grid_points: list[tuple[float, float, float]] = []
         self.grid_df: pd.DataFrame | None = None
+        self._completed_positions: list[dict[str, float]] = []
         self.fr_smoothing_fraction = 24
         self.viewer_backend = self._read_viewer_backend()
         self._pyvista_error: str | None = None
@@ -945,56 +989,88 @@ class LiveCapturePane(QWidget):
     def refresh_if_changed(self) -> None:
         if not self.visible_active:
             return
-        measurement_file = _find_latest_measurement_positions_file()
-        measurement_mtime = measurement_file.stat().st_mtime if measurement_file else 0.0
-        if measurement_mtime != self.last_measurement_mtime:
-            self.last_measurement_mtime = measurement_mtime
-            self.refresh_positions()
-
         ir_file = _find_latest_ir_file()
         ir_mtime = ir_file.stat().st_mtime if ir_file else 0.0
         if ir_mtime != self.last_ir_mtime:
             self.last_ir_mtime = ir_mtime
             self.refresh_ir_plots()
 
+    def on_progress_event(self, event: dict) -> None:
+        """Handle real-time measurement progress events from ControlPane."""
+        status = event.get("status", "")
+        if status == "started":
+            self._completed_positions.clear()
+        elif status == "point_complete":
+            pos = event.get("position")
+            if pos is not None:
+                self._completed_positions.append(pos)
+            self.refresh_positions()
+        elif status in ("finished", "failed"):
+            self.refresh_positions()
+
     def refresh_all(self) -> None:
         self.grid_points = _load_grid_points()
         self.grid_df = _load_grid_dataframe()
+        self._completed_positions.clear()
         self.refresh_progress_viewer(0)
         self.refresh_positions()
         self.refresh_ir_plots()
         self.refresh_meters()
 
     def refresh_positions(self) -> None:
-        azimuth, elevation, measured_points = _load_measurement_positions()
-        measured_count = len(measured_points)
+        measured_count = len(self._completed_positions)
         self.refresh_progress_viewer(measured_count)
 
-        if azimuth is None or elevation is None:
+        has_grid = self.grid_df is not None and len(self.grid_df) > 0
+        if not self._completed_positions and not has_grid:
             self.positions.clear_data("No measurement positions available", "Waiting for measurement positions...")
             return
-        self.positions.set_data(
-            azimuth,
-            elevation,
+
+        z_center = _grid_z_center()
+
+        # Build grid point azimuth/elevation arrays (shown in gray)
+        grid_azimuth = []
+        grid_elevation = []
+        if has_grid:
+            for _, row in self.grid_df.iterrows():
+                r = float(row["r_xy_mm"])
+                phi = float(row["phi_deg"])
+                z = float(row["z_mm"])
+                grid_azimuth.append(phi)
+                grid_elevation.append(math.degrees(math.atan2(z - z_center, r)) if r > 0 else 0.0)
+
+        # Build completed point azimuth/elevation arrays (colored by elevation)
+        comp_azimuth = []
+        comp_elevation = []
+        for pos in self._completed_positions:
+            r = pos["r"]
+            phi = pos["phi"]
+            z = pos["z"]
+            comp_azimuth.append(phi)
+            comp_elevation.append(math.degrees(math.atan2(z - z_center, r)) if r > 0 else 0.0)
+
+        self.positions.set_data_with_progress(
+            grid_azimuth, grid_elevation,
+            comp_azimuth, comp_elevation,
             title="Measurement Positions (Azimuth vs Elevation)",
-            scatter=True,
             x_range=(-180, 180),
             y_range=(-90, 90),
         )
 
     def refresh_progress_viewer(self, measured_count: int) -> None:
         try:
+            settings = _get_viewer_settings()
             if self.grid_df is not None and int(self.progress_engine.N) != len(self.grid_df):
-                self.progress_engine.load_data(self.grid_df)
+                self.progress_engine.load_data(self.grid_df, settings)
             elif self.grid_df is None and measured_count:
-                azimuth, _elevation, measured_points = _load_measurement_positions()
-                if measured_points:
-                    rows = []
-                    for x, y, z in measured_points:
-                        r = math.sqrt(x * x + y * y)
-                        phi = math.degrees(math.atan2(y, x))
-                        rows.append({"r_xy_mm": r, "phi_deg": phi, "z_mm": z})
-                    self.progress_engine.load_data(pd.DataFrame(rows))
+                rows = []
+                for pos in self._completed_positions:
+                    r = pos["r"]
+                    phi = pos["phi"]
+                    z = pos["z"]
+                    rows.append({"r_xy_mm": r, "phi_deg": phi, "z_mm": z})
+                if rows:
+                    self.progress_engine.load_data(pd.DataFrame(rows), settings)
             if self.progress_engine.N > 0:
                 index = max(0, min(int(self.progress_engine.N) - 1, measured_count - 1))
                 self.progress_engine.curr_idx = index
@@ -1033,7 +1109,7 @@ class LiveCapturePane(QWidget):
         self._show_pyvista_fallback_message()
         try:
             if self.grid_df is not None:
-                self.progress_engine.load_data(self.grid_df)
+                self.progress_engine.load_data(self.grid_df, settings)
                 self.progress_engine.update_plot()
             if self.progress_canvas is not None:
                 self.progress_canvas.draw_idle()
@@ -1070,7 +1146,7 @@ class LiveCapturePane(QWidget):
             if preview_ir is not None and preview_fs is not None:
                 ir = np.asarray(preview_ir, dtype=float)
                 fs = int(preview_fs)
-                title_name = str(preview.get("name") or "Test Sweep Preview")
+                title_name = "Test Sweep Preview"
         if ir is None or fs is None:
             self.imp_section.set_detail("Waiting for impulse response...")
             self.freq_section.set_detail("Waiting for frequency response...")

@@ -14,9 +14,6 @@ Expected input columns:
     phi_deg
     r_xy_mm
     z_mm
-
-Optional column:
-    gen_settings
 """
 
 from __future__ import annotations
@@ -67,37 +64,6 @@ def _safe_float(value, default: float = 0.0) -> float:
         return float(value)
     except (TypeError, ValueError):
         return default
-
-
-def _settings_from_df(df: pd.DataFrame) -> dict[str, str]:
-    """Extract key=value strings from optional gen_settings column.
-
-    Supports:
-      - one setting per row: cyl_radius_internal=0.2
-      - multiple settings in one cell separated by comma/semicolon/newline
-      - dict-like values, if the DataFrame was constructed programmatically
-    """
-    settings: dict[str, str] = {}
-
-    if "gen_settings" not in df.columns:
-        return settings
-
-    for item in df["gen_settings"].dropna().tolist():
-        if isinstance(item, dict):
-            for key, value in item.items():
-                settings[str(key).strip()] = str(value).strip()
-            continue
-
-        text = str(item)
-        normalized = text.replace(";", "\n").replace(",", "\n")
-        for chunk in normalized.splitlines():
-            chunk = chunk.strip()
-            if "=" not in chunk:
-                continue
-            key, value = chunk.split("=", 1)
-            settings[key.strip()] = value.strip()
-
-    return settings
 
 
 def _polyline_from_points(points: np.ndarray) -> pv.PolyData:
@@ -424,7 +390,7 @@ class CoordViewerPyVista(QtWidgets.QWidget):
     # Data loading and bounds creation
     # ------------------------------------------------------------------
 
-    def load_data(self, input_data: DataLike) -> None:
+    def load_data(self, input_data: DataLike, settings: Optional[dict[str, str]] = None) -> None:
         if isinstance(input_data, pd.DataFrame):
             df = input_data.copy()
         elif isinstance(input_data, dict):
@@ -468,7 +434,7 @@ class CoordViewerPyVista(QtWidgets.QWidget):
             self.curr_idx = 0
             self.exact_idx = 0.0
 
-        self._build_bounds_from_settings(df)
+        self._build_bounds_from_settings(df, settings)
         self._set_axes_equal()
         self.update_plot()
         self.plotter.render()
@@ -510,13 +476,12 @@ class CoordViewerPyVista(QtWidgets.QWidget):
         except Exception:
             pass
 
-    def _build_bounds_from_settings(self, df: pd.DataFrame) -> None:
+    def _build_bounds_from_settings(self, df: pd.DataFrame, settings: Optional[dict[str, str]] = None) -> None:
         self._remove_bounds_actors()
         self.bounds = BoundsInfo()
 
-        settings = _settings_from_df(df)
         if not settings:
-            logger.debug("No gen_settings found; skipping cylinder bounds.")
+            logger.debug("No settings provided; skipping cylinder bounds.")
             self._update_bounds_readout(settings)
             return
 

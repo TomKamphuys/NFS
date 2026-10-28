@@ -623,11 +623,13 @@ def test_integration_with_mock_audio(tmp_path):
     audio = AudioFactory.create(str(config_path))
     audio.set_session_directory(tmp_path)
     pos = CylindricalPosition(100, 0, 10)
-    audio.measure_ir(pos, "DSP_TEST")
+    ir_path = audio.naming_convention.build_ir_path(pos, tmp_path)
+    dist_path = audio.naming_convention.build_dist_path(pos, tmp_path)
+    audio.capture_ir(ir_path, dist_path)
 
     # Check if metrics file was created
-    # Based on log output: Saved Linear IR: DSP_TEST_r100_ph0_z10_ir.wav
-    metrics_file = tmp_path / "debug" / "DSP_TEST_r100_ph0_z10_metrics.json"
+    # Dimitri naming: r100_ph0_z10
+    metrics_file = tmp_path / "debug" / "r100_ph0_z10_metrics.json"
     assert metrics_file.exists()
 
 

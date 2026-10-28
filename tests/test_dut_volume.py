@@ -195,7 +195,7 @@ def test_format_measurement_error_for_no_fly_zone():
     assert "No-Fly Zone" in info["title"]
     assert "227.0mm, -166.1°, -2.0mm" in info["summary"]
     assert "How to fix" in info["details"]
-    assert "DUT Volume" in info["how_to_fix"]
+    assert "DUT Properties" in info["how_to_fix"]
 
 
 def test_control_pane_handles_failed_progress_event(tmp_path, monkeypatch):

@@ -42,6 +42,7 @@ def test_grid_pane_starts_with_blank_waypoints_and_no_default_grid_load(tmp_path
 
     pane = GridGeneratorPane(Mock(), str(config_file))
     try:
+        # All waypoints blank when no dut_volume config or saved grid vars
         assert [field.text() for field in pane.waypoint_inputs["top"]] == ["", "", ""]
         assert [field.text() for field in pane.waypoint_inputs["bottom"]] == ["", "", ""]
         assert [field.text() for field in pane.waypoint_inputs["tweeter"]] == ["", "", ""]
