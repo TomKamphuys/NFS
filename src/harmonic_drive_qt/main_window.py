@@ -172,6 +172,7 @@ class MainWindow(QMainWindow):
         self.right_stack.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.live_capture = LiveCapturePane(self.backend, self.config_file)
         self.control_pane.measurement_saved.connect(self.live_capture.refresh_all)
+        self.control_pane.progress_event.connect(self.live_capture.on_progress_event)
         self.grid_pane = GridGeneratorPane(
             self.backend,
             self.config_file,

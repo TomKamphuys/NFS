@@ -301,6 +301,7 @@ class NearFieldScanner:
                     "point_complete",
                     current,
                     total,
+                    position={"r": position.r(), "phi": position.t(), "z": position.z()},
                     timestamp=timestamp,
                     eta_seconds=eta_seconds,
                     elapsed_seconds=elapsed_seconds,
@@ -358,6 +359,7 @@ class NearFieldScanner:
         status: str,
         current: int,
         total: int,
+        position: dict[str, float] | None = None,
         timestamp: float | None = None,
         eta_seconds: float | None = None,
         elapsed_seconds: float = 0.0,
@@ -374,6 +376,7 @@ class NearFieldScanner:
         :param status: Current status string (e.g., 'started', 'point_complete', 'finished', 'failed').
         :param current: Number of points measured so far.
         :param total: Total number of points in the measurement set.
+        :param position: Optional position dict with 'r', 'phi', 'z' keys (cylindrical coords in mm/deg).
         :param timestamp: Monotonic timestamp of the progress event (defaults to current monotonic time).
         :param eta_seconds: Estimated remaining time in seconds, or None if undetermined.
         :param elapsed_seconds: Elapsed time in seconds since measurement started.
@@ -389,6 +392,8 @@ class NearFieldScanner:
             "eta_seconds": eta_seconds,
             "elapsed_seconds": elapsed_seconds,
         }
+        if position is not None:
+            event["position"] = position
         if error is not None:
             event["error"] = error
         if exception is not None:
