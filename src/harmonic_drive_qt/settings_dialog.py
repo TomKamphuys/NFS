@@ -315,6 +315,87 @@ class SettingsDialog(QDialog):
             lbl.setStyleSheet("font-weight: bold; font-size: 10.5pt;")
             layout.addWidget(lbl)
             self._build_motion_manager_fields(layout)
+        elif section == "audio":
+            lbl = QLabel("Audio")
+            lbl.setStyleSheet("font-weight: bold; font-size: 10.5pt;")
+            layout.addWidget(lbl)
+            self._build_fields(layout, "audio", EDITABLE_SCHEMA.get("audio", []))
+
+            # Sweep section
+            if self.parser.has_section("sweep"):
+                lbl2 = QLabel("Sweep")
+                lbl2.setStyleSheet("font-weight: bold; font-size: 10.5pt; margin-top: 16px;")
+                layout.addWidget(lbl2)
+                self._build_fields(layout, "sweep", EDITABLE_SCHEMA.get("sweep", []))
+
+            # Mock-only options: spatial model selector + directivity viewer
+            mode_field = self.inputs.get(("audio", "mode"))
+            mock_only_widgets: list[QWidget] = []
+            
+            # Spatial model selector
+            spatial_row = QWidget()
+            spatial_row.setStyleSheet("border: 1px solid #cbd5e1; border-radius: 4px; padding: 4px;")
+            spatial_layout = QVBoxLayout(spatial_row)
+            spatial_layout.setContentsMargins(8, 2, 8, 2)
+            spatial_layout.setSpacing(0)
+            spatial_lbl = QLabel("Spatial model")
+            spatial_lbl.setStyleSheet("color: #64748b; font-size: 7.5pt; border: none;")
+            spatial_layout.addWidget(spatial_lbl)
+            spatial_combo = QComboBox()
+            light_combo(spatial_combo)
+            spatial_combo.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+            spatial_combo.installEventFilter(self._combo_wheel_filter)
+            spatial_combo.addItems(["none", "spherical_harmonic", "discrete_piston"])
+            spatial_combo.setToolTip(
+                "Virtual speaker model for mock audio: 'none' is omnidirectional, "
+                "'spherical_harmonic' uses spherical harmonics, "
+                "'discrete_piston' uses a Rayleigh integral piston model."
+            )
+            spatial_combo.setStyleSheet(
+                "QComboBox { border: none; background: transparent; "
+                "font-size: 9.75pt; color: #0f172a; min-height: 22px; padding: 0; }"
+            )
+            raw_spatial = _strip_inline_comment(
+                self.parser.get("sweep", "spatial_model", fallback="none")
+            ).strip().lower()
+            if raw_spatial in {"true", "1", "yes"}:
+                spatial_combo.setCurrentText("spherical_harmonic")
+            elif raw_spatial in ("none", "spherical_harmonic", "discrete_piston"):
+                spatial_combo.setCurrentText(raw_spatial)
+            spatial_layout.addWidget(spatial_combo)
+            layout.addWidget(spatial_row)
+            mock_only_widgets.append(spatial_row)
+            self.inputs[("sweep", "spatial_model")] = (spatial_combo, "choice")
+            
+            # Directivity viewer button
+            directivity_btn = QPushButton("View Speaker Directivity")
+            directivity_btn.setToolTip("Show the horizontal and vertical directivity patterns of the virtual speaker model.")
+            directivity_btn.setStyleSheet(
+                "QPushButton { color: #2563eb; background: white; "
+                "border: 1px solid #cbd5e1; border-radius: 4px; "
+                "padding: 6px 14px; font-weight: bold; }"
+                "QPushButton:hover { background: #eff6ff; }"
+            )
+            directivity_btn.clicked.connect(self._open_directivity_viewer)
+            btn_row = QWidget()
+            btn_row_layout = QHBoxLayout(btn_row)
+            btn_row_layout.setContentsMargins(0, 8, 0, 0)
+            btn_row_layout.addWidget(directivity_btn)
+            btn_row_layout.addStretch(1)
+            layout.addWidget(btn_row)
+            mock_only_widgets.append(btn_row)
+            
+            def update_mock_visibility(mode_value: str) -> None:
+                visible = mode_value == "mock_interface"
+                for w in mock_only_widgets:
+                    w.setVisible(visible)
+
+            if isinstance(mode_field, QComboBox):
+                mode_field.currentTextChanged.connect(update_mock_visibility)
+                update_mock_visibility(mode_field.currentText())
+            else:
+                raw_mode = _strip_inline_comment(self.parser.get("audio", "mode", fallback="hardware"))
+                update_mock_visibility(raw_mode)
         else:
             self._build_fields(layout, section, EDITABLE_SCHEMA.get(section, []))
             
@@ -379,6 +460,15 @@ class SettingsDialog(QDialog):
             QMessageBox.warning(self, "Error", f"Could not set RFT default: {exc}")
             return
         self.parser.set("scanner", "default_reflection_free_time_ms", str(value))
+
+    def _open_directivity_viewer(self) -> None:
+        from .directivity_viewer import DirectivityViewerWindow
+
+        spatial_model, _kind = self.inputs[("sweep", "spatial_model")]
+        window = DirectivityViewerWindow(
+            self.config_file, self, spatial_model=spatial_model.currentText()
+        )
+        window.exec()
 
     def _open_rft_calculator(self) -> None:
         from rft_calc.dialog import RFTDialog

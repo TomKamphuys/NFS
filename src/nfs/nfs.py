@@ -107,6 +107,16 @@ class NearFieldScanner:
             f.write('r_xy_mm,phi_deg,z_mm\n')
         logger.info(f'Position log file cleared: {self._position_log_file}')
 
+    def _update_audio_position_callback(self, position: 'CylindricalPosition') -> None:
+        """
+        Update the audio mock's position callback to return the current position.
+        This allows the spatial speaker model in mock mode to know the measurement position.
+        :param position: The current measurement position.
+        :return: None
+        """
+        if hasattr(self._audio, 'set_position_callback'):
+            self._audio.set_position_callback(lambda: position)
+
     def _append_position_to_file(self, position: 'CylindricalPosition') -> None:
         """
         Appends the measurement position to the log file as CSV with numeric values only.
@@ -126,6 +136,7 @@ class NearFieldScanner:
         if hasattr(self._audio, 'set_session_directory'):
             self._audio.set_session_directory(self._single_measurements_dir())
         position = self._scanner.get_position()
+        self._update_audio_position_callback(position)
         ir_path = self._audio.naming_convention.build_ir_path(position, self._single_measurements_dir(), None)
         dist_path = self._audio.naming_convention.build_dist_path(position, self._single_measurements_dir(), None)
         self._audio.capture_ir(ir_path, dist_path)
@@ -286,6 +297,7 @@ class NearFieldScanner:
 
                 position = self._scanner.get_position()
                 self._append_position_to_file(position)
+                self._update_audio_position_callback(position)
 
                 ir_path = self._audio.naming_convention.build_ir_path(position, measurement_dir, session_name)
                 dist_path = self._audio.naming_convention.build_dist_path(position, measurement_dir, session_name)

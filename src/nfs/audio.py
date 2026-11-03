@@ -38,7 +38,7 @@ import threading
 import time
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Optional, Dict, Any, List, Tuple
+from typing import Callable, Optional, Dict, Any, List, Tuple
 from nfs import registry
 
 import numpy as np
@@ -1884,6 +1884,38 @@ class Audio(IAudio):
 class MockInterfaceAudio(Audio):
     """Digital Twin loopback simulating hardware latency and filters."""
 
+    def __init__(self,
+                 hw_config: Dict[str, Any],
+                 capture_config: Dict[str, Any],
+                 sweep_gen: SweepGenerator,
+                 marker_gen: MarkerGenerator,
+                 alignment_engine: AlignmentEngine,
+                 deconv_engine: DeconvolutionEngine,
+                 naming_convention: IRNamingConvention,
+                 debug_handler: DebugArtifactHandler,
+                 harmonic_injector: Optional[HarmonicInjector] = None,
+                 protection_filter: Optional[ProtectionFilter] = None,
+                 position_callback: Optional[Callable[[], CylindricalPosition]] = None,
+                 speaker_model: Optional[Any] = None):
+        super().__init__(
+            hw_config=hw_config,
+            capture_config=capture_config,
+            sweep_gen=sweep_gen,
+            marker_gen=marker_gen,
+            alignment_engine=alignment_engine,
+            deconv_engine=deconv_engine,
+            naming_convention=naming_convention,
+            debug_handler=debug_handler,
+            harmonic_injector=harmonic_injector,
+            protection_filter=protection_filter,
+        )
+        self._position_callback = position_callback
+        self._speaker_model = speaker_model
+
+    def set_position_callback(self, callback: Optional[Callable[[], CylindricalPosition]]) -> None:
+        """Update the position callback at runtime before each capture."""
+        self._position_callback = callback
+
     def _run_sweep(self) -> Dict[str, Any]:
         # 1. Generate Signals (Identical to standard Audio class)
         s_fund, phase, inv_sweep = self.sweep_gen.generate()
@@ -1970,8 +2002,15 @@ class MockInterfaceAudio(Audio):
             noise = np.random.normal(0, 1e-5, len(y))
             return (y + noise).astype(np.float32)
 
+        # Apply spatial speaker model if configured
+        if self._speaker_model is not None and self._position_callback is not None:
+            pos = self._position_callback()
+            rec_mic = self._speaker_model.apply_to_signal(tx_sweep, self.hw['fs'], pos)
+        else:
+            rec_mic = tx_sweep.copy()
+
         logger.debug("► Loopback Mode: Applying CS4272 FIR, 15Hz HPF, and 20ms delay.")
-        rec_mic = apply_hardware_sim(tx_sweep)
+        rec_mic = apply_hardware_sim(rec_mic)
         rec_loop = apply_hardware_sim(tx_ref)
 
         # 4. --- ALIGNMENT & DECONVOLUTION ---
@@ -2221,6 +2260,14 @@ class AudioFactory:
 
         # Route to the correct class based on mode
         if mode == 'mock_interface':
+            # Optionally enable spatial speaker model in mock mode
+            spatial_model_str = config.get(sweep_section, 'spatial_model', fallback='false').strip().lower()
+            if spatial_model_str in ('true', '1', 'yes', 'spherical_harmonic'):
+                from .utils.spatial import SphericalHarmonicSpeakerModel
+                kwargs['speaker_model'] = SphericalHarmonicSpeakerModel()
+            elif spatial_model_str == 'discrete_piston':
+                from .utils.spatial import DiscretePistonSpeakerModel
+                kwargs['speaker_model'] = DiscretePistonSpeakerModel()
             return MockInterfaceAudio(**kwargs)
 
         return Audio(**kwargs)

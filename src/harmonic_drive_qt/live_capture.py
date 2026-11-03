@@ -255,6 +255,7 @@ def _get_viewer_settings() -> dict[str, str] | None:
 
 
 def _find_latest_ir_file() -> Path | None:
+    """Return the most recently modified IR wav file from measurement directories."""
     root = _project_dir()
     dirs = [
         root / "measurement_set",
@@ -931,7 +932,7 @@ class LiveCapturePane(QWidget):
         if active:
             self.meter_timer.start()
             self.watch_timer.start()
-            self.refresh_all()
+            self.refresh_on_tab_switch()
         else:
             self.meter_timer.stop()
             self.watch_timer.stop()
@@ -1000,6 +1001,8 @@ class LiveCapturePane(QWidget):
         status = event.get("status", "")
         if status == "started":
             self._completed_positions.clear()
+            self.refresh_progress_viewer(0)
+            self.refresh_positions()
         elif status == "point_complete":
             pos = event.get("position")
             if pos is not None:
@@ -1009,10 +1012,21 @@ class LiveCapturePane(QWidget):
             self.refresh_positions()
 
     def refresh_all(self) -> None:
+        """Refresh on initial load or grid change — start with all positions gray."""
         self.grid_points = _load_grid_points()
         self.grid_df = _load_grid_dataframe()
         self._completed_positions.clear()
         self.refresh_progress_viewer(0)
+        self.refresh_positions()
+        self.refresh_ir_plots()
+        self.refresh_meters()
+
+    def refresh_on_tab_switch(self) -> None:
+        """Refresh plots while preserving in-memory completed positions."""
+        self.grid_points = _load_grid_points()
+        self.grid_df = _load_grid_dataframe()
+        measured_count = len(self._completed_positions)
+        self.refresh_progress_viewer(measured_count)
         self.refresh_positions()
         self.refresh_ir_plots()
         self.refresh_meters()
@@ -1131,22 +1145,20 @@ class LiveCapturePane(QWidget):
     def refresh_ir_plots(self) -> None:
         latest_file, ir, fs = _load_latest_ir()
         title_name = latest_file.name if latest_file is not None else None
-        latest_mtime = latest_file.stat().st_mtime if latest_file is not None else 0.0
-        preview = self.backend.get_preview_ir()
-        preview_created_at = (
-            float(preview.get("preview_created_at") or 0.0)
-            if isinstance(preview, dict)
-            else 0.0
-        )
-        if isinstance(preview, dict) and preview_created_at >= latest_mtime:
-            preview_ir = preview.get("ir_linear")
-            if preview_ir is None:
-                preview_ir = preview.get("ir_full")
-            preview_fs = preview.get("fs")
-            if preview_ir is not None and preview_fs is not None:
-                ir = np.asarray(preview_ir, dtype=float)
-                fs = int(preview_fs)
-                title_name = "Test Sweep Preview"
+        # Fall back to the test-sweep preview only when no IR files exist on disk.
+        # Do not use the preview merely because it is newer; a preview run before
+        # measurements would otherwise always replace the actual captured IR.
+        if ir is None:
+            preview = self.backend.get_preview_ir()
+            if isinstance(preview, dict):
+                preview_ir = preview.get("ir_linear")
+                if preview_ir is None:
+                    preview_ir = preview.get("ir_full")
+                preview_fs = preview.get("fs")
+                if preview_ir is not None and preview_fs is not None:
+                    ir = np.asarray(preview_ir, dtype=float)
+                    fs = int(preview_fs)
+                    title_name = "Test Sweep Preview"
         if ir is None or fs is None:
             self.imp_section.set_detail("Waiting for impulse response...")
             self.freq_section.set_detail("Waiting for frequency response...")
@@ -1167,7 +1179,7 @@ class LiveCapturePane(QWidget):
             ir_zoom,
             title="Impulse Response",
             y_range=_auto_waveform_range(ir_zoom),
-            y_axis_mode="symmetric_dbfs",
+            y_axis_mode="linear",
         )
 
         n_fft = 2 ** int(np.ceil(np.log2(max(1, len(ir)))))

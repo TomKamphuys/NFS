@@ -21,7 +21,6 @@ SchemaEntry = Tuple[str, str, str, Optional[List[str]]]
 DISPLAY_LABELS = {
     "level": "Terminal verbosity",
     "show_machine_coordinate_system": "Show machine coordinates",
-    "show_rehome_button": "Show ReHome button",
     "show_height_offset_controls": "Show height offset controls",
     "default_project_dir": "Default session folder",
     "cal_tool_height": "Calibration tool height (mm)",
@@ -225,8 +224,6 @@ EDITABLE_SCHEMA: Dict[str, List[SchemaEntry]] = {
         ("coord_viewer_backend", "choice",
          "3D coordinate viewer used in the native Grid pane.",
          ["matplotlib", "pyvista"]),
-        ("show_rehome_button", "bool",
-         "Show the ReHome command button in the machine control pane.", None),
         ("show_height_offset_controls", "bool",
          "Show the height offset input and Set height offset command in the machine control pane.", None),
         ("auto_hide_left_menu", "bool",

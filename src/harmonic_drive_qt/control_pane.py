@@ -217,8 +217,7 @@ class ControlPane(QWidget):
 
         commands = QHBoxLayout()
         commands.setSpacing(8)
-        show_rehome = _config_bool(self.backend.config_file, "app", "show_rehome_button", False)
-        command_width = 118 if show_rehome else 132
+        command_width = 118
         
         home = QPushButton("HOME")
         self.home_button = home
@@ -230,17 +229,6 @@ class ControlPane(QWidget):
         commands.addWidget(home)
         self._control_buttons.append(home)
 
-        if show_rehome:
-            rehome = QPushButton("REHOME")
-            self.rehome_button = rehome
-            rehome.setIcon(ui_icon("home"))
-            rehome.setIconSize(QSize(20, 20))
-            rehome.setFixedSize(command_width, 46)
-            rehome.clicked.connect(lambda: self._run_command("rehome"))
-            commands.addWidget(rehome)
-            self._set_home_button_state(self.home_ok)
-            self._control_buttons.append(rehome)
-
         zero = QPushButton("ZERO")
         primary_button(zero)
         zero.setIcon(ui_icon("target"))
@@ -250,32 +238,14 @@ class ControlPane(QWidget):
         commands.addWidget(zero)
         self._control_buttons.append(zero)
 
-        clear = QPushButton("CLEAR\nALARM")
-        primary_button(clear)
-        clear.setIcon(ui_icon("alarm-clear"))
-        clear.setIconSize(QSize(20, 20))
-        clear.setFixedSize(command_width, 46)
-        clear.clicked.connect(lambda: self._run_command("clear_alarm"))
-        commands.addWidget(clear)
-        self._control_buttons.append(clear)
-
-        reset = QPushButton("RESET")
-        danger_button(reset)
-        reset.setIcon(ui_icon("reset"))
-        reset.setIconSize(QSize(20, 20))
-        reset.setFixedSize(command_width, 46)
-        reset.clicked.connect(lambda: self._run_command("softreset"))
-        commands.addWidget(reset)
-        self._control_buttons.append(reset)
-
-        hold = QPushButton("HOLD")
-        danger_button(hold)
-        hold.setIcon(ui_icon("stop"))
-        hold.setIconSize(QSize(20, 20))
-        hold.setFixedSize(command_width, 46)
-        hold.clicked.connect(lambda: self._run_command("hold"))
-        commands.addWidget(hold)
-        self._control_buttons.append(hold)
+        stop = QPushButton("STOP")
+        danger_button(stop)
+        stop.setIcon(ui_icon("stop"))
+        stop.setIconSize(QSize(20, 20))
+        stop.setFixedSize(command_width, 46)
+        stop.clicked.connect(lambda: self._run_command("softreset"))
+        commands.addWidget(stop)
+        self._control_buttons.append(stop)
 
         layout.addLayout(commands)
 
@@ -471,9 +441,6 @@ class ControlPane(QWidget):
                 f"QPushButton:hover {{ background: {hover}; border-color: {hover}; }}"
             )
             self.home_button.setStyleSheet(style)
-            rehome_button = getattr(self, "rehome_button", None)
-            if rehome_button is not None:
-                rehome_button.setStyleSheet(style)
 
     def _start_homing_glow(self) -> None:
         if self._homing_glow_timer is not None:
@@ -509,9 +476,6 @@ class ControlPane(QWidget):
             f"outline: 2px solid {color}; outline-offset: -{border_width + 2}px; }}"
         )
         self.home_button.setStyleSheet(style)
-        rehome_button = getattr(self, "rehome_button", None)
-        if rehome_button is not None:
-            rehome_button.setStyleSheet(style)
 
     def _ensure_session_folder(self) -> bool:
         return bool(self.require_session_folder())
@@ -542,8 +506,8 @@ class ControlPane(QWidget):
     def _run_command(self, method: str) -> None:
         if method == "set_as_zero":
             self._run_backend(self.backend.set_as_zero)
-        elif method in ("home", "rehome"):
-            blocking_method = self._rehome_blocking if method == "rehome" else self._home_blocking
+        elif method == "home":
+            blocking_method = self._rehome_blocking
             worker = Worker(blocking_method)
             worker.signals.failed.connect(self._home_failed)
             self.pool.start(worker)
@@ -558,9 +522,6 @@ class ControlPane(QWidget):
         time.sleep(1)
         self.backend.scanner_command("clear_alarm")
         time.sleep(1)
-        self.backend.scanner_command("home")
-
-    def _home_blocking(self) -> None:
         self.backend.scanner_command("home")
 
     def _run_jog(self, method: str, value: float) -> None:
