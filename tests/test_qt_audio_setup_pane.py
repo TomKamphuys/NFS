@@ -735,6 +735,11 @@ def test_audio_pane_updates_config_and_project_memory_without_project_json(tmp_p
     project.set_project_dir(session_dir, str(config_file))
     pane = AudioSetupPane(backend, str(config_file))
     try:
+        pane.loopback_correction.setChecked(False)
+        assert "loopback_correction = False" in config_file.read_text(encoding="utf-8")
+        pane.post_sil.setValue(350.0)
+        pane.post_sil.editingFinished.emit()
+        assert "post_sil_ms = 350.0" in config_file.read_text(encoding="utf-8")
         pane.level.setValue(-12.0)
         pane.sweep_dur.setValue(2.5)
         pane.held_cal_level_dbfs = -27.5
@@ -744,6 +749,8 @@ def test_audio_pane_updates_config_and_project_memory_without_project_json(tmp_p
 
         data = project.get_project_data()
         assert data["sweep_settings"]["sweep_dur_s"] == "2.5"
+        assert data["sweep_settings"]["loopback_correction"] == "False"
+        assert data["sweep_settings"]["post_sil_ms"] == "350.0"
         assert "sweep_level_dbfs" not in data["sweep_settings"]
         assert "stage5_vars" not in data
         assert project.get_system_calibration(str(config_file)) == {
@@ -756,6 +763,7 @@ def test_audio_pane_updates_config_and_project_memory_without_project_json(tmp_p
         assert not list(session_dir.glob("*_project.json"))
         content = config_file.read_text(encoding="utf-8")
         assert "sweep_level_dbfs = -12.0" in content
+        assert "post_sil_ms = 350.0" in content
         assert "in_dev = 1" in content
         assert "out_dev = 2" in content
     finally:

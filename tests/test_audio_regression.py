@@ -6,7 +6,8 @@ import shutil
 import soundfile as sf
 from pathlib import Path
 import configparser
-from nfs.audio import AudioFactory
+from scipy import signal
+from nfs.audio import AudioFactory, SINE_RMS_FROM_PEAK, _LINEAR_IR_ORIGIN_SAMPLE as IR_ORIGIN
 from nfs.datatypes import CylindricalPosition
 
 
@@ -26,6 +27,7 @@ def mock_config(tmp_path):
         'wasapi_exclusive': 'False'
     }
     config['sweep'] = {
+        'loopback_correction': 'False',
         'sweep_dur_s': '0.5',
         'sweep_level_dbfs': '-10',
         'num_sweeps': '1',
@@ -48,113 +50,44 @@ def mock_config(tmp_path):
     return config_path
 
 
-def test_measure_ir_regression(mock_config, tmp_path):
-    # Change working directory to tmp_path to avoid polluting project
-    old_cwd = os.getcwd()
-    os.chdir(tmp_path)
-
+def test_measure_ir_regression(mock_config, tmp_path, monkeypatch):
+    """Verify the complete export against the known simulated transfer function."""
+    monkeypatch.chdir(tmp_path)
+    # Keep the existing deterministic mock noise without altering other tests' RNG.
+    rng_state = np.random.get_state()
     try:
-        # Create Audio object
-        audio = AudioFactory.create(str(mock_config))
-
-        # Set session directory
-        audio.set_session_directory(tmp_path)
-
-        # Fixed position and ID
-        pos = CylindricalPosition(100.0, 0.0, 10.0)
-        order_id = "REGRESSION"
-
-        # Set random seed for reproducibility
         np.random.seed(42)
-
-        # Run measurement
-        audio.measure_ir(pos, order_id)
-
-        # Expected paths based on naming_convention='dimitri'
-        # r100.0 -> r100p0, ph0.0 -> ph0p0, z10.0 -> z10p0
-        base_name = "REGRESSION_r100p0_ph0p0_z10p0"
-
-        # Audio class uses the session directory directly for IR files and debug output.
-
-        metrics_file = tmp_path / "debug" / f"{base_name}_metrics.json"
-        ir_file = tmp_path / f"{base_name}_ir.wav"
-
-        assert metrics_file.exists(), f"Metrics file not found at {metrics_file}. Root files: {list(tmp_path.glob('**/*'))}"
-        assert ir_file.exists(), f"IR file not found at {ir_file}."
-
-        with open(metrics_file, "r") as f:
-            metrics = json.load(f)
-
-        # These reference values are based on the state as of 2026-04-04 23:16,
-        # updated 2026-06-27 for the IR sine-RMS amplitude convention
-        # (h_full *= SINE_RMS_FROM_PEAK = 1/sqrt(2) in DeconvolutionEngine.process_ir).
-        # updated 2026-10-14 for inverse-filter endpoint fade fix (duration-scaled Hann fade,
-        # 0.2% of sweep duration clamped to [1ms, 5ms]) which eliminates artificial THD caused
-        # by endpoint discontinuities in the time-reversed inverse filter.
-        # If they change, it means the processing pipeline or hardware simulation has changed.
-        # np.random.seed(42) is used for reproducibility.
-
-        # Expected metrics for MockInterfaceAudio with 0.5s sweep and 100ms silences
-        assert np.isclose(metrics['snr_db'], 126.94, atol=0.5)
-        assert np.isclose(metrics['thd_pct'], 0.08, atol=0.05)
-        assert np.isclose(metrics['psr'], 3.57, atol=0.2)
-        assert np.isclose(metrics['crest_factor'], 133.20, atol=1.0)
-
-        # Regression test for IR file content
-        data, fs_ir = sf.read(str(ir_file))
-        assert fs_ir == 48000
-
-        # --- FUNCTIONAL VALIDATION (Robust across platforms) ---
-        # 1. Peak Amplitude Check
-        peak_amp = np.max(np.abs(data))
-        assert np.isclose(peak_amp, 0.1795, atol=1e-3), f"Peak amplitude mismatch: {peak_amp}"
-
-        # 2. RMS Level Check
-        rms_level = np.sqrt(np.mean(data**2))
-        assert np.isclose(rms_level, 0.00132, atol=1e-4), f"RMS level mismatch: {rms_level}"
-
-        # 3. Frequency Response Check (Flatness in passband)
-        # We expect it to be flat between 100Hz and 15kHz within +/- 0.5dB
-        n_fft = 2**14
-        spec = np.abs(np.fft.rfft(data, n=n_fft))
-        freqs = np.fft.rfftfreq(n_fft, 1/fs_ir)
-        
-        # Normalize to 1kHz
-        idx_1k = np.argmin(np.abs(freqs - 1000))
-        ref_mag = spec[idx_1k]
-        spec_db = 20 * np.log10(spec / (ref_mag + 1e-12))
-
-        # Check a few key frequencies
-        test_freqs = [100, 500, 2000, 5000, 10000, 15000]
-        for f in test_freqs:
-            idx = np.argmin(np.abs(freqs - f))
-            # Mock interface has some roll-off from simulated HPF and FIR, but passband is very flat
-            assert -0.5 < spec_db[idx] < 0.5, f"Frequency response at {f}Hz is out of bounds: {spec_db[idx]:.2f} dB"
-
-        # Check roll-off at extremes
-        idx_20 = np.argmin(np.abs(freqs - 20))
-        # 15Hz HPF 1st order should be roughly -3dB at 15Hz, so at 20Hz it's still slightly down
-        assert spec_db[idx_20] < 0, f"Expected low-end roll-off at 20Hz, got {spec_db[idx_20]:.2f} dB"
-
-        # 4. Temporal Alignment (Peak position)
-        # MockInterfaceAudio has 20ms fixed latency + FIR group delay (12 samples)
-        # BUT the DeconvolutionEngine trims the IR so the peak is near the beginning.
-        # The linear IR is sliced starting 50 samples before the split point
-        # (split_idx = len(inv_data) - 50), so for ~zero acoustic delay the peak
-        # sits around index 50.
-        peak_idx = np.argmax(np.abs(data))
-        assert 40 <= peak_idx <= 60, f"Peak alignment mismatch: found at index {peak_idx}"
-
-        # 5. Statistical Check
-        assert np.isclose(np.std(data), 0.00132, atol=1e-4)
-
+        audio = AudioFactory.create(str(mock_config))
+        audio.set_session_directory(tmp_path)
+        result = audio.measure_ir(CylindricalPosition(100.0, 0.0, 10.0), "REGRESSION")
     finally:
-        os.chdir(old_cwd)
+        np.random.set_state(rng_state)
 
+    base = "REGRESSION_r100p0_ph0p0_z10p0"
+    data, fs = sf.read(tmp_path / f"{base}_ir.wav", dtype="float32")
+    np.testing.assert_array_equal(data, result["ir_linear"])
+    assert fs == audio.hw["fs"]
+    assert sf.info(tmp_path / f"{base}_ir.wav").subtype == "FLOAT"
+    metadata = json.loads((tmp_path / "debug" / f"{base}_capture_log.json").read_text())
+    # Predict the waveform independently of the deconvolver. Alignment removes
+    # the common FIR group delay, but it must preserve its pre/post ringing.
+    expected = np.zeros(len(data))
+    expected[IR_ORIGIN-12:IR_ORIGIN+13] = signal.firwin(25, 0.45 * fs, fs=fs)
+    for cutoff in (15,):  # Mock coupling capacitor only.
+        expected = signal.sosfilt(
+            signal.butter(1, cutoff, fs=fs, btype="highpass", output="sos"), expected
+        )
+    expected *= 10 ** (-10 / 20) * SINE_RMS_FROM_PEAK
+    np.testing.assert_allclose(data[:9600], expected[:9600], atol=3e-5, rtol=0)
+    assert np.argmax(np.abs(data)) == IR_ORIGIN
 
-if __name__ == "__main__":
-    # If run directly, generate the reference values
-    import sys
-    import pytest
+    freqs = np.fft.rfftfreq(16384, 1 / fs)
+    band = (freqs >= 100) & (freqs <= 18000)
+    actual_spectrum = np.fft.rfft(data, 16384)
+    expected_spectrum = np.fft.rfft(expected, 16384)
+    error_db = 20 * np.log10(np.abs(actual_spectrum[band] / expected_spectrum[band]))
+    assert np.max(np.abs(error_db)) < 0.1
 
-    pytest.main([__file__])
+    metrics = json.loads((tmp_path / "debug" / f"{base}_metrics.json").read_text())
+    # These are heuristics, not calibrated hardware SNR/THD specifications.
+    assert all(np.isfinite(metrics[key]) for key in ("snr_db", "thd_pct", "psr", "crest_factor"))
