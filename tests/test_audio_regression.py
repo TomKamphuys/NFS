@@ -152,6 +152,52 @@ def test_measure_ir_regression(mock_config, tmp_path):
         os.chdir(old_cwd)
 
 
+def test_measure_ir_overwrite_same_file(mock_config, tmp_path):
+    """Test that running a second measurement overwriting the same WAV file does not crash.
+
+    This reproduces the bug where Windows file locking prevented soundfile from
+    overwriting a .wav file that was just written in the same process.
+    The fix removes the file before writing to avoid the permission conflict.
+    """
+    old_cwd = os.getcwd()
+    os.chdir(tmp_path)
+
+    try:
+        audio = AudioFactory.create(str(mock_config))
+        audio.set_session_directory(tmp_path)
+
+        pos = CylindricalPosition(100.0, 0.0, 10.0)
+        order_id = "OVERWRITE_TEST"
+
+        np.random.seed(42)
+
+        # First measurement — creates the WAV files
+        result1 = audio.measure_ir(pos, order_id)
+        assert result1["saved"] is True
+
+        base_name = "OVERWRITE_TEST_r100p0_ph0p0_z10p0"
+        ir_file = tmp_path / f"{base_name}_ir.wav"
+        dist_file = tmp_path / "Distortion" / f"{base_name}_ir_dist.wav"
+        assert ir_file.exists(), "First measurement should create IR file"
+        assert dist_file.exists(), "First measurement should create distortion file"
+
+        # Second measurement — overwrites the same files (this used to crash on Windows)
+        np.random.seed(42)
+        result2 = audio.measure_ir(pos, order_id)
+        assert result2["saved"] is True
+
+        # Verify files still exist and are valid
+        assert ir_file.exists(), "Second measurement should overwrite IR file"
+        assert dist_file.exists(), "Second measurement should overwrite distortion file"
+
+        data, fs_ir = sf.read(str(ir_file))
+        assert fs_ir == 48000
+        assert len(data) > 0
+
+    finally:
+        os.chdir(old_cwd)
+
+
 if __name__ == "__main__":
     # If run directly, generate the reference values
     import sys

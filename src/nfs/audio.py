@@ -1408,6 +1408,12 @@ class Audio(IAudio):
         """Saves a WAV file and embeds metadata into standard RIFF chunks."""
         channels = data.shape[1] if len(data.shape) > 1 else 1
 
+        # On Windows, soundfile (libsndfile) can fail to overwrite a file that was
+        # just written in the same process if the OS has not yet released the handle.
+        # Removing the file first avoids the permission conflict.
+        if filepath.exists():
+            filepath.unlink()
+
         kwargs = {'mode': 'w', 'samplerate': self.hw['fs'], 'channels': channels}
         if subtype:
             kwargs['subtype'] = subtype
