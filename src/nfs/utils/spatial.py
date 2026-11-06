@@ -379,9 +379,10 @@ def spherical_bessel_hankel(
     l: int, kr: np.ndarray
 ) -> np.ndarray:
     """
-    Compute the spherical Hankel function of the first kind hₗ(kr) = jₗ(kr) + i·yₗ(kr).
+    Compute the spherical Hankel function of the second kind hₗ(kr) = jₗ(kr) - i·yₗ(kr).
 
-    This represents outgoing spherical waves for radial propagation.
+    This represents outgoing spherical waves for radial propagation under the
+    engineering/audio FFT time convention (e^(+jωt)).
 
     :param l: Order of the spherical Bessel/Hankel function.
     :param kr: Wavenumber × distance array (k = 2πf/c, r = distance in meters).
@@ -390,7 +391,7 @@ def spherical_bessel_hankel(
     # Handle kr ≈ 0 to avoid division by zero in spherical_yn
     j = spherical_jn(l, kr)
     y = spherical_yn(l, np.where(kr < 1e-12, 1e-12, kr))
-    return j + 1j * y
+    return j - 1j * y
 
 
 def _compute_piston_sh_coeffs(
@@ -594,14 +595,15 @@ def _associated_legendre_vectorized(
 class SphericalHarmonicSpeakerModel:
     """
     Simulates a virtual speaker's acoustic response using spherical harmonics
-    for angular directivity and spherical Bessel/Hankel functions for radial
+    for angular directivity and an exponential Green's function for radial
     distance dependence.
 
     The frequency response H(f, r, θ, φ) is computed as:
-      H(f) = Σₗₘ aₗₘ(f) · Yₗₘ(θ, φ) · hₗ(kr) / hₗ(kr₀)
+      H(f) = [Σₗₘ aₗₘ(f) · Yₗₘ(θ, φ)] · exp(-j·k·(r - r₀)) · (r₀ / r)
 
-    where hₗ is the spherical Hankel function, kr = 2πf·r/c, and kr₀ is a
-    reference distance for normalization.
+    where the angular part uses real spherical harmonics and the radial part
+    uses the outgoing-wave Green's function from the engineering/audio FFT
+    convention (e^(+jωt)), matching the discrete piston model's behavior.
     """
 
     def __init__(
@@ -683,22 +685,20 @@ class SphericalHarmonicSpeakerModel:
     ) -> np.ndarray:
         """
         Compute the complex frequency response H(f) at the given position using
-        spherical harmonics expansion.
+        spherical harmonics for angular directivity and exponential Green's function
+        for radial propagation.
 
-        The acoustic pressure is represented as an expansion in spherical waves:
-          p(r, θ, φ) = Σ aₗₘ hₗ(kr) Yₗₘ(θ, φ)
+        The angular directivity is represented by spherical harmonic coefficients
+        aₗₘ projected onto real spherical harmonics Yₗₘ(θ, φ). The radial
+        propagation uses the outgoing-wave Green's function exp(-jkr) from the
+        engineering/audio FFT convention (e^(+jωt)), matching the discrete piston
+        model's phase behavior.
 
-        where hₗ is the spherical Hankel function of the first kind (outgoing wave),
-        Yₗₘ are the real spherical harmonics, and aₗₘ are the expansion coefficients.
+        The frequency response is:
+          H(f) = [Σ aₗₘ(f) · Yₗₘ(θ, φ)] · exp(-jkr) / r
 
-        The frequency response is normalized to a reference distance r₀:
-          H(f) = Σ aₗₘ(f) · Yₗₘ(θ, φ) · hₗ(kr) / hₗ(kr₀)
-
-        Optimization: the radial Hankel ratio hₗ(kr)/hₗ(kr₀) depends only on l,
-        not on m.  The angular SH value Yₗₘ(θ, φ) is a constant scalar for a
-        fixed position.  So we first collapse the (l, m) pairs into a per-l
-        angular-weighted coefficient sum, then multiply by the radial ratio once
-        per l instead of once per (l, m).
+        where exp(-jkr) is the outgoing-wave Green's function phase and 1/r is the
+        spherical wave amplitude decay.
 
         :param fs: Sample rate in Hz.
         :param position: Measurement position in cylindrical coordinates.
@@ -714,34 +714,20 @@ class SphericalHarmonicSpeakerModel:
         # Wavenumber array
         k = 2.0 * np.pi * np.linspace(0, fs / 2.0, num_bins) / SPEED_OF_SOUND
 
-        # Reference distance for normalization
-        r_ref = 1.0
-
         # Evaluate real spherical harmonics at the measurement angle (scalar per l,m)
         sh_vals = real_spherical_harmonics(self._order, theta, phi)
 
-        # Precompute radial Hankel ratios once per l (not once per l,m)
-        k_r = k * r_m
-        k_r_ref = k * r_ref
-        radial_ratios: Dict[int, np.ndarray] = {}
-        for l in range(self._order + 1):
-            h_lm = spherical_bessel_hankel(l, k_r)
-            h_lm_ref = spherical_bessel_hankel(l, k_r_ref)
-            # Avoid division by zero at DC and very low frequencies
-            ratio = np.where(
-                np.abs(h_lm_ref) > 1e-12,
-                h_lm / h_lm_ref,
-                1.0,
-            )
-            # Clamp extreme values that can occur near singularities
-            ratio = np.where(np.abs(ratio) > 1e6, 1.0, ratio)
-            radial_ratios[l] = ratio
+        # Radial propagation: outgoing-wave Green's function exp(-jkr) with 1/r decay.
+        # This matches the discrete piston model's convention and produces
+        # a clean impulse response with correct time delay.
+        kr = k * r_m
+        radial = np.exp(-1j * kr) / (r_m + 1e-12)
 
         # Collapse (l, m) pairs: for each l, sum aₗₘ · Yₗₘ over all m
-        # H = Σ_l [ (Σ_m aₗₘ · Yₗₘ) · hₗ(kr)/hₗ(kr₀) ]
+        # H = [Σ_l Σ_m aₗₘ · Yₗₘ] · radial
         H = np.zeros(num_bins, dtype=np.complex128)
+        angular_sum = np.zeros(num_bins, dtype=np.complex128)
         for l in range(self._order + 1):
-            angular_sum = np.zeros(num_bins, dtype=np.complex128)
             for m in range(-l, l + 1):
                 key = (l, m)
                 if key not in self._coeffs:
@@ -752,7 +738,7 @@ class SphericalHarmonicSpeakerModel:
                 y_lm = sh_vals.get(key, 0.0)
                 if y_lm != 0.0:
                     angular_sum += a_interp * y_lm
-            H += angular_sum * radial_ratios[l]
+        H = angular_sum * radial
 
         # DC component: force to 1.0 to avoid division by zero in deconvolution
         H[0] = 1.0 + 0j

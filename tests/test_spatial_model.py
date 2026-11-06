@@ -108,7 +108,7 @@ class TestSphericalBesselHankel:
     """Test the spherical Bessel/Hankel function computation."""
 
     def test_l0_at_small_kr(self):
-        """h₀(kr) ≈ -i·e^(ikr)/(kr) for small kr."""
+        """h₀⁽²⁾(kr) ≈ +i·e^(-ikr)/(kr) for small kr."""
         kr = np.array([1e-6, 0.01, 0.1])
         h = spherical_bessel_hankel(0, kr)
         # For small kr, |h₀(kr)| should be large (dominated by imaginary part)
@@ -272,8 +272,10 @@ class TestSphericalHarmonicSpeakerModel:
             f"Back should be attenuated vs front at high freq, got ratio={ratio:.3f}"
 
         # Back should not be flat (should vary with frequency)
-        back_std = np.std(mag_back)
-        assert back_std > 0.01, "Back response should vary with frequency, not be flat"
+        # Use dB std since back magnitudes are very small
+        mag_back_db = 20 * np.log10(mag_back + 1e-12)
+        back_std_db = np.std(mag_back_db)
+        assert back_std_db > 5.0, f"Back response should vary with frequency, got std={back_std_db:.1f}dB"
 
     def test_y11_sign_at_phi_180(self):
         """Y₁₁ at phi=180° should be negative (regression test for sign bug).
