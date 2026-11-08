@@ -68,7 +68,6 @@ def test_measure_ir_regression(mock_config, tmp_path, monkeypatch):
     np.testing.assert_array_equal(data, result["ir_linear"])
     assert fs == audio.hw["fs"]
     assert sf.info(tmp_path / f"{base}_ir.wav").subtype == "FLOAT"
-    metadata = json.loads((tmp_path / "debug" / f"{base}_capture_log.json").read_text())
     # Predict the waveform independently of the deconvolver. Alignment removes
     # the common FIR group delay, but it must preserve its pre/post ringing.
     expected = np.zeros(len(data))

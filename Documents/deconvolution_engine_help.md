@@ -78,29 +78,35 @@ decay intervals. Its nominal timing origin is sample 50 (zero-based); hardware
 response and acoustic delay can move the actual peak. IR amplitudes retain the
 existing sine-RMS convention.
 
-## 5. Saved captures and replay
+## 5. Saved debug captures
 
 With **Save raw capture for reprocessing** enabled, each saved measurement has:
 
 - A float32 stereo `_capture.wav`, with electrical loopback first and microphone
   second, containing markers, repeats and recorded tails.
-- A `_capture_log.json` containing settings, aligned intervals, inverse timing,
-  correction metadata and the relative reference archive path.
 - A small `_metrics.json` quality summary.
 - A shared `references/<session>/<reference-id>.npz` archive containing the exact
-  fundamental, inverse, speaker sweep, reference sweep and marker arrays.
+  fundamental, inverse, speaker sweep, reference sweep and marker arrays,
+  plus acquisition metadata in a Unicode scalar named `metadata_json`.
 
 A scan shares reference data across its positions. Each standalone measurement
-starts a new reference session. Keep the references directory with the capture
-logs when moving a project. Unsaved test sweeps do not write these archives.
+starts a new reference session. Keep the references directory with the raw
+captures when moving a project. Unsaved test sweeps do not write these archives.
 
-For replay, use the log's aligned intervals to average the raw inputs, apply the
-recorded microphone tail fade, and use the archived inverse with its explicit
-`inverse_origin_sample`, `sweep_samples` and `linear_ir_samples`. Restore speaker
-protection settings and, when enabled, supply the aligned loopback, digital
-reference, `L_s` and `loop_valid_samples` to `process_ir`. Do not substitute the
-raw electrical sweep for the digital inverse. Older inverse archives can still
-use the legacy layout when explicit timing is absent.
+Load the archive with `np.load(path, allow_pickle=False)` and decode
+`json.loads(archive['metadata_json'].item())`. The `shared_reference_v2` schema
+records sample rate, raw channel order, repeat count, planned capture layout,
+sweep parameters, applied speaker protection HPF and injected harmonic levels.
+The archive hash includes this metadata, so changed acquisition settings create
+a new reference archive even when the signal arrays are identical.
+
+Regeneration detects markers again from each raw recording using the saved
+marker and planned layout. Detected alignment positions and previous processing
+choices (correction, fades and export length) are not stored in this metadata;
+the regeneration engine decides them afresh. The original inverse and its timing
+remain available as reference data, without requiring a new engine to use them.
+No per-measurement capture-log JSON sidecar is written. Older reference archives
+without `metadata_json` need acquisition details supplied separately.
 
 ## 6. Validation and limits
 

@@ -103,7 +103,6 @@ def test_late_room_tail_does_not_wrap_and_protection_is_separate():
 
 
 def test_corrected_archive_replays_exactly(tmp_path):
-    import json
     import soundfile as sf
     from nfs.audio import DSPUtils
     from nfs.datatypes import CylindricalPosition
@@ -115,8 +114,7 @@ def test_corrected_archive_replays_exactly(tmp_path):
     e._run_sweep=lambda:raw
     e.set_session_directory(tmp_path)
     out=e.measure_ir(CylindricalPosition(100,0,0),'replay')
-    log=next((tmp_path/'debug').glob('*capture_log.json'))
-    meta=json.loads(log.read_text())
+    meta=out['capture_metadata']
     data,fs=sf.read(next((tmp_path/'debug').glob('*capture.wav')),dtype='float32')
     refs=np.load(tmp_path/'debug'/meta['reference_file'])
     avg=np.mean([data[r['sweep_start_sample']:r['capture_end_sample']]

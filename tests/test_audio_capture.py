@@ -139,7 +139,8 @@ def test_debug_archive_reconstructs_exact_ir(monkeypatch, tmp_path):
     stored, fs = sf.read(debug / f"{base}_capture.wav", dtype="float32")
     assert fs == 48000 and sf.info(debug / f"{base}_capture.wav").subtype == "FLOAT"
     np.testing.assert_array_equal(stored, np.column_stack((loop, mic)))
-    meta = json.loads((debug / f"{base}_capture_log.json").read_text())
+    assert not list(debug.glob('*_capture_log.json'))
+    meta = exported['capture_metadata']
     assert meta["raw_capture_channels"] == ["electrical_loopback", "microphone"]
     reference = np.load(debug / meta["reference_file"])
     np.testing.assert_array_equal(reference["inverse"], result["inv_sweep"])
@@ -156,6 +157,43 @@ def test_debug_archive_reconstructs_exact_ir(monkeypatch, tmp_path):
     np.testing.assert_array_equal(np.mean(loop_slices, axis=0), result["rx_loop_aligned"])
     assert list(debug.glob("*.wav")) == [debug / f"{base}_capture.wav"]
     assert len(list((debug / "references").rglob("*.npz"))) == 1
+
+
+def test_reference_archive_supports_fresh_marker_alignment(monkeypatch, tmp_path):
+    engine = make_engine(injected=True)
+    prepared = engine._prepare_sweep()
+    mic, loop = ideal_capture(prepared)
+    captured = engine._finish_sweep(prepared, mic, loop)
+    monkeypatch.setattr(engine, '_run_sweep', lambda: captured)
+    engine.set_session_directory(tmp_path)
+    exported = engine.measure_ir(CylindricalPosition(100, 0, 0))
+    archive = next((tmp_path / 'debug' / 'references').rglob('*.npz'))
+    with np.load(archive, allow_pickle=False) as saved:
+        metadata = json.loads(saved['metadata_json'].item())
+        assert metadata['schema'] == 'shared_reference_v2'
+        assert metadata['sample_rate'] == 48000
+        assert metadata['raw_capture_channels'] == ['electrical_loopback', 'microphone']
+        assert metadata['speaker_protection_hpf'] is None
+        assert metadata['sweep']['log_sweep_rate_s'] == engine.sweep_gen.log_sweep_rate
+        assert metadata['injected_harmonics_db']['H2'] is not None
+        assert 'aligned_repeats' not in metadata
+        layout = metadata['layout']
+        assert 'linear_ir_samples' not in layout
+        assert 'loopback_correction' not in metadata
+        data, fs = sf.read(next((tmp_path / 'debug').glob('*_capture.wav')), dtype='float32')
+        # Choose alignment policy afresh; do not reuse detected sample indices.
+        alignment = AlignmentEngine(fs, metadata['num_sweeps'], False, 10,
+                                    len(saved['marker']) * 1000 / fs)
+        averaged, _, _, _ = alignment.sync_and_average(
+            data[:, 1], data[:, 0], saved['marker'], layout['pre_samples'],
+            layout['slot_samples'], layout['sweep_samples'],
+            sweep_offset_samples=layout['sweep_offset_samples'],
+            capture_tail_samples=layout['capture_tail_samples'])
+        _, regenerated = DeconvolutionEngine(fs).process_ir(
+            averaged, saved['inverse'],
+            inverse_origin_sample=layout['inverse_origin_sample'],
+            sweep_samples=layout['sweep_samples'])
+        np.testing.assert_array_equal(regenerated, exported['ir_linear'])
 
 
 def test_missing_marker_rejected():
@@ -357,11 +395,15 @@ def setup_capture(monkeypatch, tmp_path):
     monkeypatch.setattr(engine, '_run_sweep', lambda: result)
     return engine, result
 
-def capture_metadata(directory):
-    return [json.loads(p.read_text()) for p in sorted(directory.glob('*_capture_log.json'))]
-
 def test_scan_shares_reference_and_single_measurements_start_new_sessions(monkeypatch, tmp_path):
     engine, captured = setup_capture(monkeypatch, tmp_path)
+    metadata = []
+    measure_ir = engine.measure_ir
+    def record_measurement(*args, **kwargs):
+        result = measure_ir(*args, **kwargs)
+        metadata.append(dict(result['capture_metadata']))
+        return result
+    monkeypatch.setattr(engine, 'measure_ir', record_measurement)
     scanner, motion = Mock(), Mock()
     scanner.get_position.side_effect = [CylindricalPosition(r, 0, 0) for r in (100, 200, 300, 400)]
     motion.ready.side_effect = [False, False, True]
@@ -370,13 +412,13 @@ def test_scan_shares_reference_and_single_measurements_start_new_sessions(monkey
     app.set_project_directory(tmp_path)
     app.take_measurement_set()
     scan = tmp_path/'measurement_set'/'debug'
-    metadata = capture_metadata(scan)
+    assert not list(scan.glob('*_capture_log.json'))
     assert len(metadata) == 2
     assert metadata[0]['reference_file'] == metadata[1]['reference_file']
     archives = list(scan.rglob('*.npz'))
     assert len(archives) == 1
     with np.load(archives[0]) as saved:
-        assert set(saved.files) == set(captured['digital_reference'])
+        assert set(saved.files) == set(captured['digital_reference']) | {'metadata_json'}
         for key, value in captured['digital_reference'].items():
             np.testing.assert_array_equal(saved[key], value)
             assert saved[key].dtype == value.dtype
@@ -386,7 +428,8 @@ def test_scan_shares_reference_and_single_measurements_start_new_sessions(monkey
     app.take_single_measurement()
     app.take_single_measurement()
     singles = tmp_path/'single_measurements'/'debug'
-    single_meta = capture_metadata(singles)
+    single_meta = metadata[2:]
+    assert not list(singles.glob('*_capture_log.json'))
     assert len(single_meta) == 2
     assert len(list(singles.rglob('*.npz'))) == 2
     assert single_meta[0]['reference_session_id'] != single_meta[1]['reference_session_id']
@@ -396,7 +439,7 @@ def test_scan_shares_reference_and_single_measurements_start_new_sessions(monkey
     # Relative links still resolve after the entire archive is relocated.
     moved = tmp_path/'moved_debug'
     shutil.copytree(scan, moved)
-    for row in capture_metadata(moved):
+    for row in metadata[:2]:
         assert (moved/row['reference_file']).read_bytes() == archives[0].read_bytes()
 
 def test_equal_references_are_written_once_but_changed_data_get_new_archive(monkeypatch, tmp_path):
@@ -421,6 +464,10 @@ def test_equal_references_are_written_once_but_changed_data_get_new_archive(monk
     c = engine._save_shared_reference(arrays)
     assert c['reference_id'] != b['reference_id']
     assert writer.call_count == 3
+    d = engine._save_shared_reference(arrays, {'num_sweeps': 2})
+    assert d['reference_id'] != c['reference_id']
+    assert engine._save_shared_reference(arrays, {'num_sweeps': 2}) == d
+    assert writer.call_count == 4
 
 @pytest.mark.parametrize('save,debug', [(False, True), (True, False)])
 def test_unsaved_or_archive_disabled_does_not_write_reference(monkeypatch,tmp_path,save,debug):

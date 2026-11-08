@@ -31,8 +31,8 @@ Reading guide: one measurement, in order
 8. _export_records removes processing offsets, preserves the marker-derived
    origin, selects the export duration and fades the full record's far end.
    The linear file excludes earlier harmonics; the full file retains them.
-9. Audio.measure_ir verifies the result and optionally saves WAVs and replay
-   metadata. MockInterfaceAudio replaces acquisition but reuses this pipeline.
+9. Audio.measure_ir verifies the result and optionally saves WAVs and debug
+   artifacts. MockInterfaceAudio replaces acquisition but reuses this pipeline.
 
 Conventions worth keeping in mind
 --------------------------------
@@ -1802,17 +1802,25 @@ class Audio(IAudio):
         self._ensure_directories()
         logger.debug(f"Audio session directory updated to: {session_path}")
 
-    def _save_shared_reference(self, arrays: Dict[str, np.ndarray]) -> Dict[str, str]:
+    def _save_shared_reference(self, arrays: Dict[str, np.ndarray],
+                               acquisition: Optional[Dict[str, Any]] = None) -> Dict[str, str]:
         """Save exact digital references once per session and return their link.
 
-        Hash the samples, their names/shapes/dtypes and sample rate. This means
+        Hash the samples, their names/shapes/dtypes and acquisition metadata. This means
         changed playback or inverse data cannot silently reuse an older file,
         while equal references from thousands of positions share one archive.
         """
+        # A Unicode scalar is readable with allow_pickle=False. Never archive
+        # Python objects or capture-specific alignment/processing results.
+        metadata = dict(acquisition or {})
+        metadata.update(schema="shared_reference_v2", sample_rate=self.hw['fs'])
+        payload = dict(arrays)
+        payload['metadata_json'] = np.array(json.dumps(
+            metadata, sort_keys=True, separators=(',', ':'), allow_nan=False))
         digest = hashlib.sha256()
-        digest.update(f"nfs_reference_v1;fs={self.hw['fs']}".encode('ascii'))
-        for name in sorted(arrays):
-            values = np.ascontiguousarray(arrays[name])
+        digest.update(b'nfs_reference_v2')
+        for name in sorted(payload):
+            values = np.ascontiguousarray(payload[name])
             header = json.dumps([name, values.dtype.str, list(values.shape)],
                                 separators=(',', ':')).encode('utf-8')
             # Length-prefix the header so different array descriptions cannot
@@ -1830,15 +1838,15 @@ class Audio(IAudio):
                 # Compression is lossless: the float64 inverse stays exact.
                 # Publish only a complete archive, never a half-written NPZ.
                 with temporary.open('xb') as handle:
-                    np.savez_compressed(handle, **arrays)
+                    np.savez_compressed(handle, **payload)
                 temporary.replace(destination)
             finally:
                 temporary.unlink(missing_ok=True)
         return {
-            "reference_archive_schema": "shared_reference_v1",
+            "reference_archive_schema": "shared_reference_v2",
             "reference_session_id": self._reference_session_id,
             "reference_id": reference_id,
-            # Relative to the capture JSON, so moving the project still works.
+            # Relative to the debug directory, so moving the project still works.
             "reference_file": relative.as_posix(),
         }
 
@@ -2031,6 +2039,26 @@ class Audio(IAudio):
             "rx_mic_conditioned": avg_mic, "rx_loop_aligned": avg_loop,
             "debug_mic_slices": mic_slices, "psr": psr,
             "psr_reference": self.alignment_engine.last_psr_reference,
+            "acquisition_metadata": {
+                "producer": "nfs.marker_then_dual_sweep_v1",
+                "raw_capture_channels": ["electrical_loopback", "microphone"],
+                "num_sweeps": self.cap['num_sweeps'],
+                "layout": {key: value for key, value in prepared['timing'].items()
+                           if key not in ('linear_ir_samples', 'actual_sample_rate',
+                                          'stream_status')},
+                "sweep": {
+                    "start_hz": self.sweep_gen.f1, "end_hz": self.hw['fs'] / 2,
+                    "active_duration_s": self.sweep_gen.active_duration_s,
+                    "log_sweep_rate_s": self.sweep_gen.log_sweep_rate,
+                    "guard_samples": self.sweep_gen.guard_samples,
+                    "level_dbfs": self.cap['sweep_level_dbfs'],
+                },
+                "speaker_protection_hpf": {
+                    "freq_hz": self.protection_filter.freq_hz,
+                    "order": self.protection_filter.order,
+                } if self.protection_filter else None,
+                "injected_harmonics_db": timing['injected_harmonics_db'],
+            },
             "capture_metadata": timing,
             "raw_recordings": (rec_loop, rec_mic),
             "digital_reference": {
@@ -2185,7 +2213,7 @@ class Audio(IAudio):
             main_file_name = f"{base_name}_ir.wav"
             dist_file_name = f"{base_name}_ir_dist.wav"
 
-        # 3. Deconvolve before saving metadata so replay records the actual correction.
+        # 3. Deconvolve before returning metadata so it includes the actual correction.
         correction = {}
         if self.cap.get('loopback_correction', True):
             correction = dict(loop_data=result['rx_loop_aligned'],
@@ -2205,22 +2233,20 @@ class Audio(IAudio):
             logger.info("Linear loopback correction applied (harmonics excluded; "
                         "700–1300 Hz gain preserved; marker alignment unchanged)")
 
-        # 4. Optional replay archive: raw input, shared references and metadata.
-        # Intermediate WAVs can be reconstructed from these files when needed.
+        # 4. Optional debug artifacts: raw input and shared references.
         if save and self.cap['debug_saves']:
             logger.info("Saving raw capture and shared reference...")
             result['capture_metadata'].update(
-                self._save_shared_reference(result['digital_reference'])
+                self._save_shared_reference(result['digital_reference'],
+                                            result['acquisition_metadata'])
             )
             # Keep the marker and every unconditioned repeat from both channels.
-            # Channel order and exact extraction indices are in the JSON sidecar.
+            # Channel order is electrical loopback, then microphone.
             filename = f"{base_name}_capture.wav"
             self._save_wav_with_metadata(
                 self.debug_dir / filename, np.column_stack(result['raw_recordings']),
                 filename, subtype='FLOAT',
             )
-            with open(self.debug_dir / f"{base_name}_capture_log.json", 'w', encoding='utf-8') as f:
-                json.dump(result['capture_metadata'], f, indent=2)
 
         # 5. DSP Verification
         metrics = self.verifier.calculate_metrics(
