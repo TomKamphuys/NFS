@@ -23,6 +23,8 @@ build/
 /.rft_*/
 /.pytest_tmp*/
 /pytest-of-*/
+/tmp/
+/reports/
 .coverage
 htmlcov/
 

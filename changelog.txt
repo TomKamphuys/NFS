@@ -1,4 +1,22 @@
 --------
+03/11/26
+--------
+Deconvolution engine v2
+
+Cleaner impulse-response calculation: a revised inverse filter and convolution
+preserve more of the response and give cleaner separation of non-linear terms.
+
+Optional audio-interface correction: uses the electrical loopback to compensate
+for interface frequency response and phase, while keeping valid harmonic
+distortion results.
+
+Better handling of long decay: Post Silence is retained in the IR, allowing
+late reflections to remain in the measurement.
+
+More reliable timing: stronger marker detection, checks for missing markers
+and incomplete recordings.
+
+--------
 27/10/26
 --------
 Fixed PyInstaller distribution missing package data and dynamically imported
