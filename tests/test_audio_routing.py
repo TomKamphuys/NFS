@@ -1,22 +1,41 @@
 """Physical channel mapping and sweep-only protection regressions."""
+import sys
+from types import ModuleType
 from unittest.mock import Mock
 
 import numpy as np
 import pytest
+
 import nfs.audio as audio
+
+
+@pytest.fixture
+def sounddevice(monkeypatch):
+    module = ModuleType("sounddevice")
+    module.AsioSettings = lambda **kwargs: kwargs
+    module.WasapiSettings = lambda **kwargs: kwargs
+    module.Stream = None
+    module.stop = lambda: None
+    module._terminate = None
+    module._initialize = None
+    module.query_hostapis = None
+    module.query_devices = None
+    monkeypatch.setitem(sys.modules, "sounddevice", module)
+    monkeypatch.setattr(audio, "sd", module)
+    return module
 
 
 @pytest.mark.parametrize("api", ["Windows WASAPI", "MME"])
 @pytest.mark.parametrize("operation", ["capture", "finite_sine"])
-def test_non_asio_stream_preserves_physical_channel_columns(monkeypatch, api, operation):
+def test_non_asio_stream_preserves_physical_channel_columns(monkeypatch, sounddevice, api, operation):
     """Sparse/reordered physical channels must not become ASIO-style columns 0/1."""
     from test_audio_capture import make_engine
     engine = make_engine()
     engine.hw.update(ch_in_loop=3, ch_in_mic=1, ch_out_spkr=2, ch_out_ref=0,
                      wasapi_exclusive=True)
     monkeypatch.setattr(engine, '_get_api_name', lambda dev: api)
-    monkeypatch.setattr(audio.sd, 'WasapiSettings', lambda **kw: kw)
-    monkeypatch.setattr(audio.sd, 'stop', lambda: None)
+    monkeypatch.setattr(sounddevice, 'WasapiSettings', lambda **kw: kw)
+    monkeypatch.setattr(sounddevice, 'stop', lambda: None)
     monkeypatch.setattr(audio, '_AudioMeterWorker', lambda *args: Mock())
     prepared = engine._prepare_sweep()
     monkeypatch.setattr(engine, '_prepare_sweep', lambda: prepared)
@@ -49,7 +68,7 @@ def test_non_asio_stream_preserves_physical_channel_columns(monkeypatch, api, op
         def __exit__(self, *args):
             pass
 
-    monkeypatch.setattr(audio.sd, 'Stream', Stream)
+    monkeypatch.setattr(sounddevice, 'Stream', Stream)
     if operation == 'capture':
         mic, loop = engine._run_sweep()
         assert np.all(mic == .2) and np.all(loop == .4)
@@ -58,7 +77,7 @@ def test_non_asio_stream_preserves_physical_channel_columns(monkeypatch, api, op
 
 
 @pytest.mark.parametrize("continuous", [False, True])
-def test_sine_bypasses_sweep_protection_in_both_modes(monkeypatch, continuous):
+def test_sine_bypasses_sweep_protection_in_both_modes(monkeypatch, sounddevice, continuous):
     from contextlib import nullcontext
     from test_audio_capture import make_engine
     engine = make_engine()
@@ -66,8 +85,8 @@ def test_sine_bypasses_sweep_protection_in_both_modes(monkeypatch, continuous):
     engine.protection_filter = audio.ProtectionFilter(fs, 10000, 4)
     monkeypatch.setattr(engine, '_get_api_name', lambda dev: 'ASIO')
     monkeypatch.setattr(audio, '_asio_thread_context', lambda enabled: nullcontext())
-    monkeypatch.setattr(audio.sd, 'AsioSettings', lambda **kw: kw)
-    monkeypatch.setattr(audio.sd, 'stop', lambda: None)
+    monkeypatch.setattr(sounddevice, 'AsioSettings', lambda **kw: kw)
+    monkeypatch.setattr(sounddevice, 'stop', lambda: None)
     monkeypatch.setattr(audio, '_AudioMeterWorker', lambda *args: Mock())
     blocks = []
     count = round(.01 * fs)
@@ -95,7 +114,7 @@ def test_sine_bypasses_sweep_protection_in_both_modes(monkeypatch, continuous):
         def close(self):
             pass
 
-    monkeypatch.setattr(audio.sd, 'Stream', Stream)
+    monkeypatch.setattr(sounddevice, 'Stream', Stream)
     engine.play_sine(500, -12, None if continuous else .01)
     if continuous:
         engine.stop_sine()
