@@ -29,7 +29,7 @@ def test_startup_scanner_warning_opens_scanner_settings(monkeypatch):
     qt_main.show_startup_warning(window, backend)
 
     assert warnings[0][1] == "Scanner Startup Warning"
-    assert window.calls == [("settings", "scanner")]
+    assert window.calls == [("settings", None)]
 
 
 def test_startup_audio_warning_opens_audio_setup(monkeypatch):

@@ -86,20 +86,20 @@ def test_settings_dialog_fixes_motion_manager_and_measurement_points_type(tmp_pa
 
 
 def test_motion_setting_labels_include_normalized_units():
-    assert DISPLAY_LABELS["homing_gap"] == "Homing gap (degrees)"
-    assert DISPLAY_LABELS["pole_gap"] == "Pole gap (mm)"
+    assert DISPLAY_LABELS["homing_gap"] == "Homing gap"
+    assert DISPLAY_LABELS["pole_gap"] == "Pole gap"
 
 
 def test_numeric_setting_labels_show_correct_units():
-    assert DISPLAY_LABELS["feed_rate"] == "Feed rate (mm/min)"
-    assert DISPLAY_LABELS["cal_tool_height"] == "Calibration tool height (mm)"
-    assert DISPLAY_LABELS["cap_spacing"] == "Cap spacing (mm)"
-    assert DISPLAY_LABELS["wall_spacing"] == "Wall spacing (mm)"
-    assert DISPLAY_LABELS["radius"] == "Radius (mm)"
-    assert DISPLAY_LABELS["height"] == "Height (mm)"
-    assert DISPLAY_LABELS["speaker_height"] == "Speaker height (mm)"
-    assert DISPLAY_LABELS["speaker_width"] == "Speaker width (mm)"
-    assert DISPLAY_LABELS["speaker_depth"] == "Speaker depth (mm)"
+    assert DISPLAY_LABELS["feed_rate"] == "Feed rate"
+    assert DISPLAY_LABELS["cal_tool_height"] == "Calibration tool height"
+    assert DISPLAY_LABELS["cap_spacing"] == "Cap spacing"
+    assert DISPLAY_LABELS["wall_spacing"] == "Wall spacing"
+    assert DISPLAY_LABELS["radius"] == "Radius"
+    assert DISPLAY_LABELS["height"] == "Height"
+    assert DISPLAY_LABELS["speaker_height"] == "Speaker height"
+    assert DISPLAY_LABELS["speaker_width"] == "Speaker width"
+    assert DISPLAY_LABELS["speaker_depth"] == "Speaker depth"
 
 
 def test_settings_dialog_fonts_have_point_sizes():

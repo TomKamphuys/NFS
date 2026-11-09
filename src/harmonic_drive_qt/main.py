@@ -53,7 +53,7 @@ def show_startup_warning(window: MainWindow, backend: BackendManager) -> None:
     if is_audio_setup_warning:
         window.show_audio()
     else:
-        window.show_settings("scanner")
+        window.show_settings()
 
 
 def main() -> int:

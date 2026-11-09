@@ -12,7 +12,7 @@ from .backend import BackendManager
 from .control_pane import ControlPane
 from .grid_pane import GridGeneratorPane
 from .live_capture import LiveCapturePane
-from .settings_dialog import SettingsDialog
+from .settings_pane import SettingsPane
 from .styles import danger_button, primary_button
 from .widgets import LocallyPaintedSplitter
 from .qt_compat import (
@@ -159,6 +159,9 @@ class MainWindow(QMainWindow):
         self.audio_pane.saved.connect(lambda: self.live_capture.refresh_all())
         self.left_stack.addWidget(self.control_pane)
         self.left_stack.addWidget(self.audio_pane)
+        self.settings_pane = SettingsPane(self.backend, self.config_file, self.on_settings_applied)
+        self.settings_pane.saved.connect(lambda: self.live_capture.refresh_all())
+        self.left_stack.addWidget(self.settings_pane)
         left_layout.addWidget(self.menu)
         left_layout.addWidget(self.left_stack, 1)
 
@@ -334,10 +337,7 @@ class MainWindow(QMainWindow):
 
     def show_settings(self, initial_section: str | None = None) -> None:
         self._mark_active(self.settings_button)
-        dialog = SettingsDialog(self.config_file, self.on_settings_applied, self)
-        if initial_section is not None:
-            dialog.select_section(initial_section)
-        dialog.exec()
+        self.left_stack.setCurrentWidget(self.settings_pane)
         # Restore active mark based on current view
         if self.left_stack.currentWidget() is self.control_pane:
             if self.right_stack.currentWidget() is self.live_capture:
@@ -348,7 +348,7 @@ class MainWindow(QMainWindow):
             self._mark_active(self.audio_button, self.live_button)
 
     def on_settings_applied(self, changed_sections: set[str]) -> None:
-        from .settings_dialog import SCANNER_RELATED_SECTIONS
+        from .settings_pane import SCANNER_RELATED_SECTIONS
 
         scanner_changed = bool(changed_sections & SCANNER_RELATED_SECTIONS) or "logging" in changed_sections
         ui_changed = "app" in changed_sections
