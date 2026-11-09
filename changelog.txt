@@ -17,6 +17,15 @@ More reliable timing: stronger marker detection, checks for missing markers
 and incomplete recordings.
 
 --------
+27/10/26
+--------
+Fixed PyInstaller distribution missing package data and dynamically imported
+modules. The frozen application now correctly bundles grid generator diagram
+images, RFT calculator SVG assets, and the RFT calculator Python modules.
+The RFT calculator module loads without tkinter in the frozen app by deferring
+tkinter imports to the standalone GUI window only.
+
+--------
 17/10/26
 --------
 Fixed marker alignment quality reporting (#43). PSR now uses the same
