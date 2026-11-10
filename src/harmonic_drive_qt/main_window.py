@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from importlib.metadata import PackageNotFoundError, version as _get_package_version
 from pathlib import Path
 import configparser
 
+from .app_version import get_nfs_version
 from . import project
 
 from .audio_setup_pane import AudioSetupPane
@@ -35,20 +35,6 @@ from .qt_compat import (
 
 
 NO_SESSION_FOLDER_TEXT = "No session folder selected"
-
-
-def _get_nfs_version() -> str:
-    """Return the package version, falling back to the frozen-app version if needed.
-
-    In a normal installation, importlib.metadata provides the version. Inside a
-    PyInstaller bundle the metadata may not be available, so we fall back to the
-    version baked into the runtime hook (set as ``nfs.__frozen_version__``).
-    """
-    try:
-        return _get_package_version("nfs")
-    except PackageNotFoundError:
-        import nfs
-        return getattr(nfs, "__frozen_version__", "unknown")
 
 
 def _config_bool(config_file: str, section: str, key: str, fallback: bool) -> bool:
@@ -107,7 +93,7 @@ class MainWindow(QMainWindow):
         title = QLabel("HALS Control")
         title.setStyleSheet("font-size: 18px; font-weight: 800; color: #ffffff; border: none;")
 
-        version_label = QLabel(f"v{_get_nfs_version()}")
+        version_label = QLabel(f"v{get_nfs_version()}")
         version_label.setStyleSheet("font-size: 13px; font-weight: 400; color: #93c5fd; border: none;")
 
         self.project_path = QLineEdit(self._project_path_display())

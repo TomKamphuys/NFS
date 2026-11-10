@@ -59,20 +59,44 @@ jobs:
         id: version
         shell: pwsh
         run: |
-          $ref = "${{ github.ref }}"
+          $ref = $env:GITHUB_REF
+          $content = Get-Content pyproject.toml -Raw
+          $match = [regex]::Match($content, '(?m)^\s*version\s*=\s*"([^"]+)"')
+          if (-not $match.Success) { throw "Could not read project version from pyproject.toml" }
+          $projectVersion = $match.Groups[1].Value
           if ($ref -like "refs/tags/v*") {
             $version = $ref -replace "refs/tags/v", ""
+            if ($version -ne $projectVersion) {
+              throw "Tag version $version does not match pyproject.toml version $projectVersion"
+            }
           } else {
-            $content = Get-Content pyproject.toml -Raw
-            $match = [regex]::Match($content, '(?m)^\s*version\s*=\s*"([^"]+)"')
-            $version = $match.Groups[1].Value
+            $version = $projectVersion
           }
-          if (-not $version) { $version = "0.0.0" }
           Write-Host "Resolved version: $version"
           "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
       - name: Build executable with PyInstaller
-        run: uv run pyinstaller packaging/hals.spec --noconfirm --clean
+        run: uv run --no-sync pyinstaller packaging/hals.spec --noconfirm --clean
+
+      - name: Verify frozen executable against stale metadata
+        shell: pwsh
+        run: |
+          $verificationDir = Join-Path $env:RUNNER_TEMP "HALS-version-check"
+          New-Item -ItemType Directory -Path $verificationDir -Force | Out-Null
+          Copy-Item -Path "dist\HALS Near Field Scanner\*" -Destination $verificationDir -Recurse -Force
+          $metadataPath = Join-Path $verificationDir "_internal\nfs-*.dist-info\METADATA"
+          $metadataFile = Get-ChildItem -Path $metadataPath | Select-Object -First 1
+          if (-not $metadataFile) { throw "Bundled nfs distribution metadata was not found" }
+          $metadata = Get-Content -LiteralPath $metadataFile.FullName -Raw
+          $staleMetadata = [regex]::Replace($metadata, '(?m)^Version: [^\r\n]+', 'Version: 0.2.1', 1)
+          if ($staleMetadata -eq $metadata) { throw "Could not set stale nfs metadata for verification" }
+          Set-Content -LiteralPath $metadataFile.FullName -Value $staleMetadata -Encoding utf8
+          $executable = Join-Path $verificationDir "HALS Near Field Scanner.exe"
+          & $executable --verify-version "${{ steps.version.outputs.version }}"
+          if ($LASTEXITCODE -ne 0) {
+            throw "Frozen executable did not verify as version ${{ steps.version.outputs.version }} (exit code $LASTEXITCODE)"
+          }
+          Write-Host "Frozen executable verified as version ${{ steps.version.outputs.version }} despite stale 0.2.1 metadata"
 
       - name: Install Inno Setup
         run: choco install innosetup --no-progress --yes
@@ -91,4 +115,6 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: dist/installer/*.exe
+          overwrite_files: true
+          fail_on_unmatched_files: true
           generate_release_notes: true

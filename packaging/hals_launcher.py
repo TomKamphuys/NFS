@@ -64,6 +64,14 @@ def _prepare_runtime_environment() -> None:
 
 
 def main() -> int:
+    arguments = sys.argv[1:]
+    if arguments and arguments[0] == "--verify-version":
+        if len(arguments) != 2:
+            return 2
+        from harmonic_drive_qt.app_version import get_nfs_version
+
+        return 0 if get_nfs_version() == arguments[1] else 1
+
     if getattr(sys, "frozen", False):
         _prepare_runtime_environment()
 
