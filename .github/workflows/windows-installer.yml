@@ -97,16 +97,20 @@ jobs:
           Set-Content -LiteralPath $metadataFile -Value $staleMetadata -Encoding utf8
           $executable = Join-Path $verificationDir "HALS Near Field Scanner.exe"
           $versionReport = Join-Path $verificationDir "actual-version.txt"
-          & $executable --verify-version "${{ steps.version.outputs.version }}" --report $versionReport
-          if (Test-Path -LiteralPath $versionReport) {
-            $actualVersion = Get-Content -LiteralPath $versionReport -Raw
-          } else {
-            $actualVersion = "not reported"
+          $verificationProcess = Start-Process -FilePath $executable -ArgumentList @(
+            "--verify-version",
+            "${{ steps.version.outputs.version }}",
+            "--report",
+            $versionReport
+          ) -Wait -PassThru
+          if (-not (Test-Path -LiteralPath $versionReport)) {
+            throw "Frozen executable did not create its version report (exit code $($verificationProcess.ExitCode))"
           }
-          if ($LASTEXITCODE -ne 0) {
-            throw "Frozen executable reported '$actualVersion' instead of ${{ steps.version.outputs.version }} (exit code $LASTEXITCODE)"
+          $actualVersion = Get-Content -LiteralPath $versionReport -Raw
+          if ($verificationProcess.ExitCode -ne 0) {
+            throw "Frozen executable reported '$actualVersion' instead of ${{ steps.version.outputs.version }} (exit code $($verificationProcess.ExitCode))"
           }
-          Write-Host "Frozen executable verified as version ${{ steps.version.outputs.version }} despite stale 0.2.1 metadata"
+          Write-Host "Frozen executable verified as version $actualVersion despite stale 0.2.1 metadata"
 
       - name: Install Inno Setup
         run: choco install innosetup --no-progress --yes
