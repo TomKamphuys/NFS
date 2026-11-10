@@ -84,13 +84,17 @@ jobs:
           $verificationDir = Join-Path $env:RUNNER_TEMP "HALS-version-check"
           New-Item -ItemType Directory -Path $verificationDir -Force | Out-Null
           Copy-Item -Path "dist\HALS Near Field Scanner\*" -Destination $verificationDir -Recurse -Force
-          $metadataPath = Join-Path $verificationDir "_internal\nfs-*.dist-info\METADATA"
-          $metadataFile = Get-ChildItem -Path $metadataPath | Select-Object -First 1
-          if (-not $metadataFile) { throw "Bundled nfs distribution metadata was not found" }
-          $metadata = Get-Content -LiteralPath $metadataFile.FullName -Raw
-          $staleMetadata = [regex]::Replace($metadata, '(?m)^Version: [^\r\n]+', 'Version: 0.2.1', 1)
+          $metadataDirectory = Join-Path $verificationDir "_internal"
+          if (-not (Test-Path -LiteralPath $metadataDirectory)) { $metadataDirectory = $verificationDir }
+          $metadataDir = Get-ChildItem -LiteralPath $metadataDirectory -Directory -Filter "nfs-*.dist-info" | Select-Object -First 1
+          if (-not $metadataDir) { throw "Bundled nfs distribution metadata was not found under $metadataDirectory" }
+          $metadataFile = Join-Path $metadataDir.FullName "METADATA"
+          if (-not (Test-Path -LiteralPath $metadataFile)) { throw "Bundled metadata file was not found at $metadataFile" }
+          Write-Host "Verifying with bundled metadata at $metadataFile"
+          $metadata = Get-Content -LiteralPath $metadataFile -Raw
+          $staleMetadata = [regex]::Replace($metadata, '(?m)^Version: [^\r\n]+', 'Version: 0.2.1')
           if ($staleMetadata -eq $metadata) { throw "Could not set stale nfs metadata for verification" }
-          Set-Content -LiteralPath $metadataFile.FullName -Value $staleMetadata -Encoding utf8
+          Set-Content -LiteralPath $metadataFile -Value $staleMetadata -Encoding utf8
           $executable = Join-Path $verificationDir "HALS Near Field Scanner.exe"
           & $executable --verify-version "${{ steps.version.outputs.version }}"
           if ($LASTEXITCODE -ne 0) {
