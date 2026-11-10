@@ -565,13 +565,13 @@ def test_audio_factory_accepts_comma_decimal_config_values(tmp_path):
 
     audio = AudioFactory.create(str(config_path))
 
-    assert audio.hw["wasapi_exclusive"] is False
-    assert audio.cap["debug_saves"] is False
+    assert audio.hw.wasapi_exclusive is False
+    assert audio.cap.debug_saves is False
     assert audio.alignment_engine.align_to_first_marker is True
-    assert audio.cap["sweep_dur_s"] == 0.5
-    assert audio.cap["sweep_level_dbfs"] == -10.5
-    assert audio.cap["pre_sil_ms"] == 50.5
-    assert audio.cap["post_sil_ms"] == 60.5
+    assert audio.cap.sweep_dur_s == 0.5
+    assert audio.cap.sweep_level_dbfs == -10.5
+    assert audio.cap.pre_sil_ms == 50.5
+    assert audio.cap.post_sil_ms == 60.5
     assert audio.harmonic_injector.h2_db == -20.5
     assert audio.protection_filter.freq_hz == 500.5
     assert audio.protection_filter.hpf_corr_db_cap == 6.5
@@ -736,8 +736,8 @@ def test_audio_factory_resolves_saved_identity_without_configured_ids(mock_catal
 
     audio = AudioFactory.create(str(config_path))
 
-    assert audio.hw["dev_in"] == 20
-    assert audio.hw["dev_out"] == 20
+    assert audio.hw.dev_in == 20
+    assert audio.hw.dev_out == 20
 
 
 @pytest.mark.parametrize('value,expected', [

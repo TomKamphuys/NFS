@@ -73,6 +73,7 @@ Key Features:
 
 import configparser
 import ctypes
+import dataclasses
 import hashlib
 import json
 import os
@@ -82,6 +83,7 @@ import time
 import uuid
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional, Dict, Any, List, Tuple
 from nfs import registry
@@ -99,6 +101,38 @@ from .utils.dsp import DSPUtils
 from . import _audio_backend as sd
 from .naming import IRNamingConvention, NamingConventionFactory
 from .debug_artifacts import DebugArtifactHandler, DebugArtifactFactory
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  CONFIGURATION DATACLASSES
+# ─────────────────────────────────────────────────────────────────────────────
+
+@dataclass(frozen=True)
+class HardwareConfig:
+    """Hardware-level audio settings — immutable after construction."""
+    dev_in: int
+    dev_out: int
+    ch_in_mic: int
+    ch_in_loop: int
+    ch_out_spkr: int
+    ch_out_ref: int
+    fs: float
+    blocksize: int
+    wasapi_exclusive: bool
+
+
+@dataclass(frozen=True)
+class CaptureConfig:
+    """Capture-level sweep and measurement settings — immutable after construction."""
+    loopback_correction: bool
+    naming_convention: str
+    debug_saves: bool
+    sweep_dur_s: float
+    sweep_level_dbfs: float
+    num_sweeps: int
+    pre_sil_ms: float
+    post_sil_ms: float
+    marker_gap_ms: float
 
 
 @contextmanager
@@ -1754,8 +1788,8 @@ class Audio(IAudio):
     """Orchestrates signal generation, streaming, and deconvolution."""
 
     def __init__(self,
-                 hw_config: Dict[str, Any],
-                 capture_config: Dict[str, Any],
+                 hw_config: HardwareConfig,
+                 capture_config: CaptureConfig,
                  sweep_gen: SweepGenerator,
                  marker_gen: MarkerGenerator,
                  alignment_engine: AlignmentEngine,
@@ -1779,12 +1813,12 @@ class Audio(IAudio):
         self.alignment_engine = alignment_engine
         self.deconv_engine = deconv_engine
         self.naming_convention = naming_convention or NamingConventionFactory.create(
-            self.cap.get('naming_convention', 'dimitri'))
+            self.cap.naming_convention)
         self.debug_handler = debug_handler or DebugArtifactFactory.create(
-            self.cap.get('debug_saves', True), self.hw)
+            self.cap.debug_saves, self.hw.fs)
         self.harmonic_injector = harmonic_injector
         self.protection_filter = protection_filter
-        self.verifier = DSPVerificationTool(self.hw['fs'])
+        self.verifier = DSPVerificationTool(self.hw.fs)
 
         # Directories
         self.rec_dir = Path("./Recordings")
@@ -1825,7 +1859,7 @@ class Audio(IAudio):
         # A Unicode scalar is readable with allow_pickle=False. Never archive
         # Python objects or capture-specific alignment/processing results.
         metadata = dict(acquisition or {})
-        metadata.update(schema="shared_reference_v2", sample_rate=self.hw['fs'])
+        metadata.update(schema="shared_reference_v2", sample_rate=self.hw.fs)
         payload = dict(arrays)
         payload['metadata_json'] = np.array(json.dumps(
             metadata, sort_keys=True, separators=(',', ':'), allow_nan=False))
@@ -1865,8 +1899,8 @@ class Audio(IAudio):
     def _log_config(self) -> None:
         """Log the current hardware and capture configuration."""
         logger.info(
-            f"Audio Config: FS={self.hw['fs']}, Sweeps={self.cap['num_sweeps']}, Dur={self.cap['sweep_dur_s']}s")
-        logger.info(f"Devices: In={self.hw['dev_in']}, Out={self.hw['dev_out']}")
+            f"Audio Config: FS={self.hw.fs}, Sweeps={self.cap.num_sweeps}, Dur={self.cap.sweep_dur_s}s")
+        logger.info(f"Devices: In={self.hw.dev_in}, Out={self.hw.dev_out}")
 
     def _get_api_name(self, dev_index: int) -> str:
         """
@@ -1886,7 +1920,7 @@ class Audio(IAudio):
         """Saves a WAV file and embeds metadata into standard RIFF chunks."""
         channels = data.shape[1] if len(data.shape) > 1 else 1
 
-        kwargs = {'mode': 'w', 'samplerate': self.hw['fs'], 'channels': channels}
+        kwargs = {'mode': 'w', 'samplerate': self.hw.fs, 'channels': channels}
         if subtype:
             kwargs['subtype'] = subtype
 
@@ -1908,7 +1942,7 @@ class Audio(IAudio):
 
     def _prepare_sweep(self) -> Dict[str, Any]:
         """Build marker, settling gap and simultaneous ESS for every repeat."""
-        fs = self.hw['fs']
+        fs = self.hw.fs
         # Generate the digital sweep and its inverse *once*. The same samples
         # are reused for every repeat, so the results can be averaged.
         s_fund, phase, inv_sweep = self.sweep_gen.generate()
@@ -1922,7 +1956,7 @@ class Audio(IAudio):
             )
         # dBFS is converted to a linear amplitude. Set the composite peak
         # (including test harmonics) to the requested safe playback level.
-        playback_gain = DSPUtils.db_to_lin(self.cap['sweep_level_dbfs']) / (
+        playback_gain = DSPUtils.db_to_lin(self.cap.sweep_level_dbfs) / (
             np.max(np.abs(s_composite)) + 1e-12
         )
         # Sounddevice streams float32 samples; the inverse stays float64 for
@@ -1938,7 +1972,7 @@ class Audio(IAudio):
 
         def milliseconds(key, default=None):
             # Capture settings use ms; array indices use whole samples.
-            value = float(self.cap[key] if default is None else self.cap.get(key, default))
+            value = float(getattr(self.cap, key) if default is None else getattr(self.cap, key, default))
             if not np.isfinite(value) or value < 0:
                 raise ValueError(f"{key} must be finite and nonnegative")
             return int(round(value * fs / 1000))
@@ -1957,7 +1991,7 @@ class Audio(IAudio):
         # One slot is marker + gap + sweep + spacing after the sweep.
         offset = len(marker) + gap
         slot = offset + len(s_play) + post
-        repeats = int(self.cap['num_sweeps'])
+        repeats = int(self.cap.num_sweeps)
         if repeats < 1:
             raise ValueError("num_sweeps must be positive")
         total = pre + repeats * slot + flush
@@ -2016,18 +2050,18 @@ class Audio(IAudio):
             "aligned_repeats": self.alignment_engine.last_alignment,
             "raw_capture_channels": ["electrical_loopback", "microphone"],
             "loopback_role": ("marker_alignment_and_linear_response_correction"
-                              if self.cap.get('loopback_correction', True)
+                              if self.cap.loopback_correction
                               else "record_only; marker_used_for_alignment"),
             "inverse_reference": "clean_digital_fundamental",
             "loop_tail_conditioning": "none",
-            "mic_tail_fade_ms": min(10.0, timing["capture_tail_samples"] * 1000.0 / self.hw["fs"]),
+            "mic_tail_fade_ms": min(10.0, timing["capture_tail_samples"] * 1000.0 / self.hw.fs),
             "sweep_start_hz": self.sweep_gen.f1,
-            "sweep_end_hz": self.hw['fs'] / 2,
+            "sweep_end_hz": self.hw.fs / 2,
             "active_duration_s": self.sweep_gen.active_duration_s,
             # L refers to the active exponential part, excluding the guards.
             "L_s": self.sweep_gen.log_sweep_rate,
             "guard_samples": self.sweep_gen.guard_samples,
-            "hardware_config": dict(self.hw), "capture_config": dict(self.cap),
+            "hardware_config": dataclasses.asdict(self.hw), "capture_config": dataclasses.asdict(self.cap),
             "injected_harmonics_db": {
                 "H2": self.harmonic_injector.h2_db if self.harmonic_injector else None,
                 "H3": self.harmonic_injector.h3_db if self.harmonic_injector else None,
@@ -2041,7 +2075,7 @@ class Audio(IAudio):
         # Use the earliest safe boundary across repeats, with a 2 ms marker margin.
         positions = timing['aligned_repeats']
         timing['loop_valid_samples'] = max(timing['sweep_samples'], min(
-            [len(avg_loop)] + [b['marker_start_sample'] - a['sweep_start_sample'] - round(.002*self.hw['fs'])
+            [len(avg_loop)] + [b['marker_start_sample'] - a['sweep_start_sample'] - round(.002*self.hw.fs)
                               for a, b in zip(positions, positions[1:])]))
         # Keep raw channels untouched, aligned averages separately, and the
         # original digital references at their actual array precision.
@@ -2054,16 +2088,16 @@ class Audio(IAudio):
             "acquisition_metadata": {
                 "producer": "nfs.marker_then_dual_sweep_v1",
                 "raw_capture_channels": ["electrical_loopback", "microphone"],
-                "num_sweeps": self.cap['num_sweeps'],
+                "num_sweeps": self.cap.num_sweeps,
                 "layout": {key: value for key, value in prepared['timing'].items()
                            if key not in ('linear_ir_samples', 'actual_sample_rate',
                                           'stream_status')},
                 "sweep": {
-                    "start_hz": self.sweep_gen.f1, "end_hz": self.hw['fs'] / 2,
+                    "start_hz": self.sweep_gen.f1, "end_hz": self.hw.fs / 2,
                     "active_duration_s": self.sweep_gen.active_duration_s,
                     "log_sweep_rate_s": self.sweep_gen.log_sweep_rate,
                     "guard_samples": self.sweep_gen.guard_samples,
-                    "level_dbfs": self.cap['sweep_level_dbfs'],
+                    "level_dbfs": self.cap.sweep_level_dbfs,
                 },
                 "speaker_protection_hpf": {
                     "freq_hz": self.protection_filter.freq_hz,
@@ -2085,7 +2119,7 @@ class Audio(IAudio):
         Executes the playback and recording of the composite signal.
         Handles stream synchronization, multiple sweep averaging, and loopback alignment.
         """
-        if self.hw['ch_out_spkr'] == self.hw['ch_out_ref'] or self.hw['ch_in_mic'] == self.hw['ch_in_loop']:
+        if self.hw.ch_out_spkr == self.hw.ch_out_ref or self.hw.ch_in_mic == self.hw.ch_in_loop:
             raise ValueError("Dual-channel capture requires distinct speaker/reference outputs and mic/loop inputs")
         prepared = self._prepare_sweep()
         tx_sweep_long = prepared['tx_speaker']
@@ -2094,39 +2128,39 @@ class Audio(IAudio):
 
         # Allocate one column per physical channel. Channel numbers in the
         # saved hardware settings are zero-based, even for ASIO devices.
-        out_ch_count = max(self.hw['ch_out_spkr'], self.hw['ch_out_ref']) + 1
+        out_ch_count = max(self.hw.ch_out_spkr, self.hw.ch_out_ref) + 1
 
         out_frames = np.zeros((total_len, out_ch_count), dtype=np.float32)
-        out_frames[:, self.hw['ch_out_spkr']] = tx_sweep_long
-        out_frames[:, self.hw['ch_out_ref']] = tx_ref_long
+        out_frames[:, self.hw.ch_out_spkr] = tx_sweep_long
+        out_frames[:, self.hw.ch_out_ref] = tx_ref_long
 
         rec_loop = np.zeros(total_len, dtype=np.float32)
         rec_mic = np.zeros(total_len, dtype=np.float32)
 
         # ASIO uses channel selectors; other APIs use columns up to the
         # highest channel number. The callback below handles both layouts.
-        out_api = self._get_api_name(self.hw['dev_out'])
-        in_api = self._get_api_name(self.hw['dev_in'])
+        out_api = self._get_api_name(self.hw.dev_out)
+        in_api = self._get_api_name(self.hw.dev_in)
         use_asio_in, use_asio_out = ("ASIO" in in_api), ("ASIO" in out_api)
 
         # Use the same channel mapping policy for sweep and sine playback.
         in_args = _stream_channel_settings(
-            in_api, (self.hw['ch_in_loop'], self.hw['ch_in_mic']), self.hw['wasapi_exclusive'])
+            in_api, (self.hw.ch_in_loop, self.hw.ch_in_mic), self.hw.wasapi_exclusive)
         out_args = _stream_channel_settings(
-            out_api, (self.hw['ch_out_spkr'], self.hw['ch_out_ref']), self.hw['wasapi_exclusive'])
+            out_api, (self.hw.ch_out_spkr, self.hw.ch_out_ref), self.hw.wasapi_exclusive)
 
         idx_play, idx_rec = 0, 0
         stream_status = []
         done_evt = threading.Event()
-        meter_worker = _AudioMeterWorker(self.hw['fs'], self.hw['blocksize'])
+        meter_worker = _AudioMeterWorker(self.hw.fs, self.hw.blocksize)
         meter_worker.start()
         output_meter_roles = (0, 1) if use_asio_out else (
-            self.hw['ch_out_spkr'],
-            self.hw['ch_out_ref'],
+            self.hw.ch_out_spkr,
+            self.hw.ch_out_ref,
         )
         input_meter_roles = (0, 1) if use_asio_in else (
-            self.hw['ch_in_loop'],
-            self.hw['ch_in_mic'],
+            self.hw.ch_in_loop,
+            self.hw.ch_in_mic,
         )
 
         # PortAudio calls this function with small blocks of live samples.
@@ -2141,8 +2175,8 @@ class Audio(IAudio):
             # correspond to the selected speaker/reference physical channels.
             n_out = min(frames, total_len - idx_play)
             if use_asio_out:
-                outdata[:n_out, 0] = out_frames[idx_play:idx_play + n_out, self.hw['ch_out_spkr']]
-                outdata[:n_out, 1] = out_frames[idx_play:idx_play + n_out, self.hw['ch_out_ref']]
+                outdata[:n_out, 0] = out_frames[idx_play:idx_play + n_out, self.hw.ch_out_spkr]
+                outdata[:n_out, 1] = out_frames[idx_play:idx_play + n_out, self.hw.ch_out_ref]
                 if frames > n_out:
                     outdata[n_out:] = 0
             else:
@@ -2158,8 +2192,8 @@ class Audio(IAudio):
                     rec_loop[idx_rec:idx_rec + n_in] = indata[:n_in, 0]
                     rec_mic[idx_rec:idx_rec + n_in] = indata[:n_in, 1]
                 else:
-                    rec_loop[idx_rec:idx_rec + n_in] = indata[:n_in, self.hw['ch_in_loop']]
-                    rec_mic[idx_rec:idx_rec + n_in] = indata[:n_in, self.hw['ch_in_mic']]
+                    rec_loop[idx_rec:idx_rec + n_in] = indata[:n_in, self.hw.ch_in_loop]
+                    rec_mic[idx_rec:idx_rec + n_in] = indata[:n_in, self.hw.ch_in_mic]
 
             meter_worker.submit(
                 outdata,
@@ -2178,11 +2212,11 @@ class Audio(IAudio):
         # ASIO needs COM on this calling thread for the stream's whole life.
         # The with blocks close the stream before releasing our COM reference.
         try:
-            with _asio_thread_context(use_asio_in or use_asio_out), sd.Stream(device=(self.hw['dev_in'], self.hw['dev_out']), samplerate=self.hw['fs'],
-                           blocksize=self.hw['blocksize'],
+            with _asio_thread_context(use_asio_in or use_asio_out), sd.Stream(device=(self.hw.dev_in, self.hw.dev_out), samplerate=self.hw.fs,
+                           blocksize=self.hw.blocksize,
                            dtype="float32", channels=(in_args[0], out_args[0]), dither_off=True,
                            extra_settings=(in_args[1], out_args[1]), callback=callback) as stream:
-                if not done_evt.wait(total_len / self.hw['fs'] + 10):
+                if not done_evt.wait(total_len / self.hw.fs + 10):
                     raise RuntimeError("Audio capture did not finish within the expected duration")
                 # These are observed stream facts, useful when replaying or
                 # diagnosing captures made on a different audio interface.
@@ -2199,7 +2233,7 @@ class Audio(IAudio):
 
     def _process_capture(self, result: Dict[str, Any]) -> tuple[np.ndarray, np.ndarray]:
         correction = {}
-        if self.cap.get('loopback_correction', True):
+        if self.cap.loopback_correction:
             correction = dict(loop_data=result['rx_loop_aligned'],
                               reference_data=result['tx_ref_signal'],
                               log_sweep_rate=self.sweep_gen.log_sweep_rate,
@@ -2261,7 +2295,7 @@ class Audio(IAudio):
         ir_full, ir_linear = self._process_capture(result)
 
         # Save raw input and shared references when debug capture is enabled.
-        if save and self.cap.get('debug_saves', True):
+        if save and self.cap.debug_saves:
             logger.info("Saving raw capture and shared reference...")
             result['capture_metadata'].update(
                 self._save_shared_reference(result['digital_reference'],
@@ -2301,7 +2335,7 @@ class Audio(IAudio):
             self.debug_handler.save_metrics(metrics, base_label, self.rec_dir)
 
         return {
-            "fs": self.hw["fs"],
+            "fs": self.hw.fs,
             "ir_linear": ir_linear,
             "ir_full": ir_full,
             "sweep_metadata": self._sweep_metadata(result),
@@ -2337,7 +2371,7 @@ class Audio(IAudio):
         for w in warnings:
             logger.warning(f"VERIFICATION FAILURE: {w}")
         return {
-            "fs": self.hw["fs"],
+            "fs": self.hw.fs,
             "ir_linear": ir_linear,
             "ir_full": ir_full,
             "sweep_metadata": self._sweep_metadata(result),
@@ -2363,20 +2397,20 @@ class Audio(IAudio):
         logger.info(
             f"Playing sine: {frequency} Hz, {level_dbfs} dBFS, {'until stopped' if duration_s is None else f'for {duration_s} s'}")
 
-        fs = self.hw['fs']
+        fs = self.hw.fs
         target_amp = DSPUtils.db_to_lin(level_dbfs)
 
-        out_dev = self.hw['dev_out']
-        in_dev = self.hw['dev_in']
+        out_dev = self.hw.dev_out
+        in_dev = self.hw.dev_in
         out_api = self._get_api_name(out_dev)
         in_api = self._get_api_name(in_dev)
         use_asio_out = "ASIO" in out_api
         use_asio_in = "ASIO" in in_api
 
         in_args = _stream_channel_settings(
-            in_api, (self.hw['ch_in_loop'], self.hw['ch_in_mic']), self.hw['wasapi_exclusive'])
+            in_api, (self.hw.ch_in_loop, self.hw.ch_in_mic), self.hw.wasapi_exclusive)
         out_ch_count, out_args_extra = _stream_channel_settings(
-            out_api, (self.hw['ch_out_spkr'], self.hw['ch_out_ref']), self.hw['wasapi_exclusive'])
+            out_api, (self.hw.ch_out_spkr, self.hw.ch_out_ref), self.hw.wasapi_exclusive)
 
         if duration_s is not None:
             n = int(round(duration_s * fs))
@@ -2393,20 +2427,20 @@ class Audio(IAudio):
                 out_data[:, 1] = sine
             else:
                 out_data = np.zeros((n, out_ch_count), dtype=np.float32)
-                out_data[:, self.hw['ch_out_spkr']] = sine
-                out_data[:, self.hw['ch_out_ref']] = sine
+                out_data[:, self.hw.ch_out_spkr] = sine
+                out_data[:, self.hw.ch_out_ref] = sine
 
             idx_play = 0
             done_evt = threading.Event()
-            meter_worker = _AudioMeterWorker(fs, self.hw['blocksize'])
+            meter_worker = _AudioMeterWorker(fs, self.hw.blocksize)
             meter_worker.start()
             output_meter_roles = (0, 1) if use_asio_out else (
-                self.hw['ch_out_spkr'],
-                self.hw['ch_out_ref'],
+                self.hw.ch_out_spkr,
+                self.hw.ch_out_ref,
             )
             input_meter_roles = (0, 1) if use_asio_in else (
-                self.hw['ch_in_loop'],
-                self.hw['ch_in_mic'],
+                self.hw.ch_in_loop,
+                self.hw.ch_in_mic,
             )
 
             def callback(indata, outdata, frames, time_info, status):
@@ -2431,7 +2465,7 @@ class Audio(IAudio):
                 with _asio_thread_context(use_asio_in or use_asio_out), sd.Stream(
                     device=(in_dev, out_dev),
                     samplerate=fs,
-                    blocksize=self.hw['blocksize'],
+                    blocksize=self.hw.blocksize,
                     dtype='float32',
                     channels=(in_args[0], out_ch_count),
                     dither_off=True,
@@ -2446,15 +2480,15 @@ class Audio(IAudio):
             # Indefinite playback
             phase = 0.0
             phase_inc = 2 * np.pi * frequency / fs
-            self._sine_meter_worker = _AudioMeterWorker(fs, self.hw['blocksize'])
+            self._sine_meter_worker = _AudioMeterWorker(fs, self.hw.blocksize)
             self._sine_meter_worker.start()
             output_meter_roles = (0, 1) if use_asio_out else (
-                self.hw['ch_out_spkr'],
-                self.hw['ch_out_ref'],
+                self.hw.ch_out_spkr,
+                self.hw.ch_out_ref,
             )
             input_meter_roles = (0, 1) if use_asio_in else (
-                self.hw['ch_in_loop'],
-                self.hw['ch_in_mic'],
+                self.hw.ch_in_loop,
+                self.hw.ch_in_mic,
             )
 
             def callback(indata, outdata, frames, time_info, status):
@@ -2470,8 +2504,8 @@ class Audio(IAudio):
                     outdata[:, 1] = s
                 else:
                     outdata.fill(0)
-                    outdata[:, self.hw['ch_out_spkr']] = s
-                    outdata[:, self.hw['ch_out_ref']] = s
+                    outdata[:, self.hw.ch_out_spkr] = s
+                    outdata[:, self.hw.ch_out_ref] = s
                 self._sine_meter_worker.submit(
                     outdata,
                     output_meter_roles,
@@ -2490,7 +2524,7 @@ class Audio(IAudio):
                 self._sine_stream = sd.Stream(
                     device=(in_dev, out_dev),
                     samplerate=fs,
-                    blocksize=self.hw['blocksize'],
+                    blocksize=self.hw.blocksize,
                     channels=(in_args[0], out_ch_count),
                     extra_settings=(in_args[1], out_args_extra),
                     callback=callback,
@@ -2544,8 +2578,8 @@ class MockInterfaceAudio(Audio):
     """Digital Twin loopback simulating hardware latency and filters."""
 
     def __init__(self,
-                 hw_config: Dict[str, Any],
-                 capture_config: Dict[str, Any],
+                 hw_config: HardwareConfig,
+                 capture_config: CaptureConfig,
                  sweep_gen: SweepGenerator,
                  marker_gen: MarkerGenerator,
                  alignment_engine: AlignmentEngine,
@@ -2581,7 +2615,7 @@ class MockInterfaceAudio(Audio):
         tx_ref = prepared['tx_loop']
 
         # 3. --- HARDWARE SIMULATION (The Loopback) ---
-        fs = self.hw['fs']
+        fs = self.hw.fs
 
         # A) CS4272 Simulation: 25-tap FIR filter
         # We use a stable windowed-sinc filter at ~21kHz. 
@@ -2629,7 +2663,7 @@ class MockInterfaceAudio(Audio):
         # Apply spatial speaker model if configured
         if self._speaker_model is not None and self._position_callback is not None:
             pos = self._position_callback()
-            rec_mic = self._speaker_model.apply_to_signal(tx_sweep, self.hw['fs'], pos)
+            rec_mic = self._speaker_model.apply_to_signal(tx_sweep, self.hw.fs, pos)
         else:
             rec_mic = tx_sweep.copy()
 
@@ -2805,35 +2839,35 @@ class AudioFactory:
                 f"Output device '{saved_out_name}' is saved as ID {configured_out}; resolved current ID {dev_out}."
             )
 
-        hw_config = {
-            'dev_in': dev_in,
-            'dev_out': dev_out,
-            'ch_in_mic': AudioFactory._get_required_config(config, audio_section, 'in_ch_mic', int),
-            'ch_in_loop': AudioFactory._get_required_config(config, audio_section, 'in_ch_loop', int),
-            'ch_out_spkr': AudioFactory._get_required_config(config, audio_section, 'out_ch_spkr', int),
-            'ch_out_ref': AudioFactory._get_required_config(config, audio_section, 'out_ch_ref', int),
-            'fs': fs,
-            'blocksize': AudioFactory._get_required_config(config, audio_section, 'blocksize', int),
-            'wasapi_exclusive': AudioFactory._get_required_config(config, audio_section, 'wasapi_exclusive', bool),
-        }
+        hw_config = HardwareConfig(
+            dev_in=dev_in,
+            dev_out=dev_out,
+            ch_in_mic=AudioFactory._get_required_config(config, audio_section, 'in_ch_mic', int),
+            ch_in_loop=AudioFactory._get_required_config(config, audio_section, 'in_ch_loop', int),
+            ch_out_spkr=AudioFactory._get_required_config(config, audio_section, 'out_ch_spkr', int),
+            ch_out_ref=AudioFactory._get_required_config(config, audio_section, 'out_ch_ref', int),
+            fs=fs,
+            blocksize=AudioFactory._get_required_config(config, audio_section, 'blocksize', int),
+            wasapi_exclusive=AudioFactory._get_required_config(config, audio_section, 'wasapi_exclusive', bool),
+        )
 
         naming_convention_str = config.get(sweep_section, 'naming_convention', fallback='dimitri').strip()
         naming_convention: IRNamingConvention = NamingConventionFactory.create(naming_convention_str)
 
         debug_saves = AudioFactory._get_required_config(config, sweep_section, 'debug_saves', bool)
-        debug_handler: DebugArtifactHandler = DebugArtifactFactory.create(debug_saves, hw_config)
+        debug_handler: DebugArtifactHandler = DebugArtifactFactory.create(debug_saves, hw_config.fs)
 
-        cap_config = {
-            'loopback_correction': config.getboolean(sweep_section, 'loopback_correction', fallback=True),
-            'naming_convention': naming_convention_str,
-            'debug_saves': debug_saves,
-            'sweep_dur_s': sweep_dur_s,
-            'sweep_level_dbfs': sweep_level_dbfs,
-            'num_sweeps': AudioFactory._get_required_config(config, sweep_section, 'num_sweeps', int),
-            'pre_sil_ms': AudioFactory._get_required_config(config, sweep_section, 'pre_sil_ms', float),
-            'post_sil_ms': AudioFactory._get_required_config(config, sweep_section, 'post_sil_ms', float),
-            'marker_gap_ms': 20.0,  # Fixed marker settling gap; adjust here if needed.
-        }
+        cap_config = CaptureConfig(
+            loopback_correction=config.getboolean(sweep_section, 'loopback_correction', fallback=True),
+            naming_convention=naming_convention_str,
+            debug_saves=debug_saves,
+            sweep_dur_s=sweep_dur_s,
+            sweep_level_dbfs=sweep_level_dbfs,
+            num_sweeps=AudioFactory._get_required_config(config, sweep_section, 'num_sweeps', int),
+            pre_sil_ms=AudioFactory._get_required_config(config, sweep_section, 'pre_sil_ms', float),
+            post_sil_ms=AudioFactory._get_required_config(config, sweep_section, 'post_sil_ms', float),
+            marker_gap_ms=20.0,  # Fixed marker settling gap; adjust here if needed.
+        )
 
         # Initialize core components
         sweep_gen = SweepGenerator(fs, sweep_dur_s, f1=1.0, level_dbfs=sweep_level_dbfs)
@@ -2841,7 +2875,7 @@ class AudioFactory:
 
         alignment_engine = AlignmentEngine(
             fs,
-            cap_config['num_sweeps'],
+            cap_config.num_sweeps,
             AudioFactory._get_required_config(config, sweep_section, 'align_to_first_marker', bool),
             AudioFactory._get_required_config(config, sweep_section, 'mic_tail_taper_ms', float),
             marker_gen.dur_ms

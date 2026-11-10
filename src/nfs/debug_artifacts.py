@@ -36,8 +36,8 @@ class DebugArtifactHandler(ABC):
 class FileDebugArtifactHandler(DebugArtifactHandler):
     """Saves debug artifacts as WAV/JSON files in the debug subdirectory."""
 
-    def __init__(self, hw_config: Dict[str, Any]):
-        self.hw = hw_config
+    def __init__(self, fs: float):
+        self.fs = fs
 
     def _debug_dir(self, session_dir: Path) -> Path:
         d = session_dir / "debug"
@@ -47,7 +47,7 @@ class FileDebugArtifactHandler(DebugArtifactHandler):
     def _save_wav_with_metadata(self, filepath: Path, data: np.ndarray, title: str,
                                  subtype: Optional[str] = None) -> None:
         channels = data.shape[1] if len(data.shape) > 1 else 1
-        kwargs = {'mode': 'w', 'samplerate': self.hw['fs'], 'channels': channels}
+        kwargs = {'mode': 'w', 'samplerate': self.fs, 'channels': channels}
         if subtype:
             kwargs['subtype'] = subtype
         with sf.SoundFile(str(filepath), **kwargs) as f:
@@ -83,8 +83,8 @@ class DebugArtifactFactory:
     """Factory for creating DebugArtifactHandler instances from config values."""
 
     @staticmethod
-    def create(debug_saves: bool, hw_config: Optional[Dict[str, Any]] = None) -> DebugArtifactHandler:
+    def create(debug_saves: bool, fs: Optional[float] = None) -> DebugArtifactHandler:
         if debug_saves:
-            return FileDebugArtifactHandler(hw_config)
+            return FileDebugArtifactHandler(fs)
         else:
             return NoopDebugArtifactHandler()

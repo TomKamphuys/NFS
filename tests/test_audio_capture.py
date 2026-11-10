@@ -12,7 +12,7 @@ from scipy import signal
 
 import nfs.audio as audio
 from nfs.audio import AlignmentEngine, MarkerGenerator, SweepGenerator, DeconvolutionEngine, HarmonicInjector, DSPUtils
-from nfs.audio import AudioFactory, SINE_RMS_FROM_PEAK
+from nfs.audio import AudioFactory, SINE_RMS_FROM_PEAK, HardwareConfig, CaptureConfig
 from nfs.datatypes import CylindricalPosition
 from nfs.nfs import NearFieldScanner
 
@@ -21,9 +21,9 @@ FS = 48000
 
 # Capture sequence and exact replay
 
-def make_engine(first=False, injected=False):
+def make_engine(first=False, injected=False, post_sil_ms=100.0, loopback_correction=False):
     fs = 48000
-    hw = dict(
+    hw = HardwareConfig(
         dev_in=-1,
         dev_out=-1,
         ch_in_loop=0,
@@ -34,15 +34,16 @@ def make_engine(first=False, injected=False):
         blocksize=256,
         wasapi_exclusive=False,
     )
-    cap = dict(
-        loopback_correction=False,  # Existing digital-only regressions.
+    cap = CaptureConfig(
+        loopback_correction=loopback_correction,
+        naming_convention="dimitri",
         num_sweeps=3,
         sweep_dur_s=1.5,
         sweep_level_dbfs=-12,
         pre_sil_ms=200,
-        post_sil_ms=100,
+        post_sil_ms=post_sil_ms,
         debug_saves=True,
-        naming_convention="dimitri",
+        marker_gap_ms=20.0,
     )
     return audio.Audio(
         hw,
@@ -321,13 +322,12 @@ def test_competing_marker_reduces_psr_without_changing_selected_lag():
 
 @pytest.mark.parametrize('post_ms', [0, 5, 500, 2000])
 def test_post_interval_is_retained_once_without_an_extra_wait(post_ms):
-    e = make_engine()
-    e.cap['post_sil_ms'] = post_ms
+    e = make_engine(post_sil_ms=post_ms)
     p = e._prepare_sweep()
     t = p['timing']
     post = round(post_ms * 48)
     assert t['capture_tail_samples'] == t['post_samples'] == t['flush_samples'] == post
-    assert t['total_samples'] == t['pre_samples'] + e.cap['num_sweeps'] * t['slot_samples'] + post
+    assert t['total_samples'] == t['pre_samples'] + e.cap.num_sweeps * t['slot_samples'] + post
     assert t['slot_samples'] == t['sweep_offset_samples'] + t['sweep_samples'] + post
     for a in t['playback_marker_starts']:
         end = a + t['sweep_offset_samples'] + t['sweep_samples']
@@ -343,8 +343,9 @@ def test_post_interval_is_retained_once_without_an_extra_wait(post_ms):
 
 @pytest.mark.parametrize('post_ms,last_echo', [(500,.45), (2000,1.8)])
 def test_room_echoes_survive_capture_deconvolution_and_export(post_ms,last_echo,monkeypatch):
-    e = make_engine()
-    e.cap.update(post_sil_ms=post_ms,debug_saves=False)
+    e = make_engine(post_sil_ms=post_ms)
+    import dataclasses
+    e.cap = dataclasses.replace(e.cap, debug_saves=False)
     p = e._prepare_sweep()
     fs = 48000
     room = np.zeros(round((last_echo+.04)*fs))
@@ -370,8 +371,7 @@ def test_room_echoes_survive_capture_deconvolution_and_export(post_ms,last_echo,
 
 @pytest.mark.parametrize('channel', ['mic','loop'])
 def test_missing_final_decay_samples_are_rejected(channel):
-    e = make_engine()
-    e.cap['post_sil_ms'] = 500
+    e = make_engine(post_sil_ms=500)
     p = e._prepare_sweep()
     mic,loop = ideal_capture(p,delays=(80,80,80))
     t = p['timing']
@@ -460,7 +460,9 @@ def test_equal_references_are_written_once_but_changed_data_get_new_archive(monk
     assert b['reference_id'] != a['reference_id']
     assert b['reference_session_id'] == a['reference_session_id']
     assert (engine.debug_dir/a['reference_file']).read_bytes() == before
-    engine.hw['fs'] = 96000
+    # Create a new engine with different sample rate to verify different hash
+    import dataclasses
+    engine.hw = dataclasses.replace(engine.hw, fs=96000)
     c = engine._save_shared_reference(arrays)
     assert c['reference_id'] != b['reference_id']
     assert writer.call_count == 3
@@ -472,7 +474,8 @@ def test_equal_references_are_written_once_but_changed_data_get_new_archive(monk
 @pytest.mark.parametrize('save,debug', [(False, True), (True, False)])
 def test_unsaved_or_archive_disabled_does_not_write_reference(monkeypatch,tmp_path,save,debug):
     engine, _ = setup_capture(monkeypatch,tmp_path)
-    engine.cap['debug_saves'] = debug
+    import dataclasses
+    engine.cap = dataclasses.replace(engine.cap, debug_saves=debug)
     engine.set_session_directory(tmp_path)
     engine.measure_ir(CylindricalPosition(100,0,0),save=save)
     assert not list(tmp_path.rglob('*.npz'))
