@@ -122,3 +122,24 @@ def test_version_verification_does_not_prepare_runtime_environment(
 
     assert module.main() == exit_code
     assert not data_dir.exists()
+
+
+def test_version_verification_can_report_actual_version(launcher, tmp_path, monkeypatch):
+    module, _bundle = launcher
+    report_file = tmp_path / "actual-version.txt"
+    monkeypatch.setattr(module.sys, "argv", [
+        "HALS Near Field Scanner.exe",
+        "--verify-version",
+        "0.4.3",
+        "--report",
+        str(report_file),
+    ])
+    monkeypatch.setattr(app_version, "get_nfs_version", lambda: "0.2.1")
+    monkeypatch.setattr(
+        module,
+        "_prepare_runtime_environment",
+        lambda: pytest.fail("Version verification must not touch the runtime environment"),
+    )
+
+    assert module.main() == 1
+    assert report_file.read_text(encoding="utf-8") == "0.2.1"

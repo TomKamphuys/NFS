@@ -96,9 +96,15 @@ jobs:
           if ($staleMetadata -eq $metadata) { throw "Could not set stale nfs metadata for verification" }
           Set-Content -LiteralPath $metadataFile -Value $staleMetadata -Encoding utf8
           $executable = Join-Path $verificationDir "HALS Near Field Scanner.exe"
-          & $executable --verify-version "${{ steps.version.outputs.version }}"
+          $versionReport = Join-Path $verificationDir "actual-version.txt"
+          & $executable --verify-version "${{ steps.version.outputs.version }}" --report $versionReport
+          if (Test-Path -LiteralPath $versionReport) {
+            $actualVersion = Get-Content -LiteralPath $versionReport -Raw
+          } else {
+            $actualVersion = "not reported"
+          }
           if ($LASTEXITCODE -ne 0) {
-            throw "Frozen executable did not verify as version ${{ steps.version.outputs.version }} (exit code $LASTEXITCODE)"
+            throw "Frozen executable reported '$actualVersion' instead of ${{ steps.version.outputs.version }} (exit code $LASTEXITCODE)"
           }
           Write-Host "Frozen executable verified as version ${{ steps.version.outputs.version }} despite stale 0.2.1 metadata"
 
