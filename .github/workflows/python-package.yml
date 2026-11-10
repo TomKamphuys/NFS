@@ -24,7 +24,11 @@ jobs:
     - name: Install uv
       uses: astral-sh/setup-uv@v7
       with:
+        version: "0.9.5"
         enable-cache: true
+
+    - name: Check lockfile
+      run: uv lock --check
 
     - name: Install system dependencies
       run: |
@@ -41,7 +45,7 @@ jobs:
       run: uv sync --locked --all-extras --dev
              
     - name: Test with pytest
-      run: uv run pytest tests
+      run: uv run --locked pytest tests
 
   windows-gui-smoke:
     runs-on: windows-latest
@@ -51,8 +55,11 @@ jobs:
     - uses: actions/checkout@v5
     - uses: astral-sh/setup-uv@v7
       with:
+        version: "0.9.5"
         enable-cache: true
+    - name: Check lockfile
+      run: uv lock --check
     - name: Install the project
       run: uv sync --locked --all-extras --dev
     - name: Test real-window startup and jogging
-      run: uv run pytest tests/test_qt_jog_workflow.py -v
+      run: uv run --locked pytest tests/test_qt_jog_workflow.py -v

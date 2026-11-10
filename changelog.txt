@@ -1,4 +1,16 @@
 --------
+10/11/26
+--------
+v0.4.4
+
+Added virtual-speaker mock audio with spherical-harmonic and discrete-piston models and a directivity
+viewer. Measurement progress is now reported in real time, and the spherical-harmonic spatial model
+uses an exponential Green's function for radial behavior.
+
+Pinned uv in GitHub Actions and added lockfile freshness and release-tag checks to prevent stale or
+mismatched package releases.
+
+--------
 03/11/26
 --------
 Deconvolution engine v2

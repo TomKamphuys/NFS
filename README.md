@@ -246,8 +246,12 @@ It then appears in the **Settings** dialog.
   git tag v0.2.1
   git push origin v0.2.1
   ```
-  This builds and attaches `nfs-<version>-py3-none-any.whl`, `nfs-<version>.tar.gz`, and
-  `HALS-Near-Field-Scanner-Setup-<version>.exe` to the GitHub Release.
+   This builds and attaches `nfs-<version>-py3-none-any.whl`, `nfs-<version>.tar.gz`, and
+   `HALS-Near-Field-Scanner-Setup-<version>.exe` to the GitHub Release.
+- GitHub Actions pins `uv` to 0.9.5 and checks `uv.lock` before installing, testing, or building.
+  After changing project metadata or dependencies, regenerate the lockfile with that uv version,
+  review the dependency diff, and confirm it with `uv lock --check`. CI uses locked commands so
+  tests and documentation builds cannot silently update `uv.lock`.
 - The installer is an Inno Setup wrapper (`packaging/installer.iss`) around a PyInstaller **onedir**
   build (`packaging/hals.spec`). To build locally: `uv run pyinstaller packaging/hals.spec --noconfirm`
   then `iscc /DMyAppVersion=0.2.0 packaging\installer.iss`.
