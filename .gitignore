@@ -12,6 +12,7 @@ __pycache__/
 dist/
 build/
 *.egg-info/
+packaging/runtime_hooks/nfs_version_hook_generated.py
 
 # Test / tooling caches
 .pytest_cache/

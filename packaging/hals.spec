@@ -12,6 +12,7 @@ Windows installer.
 """
 
 import sys
+import tomllib
 from pathlib import Path
 
 from PyInstaller.utils.hooks import (
@@ -26,6 +27,13 @@ from PyInstaller.utils.hooks import (
 # always launched from the repository root, see the header above).
 PROJECT_ROOT = Path.cwd()
 SRC_DIR = PROJECT_ROOT / "src"
+
+# Read the package version from pyproject.toml at build time so it can be
+# baked into the frozen application. This is more reliable than relying on
+# importlib.metadata at runtime, which can fail in PyInstaller bundles.
+with (PROJECT_ROOT / "pyproject.toml").open("rb") as f:
+    _pyproject = tomllib.load(f)
+PACKAGE_VERSION = _pyproject["project"]["version"]
 
 # --- Data files ------------------------------------------------------------
 # Bundle the default configuration next to the executable. The launcher copies
@@ -153,6 +161,15 @@ icon_path = PROJECT_ROOT / "images" / "icon.ico"
 
 block_cipher = None
 
+# Generate a runtime hook that carries the version baked in at build time.
+# PyInstaller runs this hook before the application starts, so the version
+# is available even when importlib.metadata cannot find it.
+_RUNTIME_HOOKS_DIR = PROJECT_ROOT / "packaging" / "runtime_hooks"
+_RUNTIME_HOOKS_DIR.mkdir(exist_ok=True)
+_version_hook_path = _RUNTIME_HOOKS_DIR / "nfs_version_hook_generated.py"
+_version_template = (PROJECT_ROOT / "packaging" / "runtime_hooks" / "nfs_version_hook.py").read_text()
+_version_hook_path.write_text(_version_template.replace("VERSION_PLACEHOLDER", PACKAGE_VERSION))
+
 
 a = Analysis(
     [str(PROJECT_ROOT / "packaging" / "hals_launcher.py")],
@@ -162,7 +179,7 @@ a = Analysis(
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=[],
+    runtime_hooks=[str(_version_hook_path)],
     excludes=["tkinter", "nicegui", "pywebview"],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
