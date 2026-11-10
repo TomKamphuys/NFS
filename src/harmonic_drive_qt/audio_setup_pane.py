@@ -614,7 +614,8 @@ class AudioSetupPane(QWidget):
         group = QGroupBox("Sweep Settings")
         layout = QVBoxLayout(group)
         grid = QGridLayout()
-        self.sweep_dur = self._spin(_float_value(parser, "sweep", "sweep_dur_s", 5.0), 0.01, 3600, "", 2)
+        self.sweep_dur = self._spin(_float_value(parser, "sweep", "sweep_dur_s", 5.0), 0.1, 3600, "", 2)
+        self.sweep_dur.setToolTip("Total sweep duration including silent guards; minimum 0.1 seconds.")
         self.num_sweeps = self._spin(_int_value(parser, "sweep", "num_sweeps", 1), 1, 100, "", 0)
         hpf_raw = _value(parser, "sweep", "protect_hpf_hz", "None")
         self.hpf_enable = QCheckBox("Protection HPF")
@@ -647,6 +648,14 @@ class AudioSetupPane(QWidget):
         grid.addWidget(self.hpf_cap_label, 2, 2)
         self.hpf_cap_field = self._labeled_with_unit("", self.hpf_cap, "dB")
         grid.addWidget(self.hpf_cap_field, 2, 3)
+        self.loopback_correction = QCheckBox("Correct audio interface response")
+        self.loopback_correction.setChecked(_parse_bool(_value(parser, "sweep", "loopback_correction", "True")))
+        self.loopback_correction.setStyleSheet(toggle_style())
+        self.loopback_correction.setToolTip(
+            "Use the electrical loopback's linear response to correct interface filters. "
+            "Its separated distortion is excluded. Turn off for digital-only deconvolution."
+        )
+        grid.addWidget(self.loopback_correction, 3, 0, 1, 4)
         layout.addLayout(grid)
 
         advanced = QGroupBox("Advanced sweep settings")
@@ -659,7 +668,11 @@ class AudioSetupPane(QWidget):
         self.align = QCheckBox("Align to first marker")
         self.align.setChecked(_parse_bool(_value(parser, "sweep", "align_to_first_marker", "False")))
         self.align.setStyleSheet(toggle_style())
-        self.debug = QCheckBox("Debug saves")
+        self.debug = QCheckBox("Save raw capture for reprocessing")
+        self.debug.setToolTip(
+            "Save raw stereo input and a capture log per position, plus shared "
+            "digital references once per session. Intermediate WAVs are not saved."
+        )
         self.debug.setChecked(_parse_bool(_value(parser, "sweep", "debug_saves", "False")))
         self.debug.setStyleSheet(toggle_style())
         self.pre_sil = self._spin(_float_value(parser, "sweep", "pre_sil_ms", 500.0), 0, 60000, " ms", 1)
@@ -669,9 +682,26 @@ class AudioSetupPane(QWidget):
         self.h3 = QLineEdit(_normalize_decimal_text(_value(parser, "sweep", "h3_test_db", "None")))
         self._normalize_decimal_editor(self.h2)
         self._normalize_decimal_editor(self.h3)
+        self.naming.setToolTip("Choose the filename format for exported measurements.")
+        self.align.setToolTip(
+            "On: align to the first marker and locate later repeats by sample count. "
+            "Off: detect each repeat's marker within +/-5 ms of its expected position. "
+            "Both modes use whole-sample alignment."
+        )
+        self.pre_sil.setToolTip(
+            "Silent recording before the first marker, allowing the audio driver "
+            "and interface to settle. Applied once at the start of each acquisition."
+        )
+        self.post_sil.setToolTip(
+            "Record room decay after each sweep for this duration. The same silent "
+            "interval separates repeats; no second wait is added. Choose enough time "
+            "for the room to decay before the next marker. After the final repeat, "
+            "an extra interval of this duration allows for interface latency, "
+            "giving twice this silence at the end of the capture."
+        )
         fields = [
             ("Naming", self.naming), ("", self.align), ("", self.debug),
-            ("Pre silence", self.pre_sil), ("Post silence", self.post_sil), ("Mic tail taper", self.taper),
+            ("Driver settle time", self.pre_sil), ("Post Silence", self.post_sil),
             ("H2 test dB", self.h2), ("H3 test dB", self.h3),
         ]
         advanced_children = []
@@ -680,6 +710,7 @@ class AudioSetupPane(QWidget):
             col = (index % 3) * 2
             if label:
                 label_widget = QLabel(label)
+                label_widget.setToolTip(widget.toolTip())
                 adv.addWidget(label_widget, row, col)
                 adv.addWidget(widget, row, col + 1)
                 advanced_children.extend([label_widget, widget])
@@ -814,7 +845,7 @@ class AudioSetupPane(QWidget):
         immediate_controls = [
             self.in_mic_channel, self.in_loop_channel, self.out_speaker_channel, self.out_ref_channel,
             self.fs, self.wasapi, self.hpf_enable, self.hpf_corr, self.naming,
-            self.align, self.debug,
+            self.align, self.debug, self.loopback_correction,
         ]
         commit_controls = [
             self.blocksize, self.sweep_dur, self.num_sweeps,
@@ -1054,6 +1085,7 @@ class AudioSetupPane(QWidget):
             ("sweep", "protect_hpf_hz"): _normalize_decimal_text(self.hpf.text()) if self.hpf_enable.isChecked() else "None",
             ("sweep", "protect_hpf_order"): int(self.hpf_order.value()),
             ("sweep", "protect_hpf_correction"): self.hpf_corr.isChecked(),
+            ("sweep", "loopback_correction"): self.loopback_correction.isChecked(),
             ("sweep", "protect_hpf_corr_db_cap"): self.hpf_cap.value(),
             ("sweep", "align_to_first_marker"): self.align.isChecked(),
             ("sweep", "pre_sil_ms"): self.pre_sil.value(),

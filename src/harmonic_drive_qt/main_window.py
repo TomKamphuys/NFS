@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from importlib.metadata import version as _get_package_version
 from pathlib import Path
 import configparser
 
+from .app_version import get_nfs_version
 from . import project
 
 from .audio_setup_pane import AudioSetupPane
@@ -93,7 +93,7 @@ class MainWindow(QMainWindow):
         title = QLabel("HALS Control")
         title.setStyleSheet("font-size: 18px; font-weight: 800; color: #ffffff; border: none;")
 
-        version_label = QLabel(f"v{_get_package_version('nfs')}")
+        version_label = QLabel(f"v{get_nfs_version()}")
         version_label.setStyleSheet("font-size: 13px; font-weight: 400; color: #93c5fd; border: none;")
 
         self.project_path = QLineEdit(self._project_path_display())

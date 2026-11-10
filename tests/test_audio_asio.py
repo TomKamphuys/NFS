@@ -42,6 +42,9 @@ def sounddevice(monkeypatch):
     module.query_hostapis = None
     module.query_devices = None
     monkeypatch.setitem(sys.modules, "sounddevice", module)
+    # Isolate this fixture from attributes patched onto the lazy adapter by
+    # other tests; every stream in this module must use the fake backend.
+    monkeypatch.setattr(audio, "sd", module)
     return module
 
 
@@ -132,11 +135,13 @@ def test_stream_closes_before_com_release_and_uses_asio_roles(
     monkeypatch.setattr(engine, "_get_api_name", lambda dev: "ASIO")
     meter = Mock()
     monkeypatch.setattr(audio, "_AudioMeterWorker", lambda *args: meter)
-    # Exercise the original master sequence; substitute only DSP alignment.
-    # Its two inputs let us verify the ASIO physical-channel selectors.
-    capture_samples = int(fs * (0.05 + 0.5 + 0.05))
-    monkeypatch.setattr(engine.alignment_engine, "sync_and_average",
-                        lambda mic, loop, *args: (mic, loop, [], 3.0))
+    # Exercise the new capture sequence while isolating channel routing from DSP.
+    prepared = engine._prepare_sweep()
+    capture_samples = prepared['timing']['total_samples']
+    monkeypatch.setattr(engine, '_prepare_sweep', lambda: prepared)
+    monkeypatch.setattr(engine, '_finish_sweep', lambda prepared, mic, loop: {
+        'rx_mic_conditioned': mic, 'rx_loop_aligned': loop,
+    })
     events = []
     ole32.CoUninitialize.side_effect = lambda: events.append("com_release")
 

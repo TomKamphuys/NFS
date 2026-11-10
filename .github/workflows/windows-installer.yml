@@ -50,7 +50,7 @@ jobs:
           enable-cache: true
 
       - name: Install the project and PyInstaller
-        run: uv sync --locked --all-extras --dev
+        run: uv sync --locked --all-extras --dev --no-editable
 
       - name: Add PyInstaller
         run: uv pip install pyinstaller
@@ -59,20 +59,58 @@ jobs:
         id: version
         shell: pwsh
         run: |
-          $ref = "${{ github.ref }}"
+          $ref = $env:GITHUB_REF
+          $content = Get-Content pyproject.toml -Raw
+          $match = [regex]::Match($content, '(?m)^\s*version\s*=\s*"([^"]+)"')
+          if (-not $match.Success) { throw "Could not read project version from pyproject.toml" }
+          $projectVersion = $match.Groups[1].Value
           if ($ref -like "refs/tags/v*") {
             $version = $ref -replace "refs/tags/v", ""
+            if ($version -ne $projectVersion) {
+              throw "Tag version $version does not match pyproject.toml version $projectVersion"
+            }
           } else {
-            $content = Get-Content pyproject.toml -Raw
-            $match = [regex]::Match($content, '(?m)^\s*version\s*=\s*"([^"]+)"')
-            $version = $match.Groups[1].Value
+            $version = $projectVersion
           }
-          if (-not $version) { $version = "0.0.0" }
           Write-Host "Resolved version: $version"
           "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
       - name: Build executable with PyInstaller
-        run: uv run pyinstaller packaging/hals.spec --noconfirm --clean
+        run: uv run --no-sync pyinstaller packaging/hals.spec --noconfirm --clean
+
+      - name: Verify frozen executable against stale metadata
+        shell: pwsh
+        run: |
+          $verificationDir = Join-Path $env:RUNNER_TEMP "HALS-version-check"
+          New-Item -ItemType Directory -Path $verificationDir -Force | Out-Null
+          Copy-Item -Path "dist\HALS Near Field Scanner\*" -Destination $verificationDir -Recurse -Force
+          $metadataDirectory = Join-Path $verificationDir "_internal"
+          if (-not (Test-Path -LiteralPath $metadataDirectory)) { $metadataDirectory = $verificationDir }
+          $metadataDir = Get-ChildItem -LiteralPath $metadataDirectory -Directory -Filter "nfs-*.dist-info" | Select-Object -First 1
+          if (-not $metadataDir) { throw "Bundled nfs distribution metadata was not found under $metadataDirectory" }
+          $metadataFile = Join-Path $metadataDir.FullName "METADATA"
+          if (-not (Test-Path -LiteralPath $metadataFile)) { throw "Bundled metadata file was not found at $metadataFile" }
+          Write-Host "Verifying with bundled metadata at $metadataFile"
+          $metadata = Get-Content -LiteralPath $metadataFile -Raw
+          $staleMetadata = [regex]::Replace($metadata, '(?m)^Version: [^\r\n]+', 'Version: 0.2.1')
+          if ($staleMetadata -eq $metadata) { throw "Could not set stale nfs metadata for verification" }
+          Set-Content -LiteralPath $metadataFile -Value $staleMetadata -Encoding utf8
+          $executable = Join-Path $verificationDir "HALS Near Field Scanner.exe"
+          $versionReport = Join-Path $verificationDir "actual-version.txt"
+          $verificationProcess = Start-Process -FilePath $executable -ArgumentList @(
+            "--verify-version",
+            "${{ steps.version.outputs.version }}",
+            "--report",
+            $versionReport
+          ) -Wait -PassThru
+          if (-not (Test-Path -LiteralPath $versionReport)) {
+            throw "Frozen executable did not create its version report (exit code $($verificationProcess.ExitCode))"
+          }
+          $actualVersion = Get-Content -LiteralPath $versionReport -Raw
+          if ($verificationProcess.ExitCode -ne 0) {
+            throw "Frozen executable reported '$actualVersion' instead of ${{ steps.version.outputs.version }} (exit code $($verificationProcess.ExitCode))"
+          }
+          Write-Host "Frozen executable verified as version $actualVersion despite stale 0.2.1 metadata"
 
       - name: Install Inno Setup
         run: choco install innosetup --no-progress --yes
@@ -91,4 +129,6 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: dist/installer/*.exe
+          overwrite_files: true
+          fail_on_unmatched_files: true
           generate_release_notes: true

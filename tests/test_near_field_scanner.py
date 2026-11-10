@@ -26,9 +26,7 @@ def test_take_single_measurement(mocks):
     mocks['audio'].set_session_directory.assert_called_once_with(
         Path.cwd() / "single_measurements"
     )
-    mocks['audio'].naming_convention.build_ir_path.assert_called_once_with(position, Path.cwd() / "single_measurements", None)
-    mocks['audio'].naming_convention.build_dist_path.assert_called_once_with(position, Path.cwd() / "single_measurements", None)
-    mocks['audio'].capture_ir.assert_called_once()
+    mocks['audio'].measure_ir.assert_called_once_with(position)
 
 
 def test_take_single_measurement_uses_active_project_directory(mocks, tmp_path):
@@ -48,9 +46,7 @@ def test_take_single_measurement_uses_active_project_directory(mocks, tmp_path):
     mocks['audio'].set_session_directory.assert_called_with(
         tmp_path / "single_measurements"
     )
-    mocks['audio'].naming_convention.build_ir_path.assert_called_once_with(position, tmp_path / "single_measurements", None)
-    mocks['audio'].naming_convention.build_dist_path.assert_called_once_with(position, tmp_path / "single_measurements", None)
-    mocks['audio'].capture_ir.assert_called_once()
+    mocks['audio'].measure_ir.assert_called_once_with(position)
 
 
 def test_take_measurement_set(mocks):
@@ -59,7 +55,7 @@ def test_take_measurement_set(mocks):
     # 1. move_to_safe_starting_radius()
     # 2. while not ready():
     # 3.   next()
-    # 4.   get_position(), log, capture_ir()
+    # 4.   get_position(), log, measure_ir()
     # 5. loop...
     # 6. reset(), move_to_park_position()
 
@@ -86,7 +82,9 @@ def test_take_measurement_set(mocks):
     # Both points are measured
     mocks['audio'].set_session_directory.assert_called_with(Path.cwd() / "measurement_set")
     assert (Path.cwd() / "logs").exists()
-    assert mocks['audio'].capture_ir.call_count == 2
+    assert mocks['audio'].measure_ir.call_count == 2
+    assert mocks['audio'].measure_ir.call_args_list[0].args[0] is pos1
+    assert mocks['audio'].measure_ir.call_args_list[1].args[0] is pos2
 
 
 def test_take_measurement_set_reports_progress(mocks):
@@ -188,11 +186,11 @@ def test_measurement_set_stop_finishes_current_point_then_returns_safe(mocks):
 
     with patch("builtins.open", mock_open()):
         nfs = NearFieldScanner(mocks['scanner'], mocks['audio'], mocks['motion_manager'])
-        mocks['audio'].capture_ir.side_effect = lambda ir_path, dist_path: nfs.stop_measurement_set()
+        mocks['audio'].measure_ir.side_effect = lambda *args: nfs.stop_measurement_set()
         nfs.take_measurement_set()
 
     assert mocks['motion_manager'].next.call_count == 1
-    assert mocks['audio'].capture_ir.call_count == 1
+    assert mocks['audio'].measure_ir.call_count == 1
     assert mocks['motion_manager'].move_to_safe_starting_radius.call_count == 1
     mocks['motion_manager'].move_to_park_position.assert_called_once()
     assert not nfs.is_measurement_set_running()

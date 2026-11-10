@@ -3,6 +3,8 @@ from pathlib import Path
 
 import pytest
 
+from harmonic_drive_qt import app_version
+
 
 @pytest.fixture
 def launcher(tmp_path, monkeypatch):
@@ -98,3 +100,46 @@ def test_copy_error_is_non_fatal_and_remaining_file_is_seeded(launcher, tmp_path
 
     assert not (data_dir / "config_default.ini").exists()
     assert (data_dir / "config.ini").read_bytes() == b"bundled"
+
+
+@pytest.mark.parametrize(
+    "actual_version, expected_version, exit_code",
+    [("0.4.3", "0.4.3", 0), ("0.2.1", "0.4.3", 1)],
+)
+def test_version_verification_does_not_prepare_runtime_environment(
+    launcher, tmp_path, monkeypatch, actual_version, expected_version, exit_code
+):
+    module, _bundle = launcher
+    data_dir = tmp_path / "user-data"
+    monkeypatch.setattr(module, "_user_data_dir", lambda: data_dir)
+    monkeypatch.setattr(module.sys, "argv", ["HALS Near Field Scanner.exe", "--verify-version", expected_version])
+    monkeypatch.setattr(app_version, "get_nfs_version", lambda: actual_version)
+
+    def unexpected_setup():
+        pytest.fail("Version verification must not touch the runtime environment")
+
+    monkeypatch.setattr(module, "_prepare_runtime_environment", unexpected_setup)
+
+    assert module.main() == exit_code
+    assert not data_dir.exists()
+
+
+def test_version_verification_can_report_actual_version(launcher, tmp_path, monkeypatch):
+    module, _bundle = launcher
+    report_file = tmp_path / "actual-version.txt"
+    monkeypatch.setattr(module.sys, "argv", [
+        "HALS Near Field Scanner.exe",
+        "--verify-version",
+        "0.4.3",
+        "--report",
+        str(report_file),
+    ])
+    monkeypatch.setattr(app_version, "get_nfs_version", lambda: "0.2.1")
+    monkeypatch.setattr(
+        module,
+        "_prepare_runtime_environment",
+        lambda: pytest.fail("Version verification must not touch the runtime environment"),
+    )
+
+    assert module.main() == 1
+    assert report_file.read_text(encoding="utf-8") == "0.2.1"
