@@ -16,10 +16,10 @@ MUTED = "#64748b"
 
 def app_stylesheet() -> str:
     image_path = (Path.cwd() / "images" / "bar_bg2_qt_dulled.png").as_posix()
-    toggle_off = (Path(__file__).resolve().parent / "icons" / "toggle-off.png").as_posix()
-    toggle_on = (Path(__file__).resolve().parent / "icons" / "toggle-on.png").as_posix()
-    disclosure_closed = (Path(__file__).resolve().parent / "icons" / "disclosure-closed.png").as_posix()
-    disclosure_open = (Path(__file__).resolve().parent / "icons" / "disclosure-open.png").as_posix()
+    toggle_off = (Path(__file__).resolve().parent / "icons" / "toggle-off.svg").as_posix()
+    toggle_on = (Path(__file__).resolve().parent / "icons" / "toggle-on.svg").as_posix()
+    disclosure_closed = (Path(__file__).resolve().parent / "icons" / "disclosure-closed.svg").as_posix()
+    disclosure_open = (Path(__file__).resolve().parent / "icons" / "disclosure-open.svg").as_posix()
     return f"""
     QWidget {{
         background: #ffffff;
@@ -240,9 +240,9 @@ def app_stylesheet() -> str:
 
 
 def toggle_style() -> str:
-    toggle_off = (Path(__file__).resolve().parent / "icons" / "toggle-off.png").as_posix()
-    toggle_on = (Path(__file__).resolve().parent / "icons" / "toggle-on.png").as_posix()
-    toggle_disabled_on = (Path(__file__).resolve().parent / "icons" / "toggle-disabled-on.png").as_posix()
+    toggle_off = (Path(__file__).resolve().parent / "icons" / "toggle-off.svg").as_posix()
+    toggle_on = (Path(__file__).resolve().parent / "icons" / "toggle-on.svg").as_posix()
+    toggle_disabled_on = (Path(__file__).resolve().parent / "icons" / "toggle-disabled-on.svg").as_posix()
     return (
         "QCheckBox { border: none; background: transparent; spacing: 8px; }"
         "QCheckBox:disabled { color: #94a3b8; }"
@@ -270,7 +270,7 @@ def light_combo(combo) -> None:
 
 def header_combo(combo) -> None:
     """Style a compact header combo so its expandable affordance is obvious."""
-    down_arrow = (Path(__file__).resolve().parent / "icons" / "spin-chevron-down.png").as_posix()
+    down_arrow = (Path(__file__).resolve().parent / "icons" / "spin-chevron-down.svg").as_posix()
     light_combo(combo)
     combo.setFixedHeight(24)
     combo.setStyleSheet(
@@ -312,8 +312,8 @@ def warning_button(button) -> None:
 
 
 def value_spin_style(object_name: str = "OutputLevelSpin") -> str:
-    up_icon = (Path(__file__).resolve().parent / "icons" / "spin-chevron-up.png").as_posix()
-    down_icon = (Path(__file__).resolve().parent / "icons" / "spin-chevron-down.png").as_posix()
+    up_icon = (Path(__file__).resolve().parent / "icons" / "spin-chevron-up.svg").as_posix()
+    down_icon = (Path(__file__).resolve().parent / "icons" / "spin-chevron-down.svg").as_posix()
     style = (
         "QDoubleSpinBox#OutputLevelSpin {"
         "background: #ffffff;"

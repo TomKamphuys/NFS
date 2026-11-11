@@ -63,6 +63,7 @@ exclude = ["tests*"]
 
 [tool.setuptools.package-data]
 nfs = ["config.ini"]
+harmonic_drive_qt = ["icons/*.svg", "icons/*.png"]
 rft_calc = ["assets/*.svg"]
 grid_generator = ["images_grid_gen/*.png"]
 
