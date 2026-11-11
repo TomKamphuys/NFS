@@ -58,7 +58,7 @@ if images_dir.exists():
 # Qt button icons shipped inside the harmonic_drive_qt package. They are
 # resolved at runtime via ``Path(__file__).parent / "icons"``, so they must
 # keep the same relative location inside the bundle.
-datas += collect_data_files("harmonic_drive_qt", includes=["icons/*", "**/*.png"])
+datas += collect_data_files("harmonic_drive_qt", includes=["icons/*", "**/*.png", "**/*.svg"])
 
 # The nfs package ships a bundled config.ini as package data.
 datas += collect_data_files("nfs")
