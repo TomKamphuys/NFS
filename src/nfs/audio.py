@@ -2462,6 +2462,7 @@ class Audio(IAudio):
                 "capture_metadata": result['capture_metadata'],
                 "name": ir_path.name,
                 "saved": save,
+                "retries": attempt,
             }
 
         # All retries exhausted — return a failure result without saving files
@@ -2782,9 +2783,67 @@ class MockInterfaceAudio(Audio):
         self._position_callback = position_callback
         self._speaker_model = speaker_model
 
+        # Dropout simulation counters — for testing the retry system.
+        # Every 10th capture triggers a transient dropout (retry then succeed).
+        # Every 20th capture triggers a persistent dropout (all retries exhausted).
+        self._capture_count: int = 0
+        self._dropout_persistent: bool = False
+        self._persistent_fail_count: int = 0
+
     def set_position_callback(self, callback: Optional[Callable[[], CylindricalPosition]]) -> None:
         """Update the position callback at runtime before each capture."""
         self._position_callback = callback
+
+    def _inject_dropout_if_needed(self, result: Dict[str, Any]) -> Dict[str, Any]:
+        """Inject stream underflow into the result to simulate a mid-sweep dropout.
+
+        Called after _finish_sweep in each _run_sweep to determine if this capture
+        should fail.  Every 10th capture triggers a one-time retry; every 20th
+        capture fails permanently (all retries will be exhausted).
+        """
+        self._capture_count += 1
+        n = self._capture_count
+
+        def _inject_underflow():
+            timing = result.get('capture_metadata', {})
+            timing['stream_status'] = [
+                {"sample": 0, "status": "InputUnderflow"}
+            ]
+            result['capture_metadata'] = timing
+
+        # Every 20th point: persistent failure (all retries exhausted)
+        if n % 20 == 0:
+            self._dropout_persistent = True
+            self._persistent_fail_count = 0
+            _inject_underflow()
+            logger.warning(
+                f"[MOCK-INTERFACE] Simulating persistent dropout at capture #{n} "
+                f"(will exhaust all retries)")
+            return result
+        # Persistent dropout retry attempts (following a 20th-point trigger)
+        elif self._dropout_persistent:
+            self._persistent_fail_count += 1
+            # After 3 consecutive failures (matching max_capture_retries = 3), clear the flag
+            if self._persistent_fail_count >= 3:
+                self._dropout_persistent = False
+                self._persistent_fail_count = 0
+                logger.info(
+                    f"[MOCK-INTERFACE] Clearing persistent dropout flag after capture #{n}")
+                return result
+            _inject_underflow()
+            logger.warning(
+                f"[MOCK-INTERFACE] Simulating persistent dropout at capture #{n} "
+                f"(retry attempt, still failing)")
+            return result
+        # Every 10th point (not 20th): single retry then success
+        elif n % 10 == 0:
+            _inject_underflow()
+            logger.warning(
+                f"[MOCK-INTERFACE] Simulating transient dropout at capture #{n} "
+                f"(will retry and succeed)")
+            return result
+
+        return result
 
     def _run_sweep(self) -> Dict[str, Any]:
         prepared = self._prepare_sweep()
@@ -2851,7 +2910,13 @@ class MockInterfaceAudio(Audio):
         rec_mic = np.pad(rec_mic, (0, capture_margin))
         rec_loop = np.pad(rec_loop, (0, capture_margin))
 
-        return self._finish_sweep(prepared, rec_mic, rec_loop)
+        result = self._finish_sweep(prepared, rec_mic, rec_loop)
+
+        # Simulate mid-sweep dropouts for testing the retry system.
+        # Every 10th capture: transient dropout (retry succeeds).
+        # Every 20th capture: persistent dropout (all retries exhausted).
+        result = self._inject_dropout_if_needed(result)
+        return result
 
     def play_sine(self, frequency: float, level_dbfs: float, duration_s: Optional[float] = 1.0) -> None:
         """

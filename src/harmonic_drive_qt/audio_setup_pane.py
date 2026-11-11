@@ -680,6 +680,18 @@ class AudioSetupPane(QWidget):
         self.taper = self._spin(_float_value(parser, "sweep", "mic_tail_taper_ms", 20.0), 0, 60000, " ms", 1)
         self.h2 = QLineEdit(_normalize_decimal_text(_value(parser, "sweep", "h2_test_db", "None")))
         self.h3 = QLineEdit(_normalize_decimal_text(_value(parser, "sweep", "h3_test_db", "None")))
+        self.max_retries = self._spin(_int_value(parser, "sweep", "max_capture_retries", 3), 1, 10, "", 0)
+        self.max_retries.setFixedWidth(86)
+        self.max_retries.setToolTip(
+            "Maximum automatic retry attempts per measurement point when a dropout is detected. "
+            "After exhausting retries, the point is skipped and logged."
+        )
+        self.retry_psr = self._spin(_float_value(parser, "sweep", "retry_psr_threshold", 3.0), 0.1, 100, "", 1)
+        self.retry_psr.setFixedWidth(86)
+        self.retry_psr.setToolTip(
+            "Minimum PSR (Peak-to-Sidelobe Ratio) for the quality gate. "
+            "A lower PSR indicates poor loopback marker alignment, often caused by a dropout."
+        )
         self._normalize_decimal_editor(self.h2)
         self._normalize_decimal_editor(self.h3)
         self.naming.setToolTip("Choose the filename format for exported measurements.")
@@ -703,6 +715,7 @@ class AudioSetupPane(QWidget):
             ("Naming", self.naming), ("", self.align), ("", self.debug),
             ("Driver settle time", self.pre_sil), ("Post Silence", self.post_sil),
             ("H2 test dB", self.h2), ("H3 test dB", self.h3),
+            ("Max retries", self.max_retries), ("Retry PSR threshold", self.retry_psr),
         ]
         advanced_children = []
         for index, (label, widget) in enumerate(fields):
@@ -850,6 +863,7 @@ class AudioSetupPane(QWidget):
         commit_controls = [
             self.blocksize, self.sweep_dur, self.num_sweeps,
             self.hpf_order, self.hpf_cap, self.pre_sil, self.post_sil, self.taper,
+            self.max_retries, self.retry_psr,
         ]
         for control in immediate_controls:
             if isinstance(control, QComboBox):
@@ -1094,6 +1108,8 @@ class AudioSetupPane(QWidget):
             ("sweep", "debug_saves"): self.debug.isChecked(),
             ("sweep", "h2_test_db"): _normalize_decimal_text(self.h2.text()),
             ("sweep", "h3_test_db"): _normalize_decimal_text(self.h3.text()),
+            ("sweep", "max_capture_retries"): int(self.max_retries.value()),
+            ("sweep", "retry_psr_threshold"): self.retry_psr.value(),
         }
         try:
             save_config_values(

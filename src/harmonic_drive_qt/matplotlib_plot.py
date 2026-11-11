@@ -93,16 +93,23 @@ class MatplotlibPlot(FigureCanvasQTAgg):
         completed_x: Iterable[float],
         completed_y: Iterable[float],
         *,
+        completed_status: Iterable[str] | None = None,
         title: str | None = None,
         x_range: tuple[float, float] | None = None,
         y_range: tuple[float, float] | None = None,
     ) -> None:
-        """Show grid points in gray and completed points colored by elevation."""
+        """Show grid points in gray and completed points colored by status or elevation.
+
+        :param completed_status: Optional list of status strings matching completed_x/y.
+            "ok" = green, "retried" = orange, "failed" = red.
+            If not provided, falls back to coloring by elevation.
+        """
         self._pan_start = None
         self._x_values = np.asarray(list(grid_x), dtype=float)
         self._y_values = np.asarray(list(grid_y), dtype=float)
         self._completed_x = np.asarray(list(completed_x), dtype=float)
         self._completed_y = np.asarray(list(completed_y), dtype=float)
+        self._completed_status = list(completed_status) if completed_status is not None else None
         if title is not None:
             self.title = title
         self.scatter = True
@@ -200,7 +207,7 @@ class MatplotlibPlot(FigureCanvasQTAgg):
         self.draw_idle()
 
     def _render_with_progress(self) -> None:
-        """Render grid points in gray and completed points colored by elevation."""
+        """Render grid points in gray and completed points colored by status or elevation."""
         self.axes.clear()
         self._style_axes()
 
@@ -215,17 +222,33 @@ class MatplotlibPlot(FigureCanvasQTAgg):
                 zorder=2,
             )
 
-        # Completed points colored by elevation
+        # Completed points colored by status (ok=green, retried=orange, failed=red)
+        # or by elevation if no status provided
         if self._completed_x.size > 0:
-            self.axes.scatter(
-                self._completed_x,
-                self._completed_y,
-                c=self._completed_y,
-                cmap=_POSITION_CMAP,
-                s=32,
-                edgecolors="none",
-                zorder=3,
-            )
+            if self._completed_status is not None:
+                _STATUS_COLORS = {"ok": "#22c55e", "retried": "#f59e0b", "failed": "#ef4444"}
+                colors = [
+                    _STATUS_COLORS.get(str(s), "#22c55e")
+                    for s in self._completed_status
+                ]
+                self.axes.scatter(
+                    self._completed_x,
+                    self._completed_y,
+                    c=colors,
+                    s=32,
+                    edgecolors="none",
+                    zorder=3,
+                )
+            else:
+                self.axes.scatter(
+                    self._completed_x,
+                    self._completed_y,
+                    c=self._completed_y,
+                    cmap=_POSITION_CMAP,
+                    s=32,
+                    edgecolors="none",
+                    zorder=3,
+                )
 
         self._apply_limits()
         self._replace_selector()

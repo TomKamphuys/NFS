@@ -552,7 +552,8 @@ class LiveCapturePane(QWidget):
         self.last_ir_mtime = 0.0
         self.grid_points: list[tuple[float, float, float]] = []
         self.grid_df: pd.DataFrame | None = None
-        self._completed_positions: list[dict[str, float]] = []
+        # Each entry: {"r": ..., "phi": ..., "z": ..., "status": "ok" | "retried" | "failed"}
+        self._completed_positions: list[dict[str, Any]] = []
         self.fr_smoothing_fraction = 24
         self.viewer_backend = self._read_viewer_backend()
         self._pyvista_error: str | None = None
@@ -1006,7 +1007,17 @@ class LiveCapturePane(QWidget):
         elif status == "point_complete":
             pos = event.get("position")
             if pos is not None:
-                self._completed_positions.append(pos)
+                retries = event.get("retries", 0)
+                pos_entry = dict(pos)
+                pos_entry["status"] = "retried" if int(retries) > 0 else "ok"
+                self._completed_positions.append(pos_entry)
+            self.refresh_positions()
+        elif status == "point_failed":
+            pos = event.get("position")
+            if pos is not None:
+                pos_entry = dict(pos)
+                pos_entry["status"] = "failed"
+                self._completed_positions.append(pos_entry)
             self.refresh_positions()
         elif status in ("finished", "failed"):
             self.refresh_positions()
@@ -1053,19 +1064,22 @@ class LiveCapturePane(QWidget):
                 grid_azimuth.append(phi)
                 grid_elevation.append(math.degrees(math.atan2(z - z_center, r)) if r > 0 else 0.0)
 
-        # Build completed point azimuth/elevation arrays (colored by elevation)
+        # Build completed point azimuth/elevation arrays with status
         comp_azimuth = []
         comp_elevation = []
+        comp_status = []
         for pos in self._completed_positions:
             r = pos["r"]
             phi = pos["phi"]
             z = pos["z"]
             comp_azimuth.append(phi)
             comp_elevation.append(math.degrees(math.atan2(z - z_center, r)) if r > 0 else 0.0)
+            comp_status.append(pos.get("status", "ok"))
 
         self.positions.set_data_with_progress(
             grid_azimuth, grid_elevation,
             comp_azimuth, comp_elevation,
+            completed_status=comp_status if comp_status else None,
             title="Measurement Positions (Azimuth vs Elevation)",
             x_range=(-180, 180),
             y_range=(-90, 90),

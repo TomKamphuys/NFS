@@ -298,23 +298,48 @@ class NearFieldScanner:
                 self._append_position_to_file(position)
                 self._update_audio_position_callback(position)
 
-                self._audio.measure_ir(position, session_name)
+                result = self._audio.measure_ir(position, session_name)
                 timestamp = time.monotonic()
                 if started_at is not None:
                     elapsed_seconds = timestamp - started_at
                 if started_at is not None and total > 0 and current >= 2:
                     seconds_per_point = (timestamp - started_at) / current
                     eta_seconds = seconds_per_point * max(0, total - current)
-                self._emit_measurement_progress(
-                    progress_callback,
-                    "point_complete",
-                    current,
-                    total,
-                    position={"r": position.r(), "phi": position.t(), "z": position.z()},
-                    timestamp=timestamp,
-                    eta_seconds=eta_seconds,
-                    elapsed_seconds=elapsed_seconds,
-                )
+
+                pos_dict = {"r": position.r(), "phi": position.t(), "z": position.z()}
+
+                # Check if the measurement failed (e.g., dropout retries exhausted)
+                if result.get("error"):
+                    logger.warning(
+                        f"Point {current}/{total} failed: {result['error']}, "
+                        f"skipping to next point")
+                    self._emit_measurement_progress(
+                        progress_callback,
+                        "point_failed",
+                        current,
+                        total,
+                        position=pos_dict,
+                        timestamp=timestamp,
+                        eta_seconds=eta_seconds,
+                        elapsed_seconds=elapsed_seconds,
+                        error=result["error"],
+                    )
+                else:
+                    retries = result.get("retries", 0)
+                    if retries > 0:
+                        logger.info(
+                            f"Point {current}/{total} succeeded after {retries} retry(ies)")
+                    self._emit_measurement_progress(
+                        progress_callback,
+                        "point_complete",
+                        current,
+                        total,
+                        position=pos_dict,
+                        timestamp=timestamp,
+                        eta_seconds=eta_seconds,
+                        elapsed_seconds=elapsed_seconds,
+                        retries=retries,
+                    )
 
             self._measurement_motion_manager.reset()
             self._measurement_motion_manager.move_to_park_position()
@@ -374,6 +399,7 @@ class NearFieldScanner:
         elapsed_seconds: float = 0.0,
         error: str | None = None,
         exception: Exception | None = None,
+        retries: int | None = None,
     ) -> None:
         """
         Record and emit a measurement progress update.
@@ -382,7 +408,7 @@ class NearFieldScanner:
         user-provided callback function if one was supplied.
 
         :param progress_callback: Optional callback receiving a copy of the progress dictionary.
-        :param status: Current status string (e.g., 'started', 'point_complete', 'finished', 'failed').
+        :param status: Current status string (e.g., 'started', 'point_complete', 'point_failed', 'finished', 'failed').
         :param current: Number of points measured so far.
         :param total: Total number of points in the measurement set.
         :param position: Optional position dict with 'r', 'phi', 'z' keys (cylindrical coords in mm/deg).
@@ -391,6 +417,7 @@ class NearFieldScanner:
         :param elapsed_seconds: Elapsed time in seconds since measurement started.
         :param error: Optional error description string if failed.
         :param exception: Optional Exception instance if failed.
+        :param retries: Number of retries used for this point (0 = first try succeeded).
         :return: None
         """
         event: dict[str, Any] = {
@@ -407,6 +434,8 @@ class NearFieldScanner:
             event["error"] = error
         if exception is not None:
             event["exception"] = exception
+        if retries is not None:
+            event["retries"] = retries
         with self._measurement_progress_lock:
             self._measurement_progress = dict(event)
         if progress_callback is None:

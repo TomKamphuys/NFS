@@ -836,7 +836,8 @@ class ControlPane(QWidget):
         total = int(event.get("total") or 0)
         status = str(event.get("status") or "ready")
         error_text = str(event.get("error") or "")
-        has_error = status in ("failed", "error") or bool(error_text)
+        # A single point failure (point_failed) is not a set-level failure
+        has_error = status in ("failed", "error") or (bool(error_text) and status != "point_failed")
 
         if has_error:
             label_status = "Failed"

@@ -7,9 +7,11 @@ from nfs.nfs import NearFieldScanner
 
 @pytest.fixture
 def mocks():
+    audio_mock = Mock()
+    audio_mock.measure_ir.return_value = {"retries": 0}
     return {
         'scanner': Mock(),
-        'audio': Mock(),
+        'audio': audio_mock,
         'motion_manager': Mock(),
     }
 
@@ -186,7 +188,10 @@ def test_measurement_set_stop_finishes_current_point_then_returns_safe(mocks):
 
     with patch("builtins.open", mock_open()):
         nfs = NearFieldScanner(mocks['scanner'], mocks['audio'], mocks['motion_manager'])
-        mocks['audio'].measure_ir.side_effect = lambda *args: nfs.stop_measurement_set()
+        def _stop_and_return(*args):
+            nfs.stop_measurement_set()
+            return {"retries": 0}
+        mocks['audio'].measure_ir.side_effect = _stop_and_return
         nfs.take_measurement_set()
 
     assert mocks['motion_manager'].next.call_count == 1
