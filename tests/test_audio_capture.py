@@ -43,6 +43,8 @@ def make_engine(first=False, injected=False):
         post_sil_ms=100,
         debug_saves=True,
         naming_convention="dimitri",
+        max_capture_retries=3,
+        retry_psr_threshold=3.0,
     )
     return audio.Audio(
         hw,
@@ -551,4 +553,281 @@ def test_legacy_inverse_layout_and_explicit_metadata_agree():
 def test_invalid_inverse_timing_rejected(kw):
     with pytest.raises(ValueError):
         DeconvolutionEngine(48000).process_ir(np.ones(1000), np.ones(1000), **kw)
+
+
+# Dropout detection helpers and retry loop
+
+def test_check_stream_health_detects_underflow():
+    e = make_engine()
+    e.cap['max_capture_retries'] = 3
+    e.cap['retry_psr_threshold'] = 3.0
+    result = {
+        'capture_metadata': {
+            'stream_status': [
+                {'sample': 1000, 'status': 'InputUnderflow'},
+            ]
+        },
+        'raw_recordings': (np.ones(1000), np.ones(1000)),
+    }
+    assert e._check_stream_health(result) is True
+
+
+def test_check_stream_health_detects_overflow():
+    e = make_engine()
+    e.cap['max_capture_retries'] = 3
+    e.cap['retry_psr_threshold'] = 3.0
+    result = {
+        'capture_metadata': {
+            'stream_status': [
+                {'sample': 2000, 'status': 'OutputOverflow'},
+            ]
+        },
+        'raw_recordings': (np.ones(1000), np.ones(1000)),
+    }
+    assert e._check_stream_health(result) is True
+
+
+def test_check_stream_health_clean_when_no_flags():
+    e = make_engine()
+    e.cap['max_capture_retries'] = 3
+    e.cap['retry_psr_threshold'] = 3.0
+    result = {
+        'capture_metadata': {
+            'stream_status': []
+        },
+        'raw_recordings': (np.ones(1000), np.ones(1000)),
+    }
+    assert e._check_stream_health(result) is False
+
+
+def test_check_stream_health_clean_when_empty_status():
+    e = make_engine()
+    e.cap['max_capture_retries'] = 3
+    e.cap['retry_psr_threshold'] = 3.0
+    result = {
+        'capture_metadata': {},
+        'raw_recordings': (np.ones(1000), np.ones(1000)),
+    }
+    assert e._check_stream_health(result) is False
+
+
+def test_check_silence_gaps_detects_gap_in_loopback():
+    e = make_engine()
+    e.cap['max_capture_retries'] = 3
+    e.cap['retry_psr_threshold'] = 3.0
+    fs = 48000
+    guard_samples = 480  # 10 ms guard
+    sweep_samples = 72000  # 1.5 s sweep
+    sweep_start = 10000  # arbitrary position
+    total = sweep_start + sweep_samples + 2000
+    loopback = np.ones(total, dtype=np.float32) * 0.5
+    # Insert a silence gap inside the active sweep portion (after guard)
+    gap_start = sweep_start + guard_samples + 10000
+    gap_end = gap_start + 2000  # ~40 ms of silence — wider than window size
+    loopback[gap_start:gap_end] = 0.0
+    result = {
+        'capture_metadata': {
+            'sweep_samples': sweep_samples,
+            'guard_samples': guard_samples,
+            'aligned_repeats': [
+                {'sweep_start_sample': sweep_start},
+            ],
+        },
+        'raw_recordings': (loopback, np.ones(total, dtype=np.float32)),
+    }
+    assert e._check_silence_gaps(result) is True
+
+
+def test_check_silence_gaps_clean_loopback():
+    e = make_engine()
+    e.cap['max_capture_retries'] = 3
+    e.cap['retry_psr_threshold'] = 3.0
+    fs = 48000
+    guard_samples = 480
+    sweep_samples = 72000
+    sweep_start = 10000
+    total = sweep_start + sweep_samples + 2000
+    loopback = np.ones(total, dtype=np.float32) * 0.5
+    result = {
+        'capture_metadata': {
+            'sweep_samples': sweep_samples,
+            'guard_samples': guard_samples,
+            'aligned_repeats': [
+                {'sweep_start_sample': sweep_start},
+            ],
+        },
+        'raw_recordings': (loopback, np.ones(total, dtype=np.float32)),
+    }
+    assert e._check_silence_gaps(result) is False
+
+
+def test_check_silence_gaps_ignores_silence_in_pre_post_region():
+    e = make_engine()
+    e.cap['max_capture_retries'] = 3
+    e.cap['retry_psr_threshold'] = 3.0
+    fs = 48000
+    guard_samples = 480
+    sweep_samples = 72000
+    sweep_start = 10000
+    total = sweep_start + sweep_samples + 2000
+    loopback = np.ones(total, dtype=np.float32) * 0.5
+    # Silence before the sweep should not trigger
+    loopback[0:sweep_start] = 0.0
+    # Silence in guard samples should not trigger
+    loopback[sweep_start:sweep_start + guard_samples] = 0.0
+    loopback[sweep_start + sweep_samples - guard_samples:sweep_start + sweep_samples] = 0.0
+    # Silence after the sweep should not trigger
+    loopback[sweep_start + sweep_samples:total] = 0.0
+    result = {
+        'capture_metadata': {
+            'sweep_samples': sweep_samples,
+            'guard_samples': guard_samples,
+            'aligned_repeats': [
+                {'sweep_start_sample': sweep_start},
+            ],
+        },
+        'raw_recordings': (loopback, np.ones(total, dtype=np.float32)),
+    }
+    assert e._check_silence_gaps(result) is False
+
+
+def test_check_quality_flags_low_psr():
+    e = make_engine()
+    e.cap['max_capture_retries'] = 3
+    e.cap['retry_psr_threshold'] = 3.0
+    metrics = {'psr': 1.5, 'snr_db': 60.0}
+    assert e._check_quality(metrics) is True
+
+
+def test_check_quality_passes_high_psr():
+    e = make_engine()
+    e.cap['max_capture_retries'] = 3
+    e.cap['retry_psr_threshold'] = 3.0
+    metrics = {'psr': 5.0, 'snr_db': 60.0}
+    assert e._check_quality(metrics) is False
+
+
+def test_check_quality_ignores_low_snr():
+    e = make_engine()
+    e.cap['max_capture_retries'] = 3
+    e.cap['retry_psr_threshold'] = 3.0
+    # Low SNR should NOT trigger retry — only PSR matters
+    metrics = {'psr': 5.0, 'snr_db': 10.0}
+    assert e._check_quality(metrics) is False
+
+
+def test_check_quality_uses_configurable_threshold():
+    e = make_engine()
+    e.cap['max_capture_retries'] = 3
+    e.cap['retry_psr_threshold'] = 5.0
+    metrics = {'psr': 4.0, 'snr_db': 60.0}
+    assert e._check_quality(metrics) is True
+    metrics = {'psr': 6.0, 'snr_db': 60.0}
+    assert e._check_quality(metrics) is False
+
+
+def test_retry_loop_succeeds_on_clean_capture(monkeypatch):
+    e = make_engine()
+    e.cap['max_capture_retries'] = 3
+    e.cap['retry_psr_threshold'] = 3.0
+    p = e._prepare_sweep()
+    mic, loop = ideal_capture(p)
+    result = e._finish_sweep(p, mic, loop)
+    call_count = [0]
+
+    def mock_run_sweep():
+        call_count[0] += 1
+        return result
+
+    monkeypatch.setattr(e, '_run_sweep', mock_run_sweep)
+    exported = e.measure_ir(CylindricalPosition(100, 0, 0), save=False)
+    assert call_count[0] == 1
+    assert exported['ir_linear'] is not None
+    assert 'error' not in exported
+
+
+def test_retry_loop_retries_on_stream_health_failure(monkeypatch):
+    e = make_engine()
+    e.cap['max_capture_retries'] = 3
+    e.cap['retry_psr_threshold'] = 3.0
+    p = e._prepare_sweep()
+    mic, loop = ideal_capture(p)
+    result = e._finish_sweep(p, mic, loop)
+    call_count = [0]
+
+    def mock_run_sweep():
+        call_count[0] += 1
+        if call_count[0] < 2:
+            # First attempt has underflow
+            return {
+                'capture_metadata': {
+                    'stream_status': [{'sample': 100, 'status': 'InputUnderflow'}],
+                    'sweep_samples': p['timing']['sweep_samples'],
+                },
+                'raw_recordings': (np.ones(1000), np.ones(1000)),
+            }
+        return result
+
+    monkeypatch.setattr(e, '_run_sweep', mock_run_sweep)
+    exported = e.measure_ir(CylindricalPosition(100, 0, 0), save=False)
+    assert call_count[0] == 2
+    assert exported['ir_linear'] is not None
+    assert 'error' not in exported
+
+
+def test_retry_loop_retries_on_silence_gap(monkeypatch):
+    e = make_engine()
+    e.cap['max_capture_retries'] = 3
+    e.cap['retry_psr_threshold'] = 3.0
+    p = e._prepare_sweep()
+    mic, loop = ideal_capture(p)
+    result = e._finish_sweep(p, mic, loop)
+    call_count = [0]
+    meta = result['capture_metadata']
+    sweep_start = meta['aligned_repeats'][0]['sweep_start_sample']
+
+    def mock_run_sweep():
+        call_count[0] += 1
+        if call_count[0] < 2:
+            # First attempt has silence gap in loopback sweep portion
+            loopback = loop.copy()
+            # Zero out a 10 ms window inside the sweep portion
+            gap_start = sweep_start + 1000
+            gap_end = gap_start + 2000  # ~40 ms of silence — wider than window size
+            loopback[gap_start:gap_end] = 0.0
+            return {
+                'capture_metadata': dict(meta, stream_status=[]),
+                'raw_recordings': (loopback, mic.copy()),
+            }
+        return result
+
+    monkeypatch.setattr(e, '_run_sweep', mock_run_sweep)
+    exported = e.measure_ir(CylindricalPosition(100, 0, 0), save=False)
+    assert call_count[0] == 2
+    assert exported['ir_linear'] is not None
+    assert 'error' not in exported
+
+
+def test_retry_loop_exhausts_retries_and_returns_failure(monkeypatch):
+    e = make_engine()
+    e.cap['max_capture_retries'] = 3
+    e.cap['retry_psr_threshold'] = 3.0
+    call_count = [0]
+
+    def mock_run_sweep():
+        call_count[0] += 1
+        return {
+            'capture_metadata': {
+                'stream_status': [{'sample': 100, 'status': 'InputUnderflow'}],
+                'sweep_samples': 1000,
+            },
+            'raw_recordings': (np.ones(1000), np.ones(1000)),
+        }
+
+    monkeypatch.setattr(e, '_run_sweep', mock_run_sweep)
+    exported = e.measure_ir(CylindricalPosition(100, 0, 0), save=False)
+    assert call_count[0] == 3
+    assert exported['ir_linear'] is None
+    assert 'error' in exported
+    assert 'dropout' in exported['error'].lower()
 

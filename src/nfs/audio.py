@@ -101,6 +101,27 @@ from .naming import IRNamingConvention, NamingConventionFactory
 from .debug_artifacts import DebugArtifactHandler, DebugArtifactFactory
 
 
+def _set_realtime_priority() -> None:
+    """Set the Windows process to real-time priority to reduce audio buffer underruns.
+
+    Elevates the entire Python process, including the PortAudio callback thread,
+    so the audio callback is less likely to be preempted by Windows scheduler.
+    This is a preventive measure that complements the retry-based dropout detection.
+    Silently ignored on non-Windows systems or if the call fails.
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        REALTIME_PRIORITY_CLASS = 0x00000080
+        ctypes.windll.kernel32.SetPriorityClass(
+            ctypes.windll.kernel32.GetCurrentProcess(),
+            REALTIME_PRIORITY_CLASS
+        )
+        logger.debug("Process priority set to REALTIME_PRIORITY_CLASS")
+    except Exception:
+        logger.debug("Failed to set real-time process priority (non-critical)")
+
+
 @contextmanager
 def _asio_thread_context(enabled: bool):
     """Keep Windows COM initialized on the calling thread until ASIO closes."""
@@ -1796,6 +1817,10 @@ class Audio(IAudio):
 
         self._log_config()
 
+        # Elevate process priority on Windows to reduce audio buffer underruns.
+        # This is a preventive measure alongside the retry-based dropout detection.
+        _set_realtime_priority()
+
     def _ensure_directories(self) -> None:
         self.rec_dir.mkdir(parents=True, exist_ok=True)
         self.dist_dir.mkdir(parents=True, exist_ok=True)
@@ -2229,6 +2254,104 @@ class Audio(IAudio):
             "active_duration_s": self.sweep_gen.active_duration_s,
         }
 
+    # ─────────────────────────────────────────────────────────────────────────────
+    #  Dropout detection helpers (layered defense)
+    # ─────────────────────────────────────────────────────────────────────────────
+
+    def _check_stream_health(self, result: Dict[str, Any]) -> bool:
+        """Inspect stream_status for underflow/overflow flags indicating dropout.
+
+        Returns True if the capture is unhealthy (needs retry), False if clean.
+        """
+        stream_status = result['capture_metadata'].get('stream_status', [])
+        for entry in stream_status:
+            status_str = entry.get('status', '')
+            if 'Underflow' in status_str or 'Overflow' in status_str:
+                return True
+        return False
+
+    def _check_silence_gaps(self, result: Dict[str, Any]) -> bool:
+        """Scan the raw loopback recording for silence gaps indicating dropout.
+
+        The loopback channel always has strong signal — a silence gap is always
+        a dropout, never a legitimate low-signal condition.
+
+        Uses the detected alignment positions from the first repeat to find
+        the sweep region, so hardware latency is handled correctly.
+
+        Skips the sweep's guard samples (silence at start/end of the sweep
+        signal) to avoid false positives.
+
+        Returns True if a silence gap is found (needs retry), False if clean.
+        """
+        raw_recordings = result.get('raw_recordings')
+        if raw_recordings is None or len(raw_recordings) < 1:
+            return False
+
+        rec_loop = raw_recordings[0]  # electrical loopback channel
+        fs = self.hw['fs']
+
+        # Use the detected alignment positions to find the actual sweep region.
+        # This handles hardware latency correctly — the signal may be shifted
+        # relative to the planned positions.
+        aligned_repeats = result['capture_metadata'].get('aligned_repeats', [])
+        if not aligned_repeats:
+            return False  # No alignment data — skip this check
+
+        first = aligned_repeats[0]
+        sweep_start = first.get('sweep_start_sample', 0)
+        sweep_samples = result['capture_metadata'].get('sweep_samples', 0)
+        guard_samples = result['capture_metadata'].get('guard_samples', 0)
+        sweep_end = sweep_start + sweep_samples
+        if sweep_end > len(rec_loop):
+            sweep_end = len(rec_loop)
+        if sweep_end <= sweep_start:
+            return False
+
+        # Skip guard samples at the start and end of the sweep signal.
+        # The sweep signal has silent guards to keep endpoint artifacts away.
+        check_start = sweep_start + guard_samples
+        check_end = sweep_end - guard_samples
+        if check_end <= check_start:
+            return False  # Sweep is too short to check
+
+        # Sliding window RMS energy detection (10 ms windows)
+        window_size = max(1, int(0.010 * fs))  # 10 ms window
+        step_size = window_size // 2  # 50% overlap
+
+        sweep_region = rec_loop[check_start:check_end]
+        if len(sweep_region) == 0:
+            return False
+
+        peak_energy = np.max(np.abs(sweep_region))
+        if peak_energy < 1e-12:
+            return False  # Entire sweep is silence — something else is wrong
+
+        # Threshold: -60 dB relative to peak
+        threshold = peak_energy * (10 ** (-60.0 / 20.0))
+
+        # Slide across the sweep region checking for silence gaps
+        for i in range(0, len(sweep_region) - window_size + 1, step_size):
+            window = sweep_region[i:i + window_size]
+            rms = np.sqrt(np.mean(window ** 2))
+            if rms < threshold:
+                return True  # Silence gap detected
+
+        return False
+
+    def _check_quality(self, metrics: Dict[str, float]) -> bool:
+        """Check post-deconvolution PSR against the quality threshold.
+
+        PSR reflects loopback marker alignment quality — a dropout corrupts
+        the marker alignment, lowering PSR. SNR is intentionally excluded
+        because the mic can legitimately have low SNR at certain positions.
+
+        Returns True if quality is below threshold (needs retry), False if good.
+        """
+        psr_threshold = self.cap.get('retry_psr_threshold', 3.0)
+        psr = metrics.get('psr', 0.0)
+        return psr < psr_threshold
+
     def capture_ir(self, ir_path: Path, dist_path: Path, save: bool = True,
                    include_debug_artifacts: bool = True) -> dict[str, Any]:
         """
@@ -2236,79 +2359,125 @@ class Audio(IAudio):
 
         The caller is responsible for constructing the output paths using the
         naming convention. This method focuses on audio capture and processing.
+
+        Uses a retry loop with layered dropout detection:
+        - Layer 1: Stream health check (underflow/overflow flags)
+        - Layer 2: Silence gap detection in loopback recording
+        - Layer 3: PSR quality gate after deconvolution
         """
         if save:
             ir_path.parent.mkdir(parents=True, exist_ok=True)
             dist_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # 1. Capture Raw Data (Run Sweeps)
-        result = self._run_sweep()
-
-        # 2. Debug Saves (delegated to injected handler)
         base_label = ir_path.stem
         if base_label.endswith("_ir"):
             base_label = base_label[:-3]  # strip _ir suffix for debug labels
-        if save and include_debug_artifacts:
-            self.debug_handler.save_wav(result["rx_mic_conditioned"],
-                                        f"{base_label}_mic_conditioned", self.rec_dir)
-            self.debug_handler.save_wav(result["rx_loop_aligned"],
-                                        f"{base_label}_loop_aligned", self.rec_dir)
-            for i, slice_data in enumerate(result["debug_mic_slices"]):
-                self.debug_handler.save_wav(slice_data,
-                                            f"{base_label}_sweep{i + 1:02d}", self.rec_dir)
 
-        # Deconvolve before returning metadata so it includes the actual correction.
-        ir_full, ir_linear = self._process_capture(result)
+        max_retries = self.cap.get('max_capture_retries', 3)
 
-        # Save raw input and shared references when debug capture is enabled.
-        if save and self.cap.get('debug_saves', True):
-            logger.info("Saving raw capture and shared reference...")
-            result['capture_metadata'].update(
-                self._save_shared_reference(result['digital_reference'],
-                                            result['acquisition_metadata'])
+        for attempt in range(max_retries):
+            # 1. Capture Raw Data (Run Sweeps)
+            result = self._run_sweep()
+
+            # Layer 1: Immediate stream health check (cheap, no deconvolution)
+            if self._check_stream_health(result):
+                logger.warning(
+                    f"Dropout detected (stream underflow/overflow), "
+                    f"retry {attempt + 1}/{max_retries}")
+                continue
+
+            # Layer 2: Silence gap check in loopback (cheap, no deconvolution)
+            if self._check_silence_gaps(result):
+                logger.warning(
+                    f"Dropout detected (silence gap in loopback), "
+                    f"retry {attempt + 1}/{max_retries}")
+                continue
+
+            # Deconvolution + quality gate
+            ir_full, ir_linear = self._process_capture(result)
+
+            # 4. DSP Verification
+            metrics = self.verifier.calculate_metrics(
+                ir_full, ir_linear, result.get("psr", 0.0), result.get("psr_reference"),
+                linear_start_sample=result['capture_metadata']['sweep_samples'] - (_LINEAR_IR_ORIGIN_SAMPLE + 1),
             )
-            # Keep the marker and every unconditioned repeat from both channels.
-            # Channel order is electrical loopback, then microphone.
-            self.debug_dir.mkdir(parents=True, exist_ok=True)
-            filename = f"{base_label}_capture.wav"
-            self._save_wav_with_metadata(
-                self.debug_dir / filename, np.column_stack(result['raw_recordings']),
-                filename, subtype='FLOAT',
-            )
 
-        # 4. DSP Verification
-        metrics = self.verifier.calculate_metrics(
-            ir_full, ir_linear, result.get("psr", 0.0), result.get("psr_reference"),
-            linear_start_sample=result['capture_metadata']['sweep_samples'] - (_LINEAR_IR_ORIGIN_SAMPLE + 1),
-        )
-        logger.info(
-            f"DSP Metrics: SNR={metrics['snr_db']:.1f}dB, THD={metrics['thd_pct']:.2f}%, "
-            f"marker clarity={metrics['psr_db']:.1f}dB / "
-            f"{metrics.get('psr_reference_db', 0.0):.1f}dB reference "
-            f"({metrics.get('alignment_score_10', 0.0):.1f}/10)")
+            # Layer 3: PSR quality gate (loopback-based, not affected by mic position)
+            if self._check_quality(metrics):
+                logger.warning(
+                    f"Quality below threshold (PSR={metrics['psr']:.2f}), "
+                    f"retry {attempt + 1}/{max_retries}")
+                continue
 
-        warnings = self.verifier.verify(metrics)
-        for w in warnings:
-            logger.warning(f"VERIFICATION FAILURE: {w}")
+            # Success: proceed to save and return
+            logger.info(
+                f"DSP Metrics: SNR={metrics['snr_db']:.1f}dB, THD={metrics['thd_pct']:.2f}%, "
+                f"marker clarity={metrics['psr_db']:.1f}dB / "
+                f"{metrics.get('psr_reference_db', 0.0):.1f}dB reference "
+                f"({metrics.get('alignment_score_10', 0.0):.1f}/10)")
 
-        if save:
-            self._save_wav_with_metadata(ir_path, ir_linear, ir_path.name, subtype='FLOAT')
-            logger.info(f"Saved Linear IR: {ir_path.name}")
+            warnings = self.verifier.verify(metrics)
+            for w in warnings:
+                logger.warning(f"VERIFICATION FAILURE: {w}")
 
-            self._save_wav_with_metadata(dist_path, ir_full, dist_path.name, subtype='FLOAT')
-            logger.info(f"Saved Distortion IR: {dist_path.name}")
+            # 2. Debug Saves (only for the successful attempt)
+            if save and include_debug_artifacts:
+                self.debug_handler.save_wav(result["rx_mic_conditioned"],
+                                            f"{base_label}_mic_conditioned", self.rec_dir)
+                self.debug_handler.save_wav(result["rx_loop_aligned"],
+                                            f"{base_label}_loop_aligned", self.rec_dir)
+                for i, slice_data in enumerate(result["debug_mic_slices"]):
+                    self.debug_handler.save_wav(slice_data,
+                                                f"{base_label}_sweep{i + 1:02d}", self.rec_dir)
 
-            self.debug_handler.save_metrics(metrics, base_label, self.rec_dir)
+            # Save raw input and shared references when debug capture is enabled.
+            if save and self.cap.get('debug_saves', True):
+                logger.info("Saving raw capture and shared reference...")
+                result['capture_metadata'].update(
+                    self._save_shared_reference(result['digital_reference'],
+                                                result['acquisition_metadata'])
+                )
+                self.debug_dir.mkdir(parents=True, exist_ok=True)
+                filename = f"{base_label}_capture.wav"
+                self._save_wav_with_metadata(
+                    self.debug_dir / filename, np.column_stack(result['raw_recordings']),
+                    filename, subtype='FLOAT',
+                )
 
+            if save:
+                self._save_wav_with_metadata(ir_path, ir_linear, ir_path.name, subtype='FLOAT')
+                logger.info(f"Saved Linear IR: {ir_path.name}")
+
+                self._save_wav_with_metadata(dist_path, ir_full, dist_path.name, subtype='FLOAT')
+                logger.info(f"Saved Distortion IR: {dist_path.name}")
+
+                self.debug_handler.save_metrics(metrics, base_label, self.rec_dir)
+
+            return {
+                "fs": self.hw["fs"],
+                "ir_linear": ir_linear,
+                "ir_full": ir_full,
+                "sweep_metadata": self._sweep_metadata(result),
+                "metrics": metrics,
+                "capture_metadata": result['capture_metadata'],
+                "name": ir_path.name,
+                "saved": save,
+            }
+
+        # All retries exhausted — return a failure result without saving files
+        logger.error(
+            f"Measurement failed after {max_retries} retries due to dropout, "
+            f"skipping {ir_path.name}")
         return {
             "fs": self.hw["fs"],
-            "ir_linear": ir_linear,
-            "ir_full": ir_full,
-            "sweep_metadata": self._sweep_metadata(result),
-            "metrics": metrics,
-            "capture_metadata": result['capture_metadata'],
+            "ir_linear": None,
+            "ir_full": None,
+            "sweep_metadata": {},
+            "metrics": {},
+            "capture_metadata": {},
             "name": ir_path.name,
-            "saved": save,
+            "saved": False,
+            "error": f"Measurement failed after {max_retries} retries due to dropout",
         }
 
     def measure_ir(self, position: CylindricalPosition, prefix: str | None = None,
@@ -2320,30 +2489,72 @@ class Audio(IAudio):
     def preview_ir(self) -> dict[str, Any]:
         """
         Capture and process IR without saving (for test/preview).
+
+        Uses the same retry loop with layered dropout detection as capture_ir.
         """
-        # 1. Capture Raw Data (Run Sweeps)
-        result = self._run_sweep()
+        max_retries = self.cap.get('max_capture_retries', 3)
 
-        # 2. Process IR (Deconvolution)
-        ir_full, ir_linear = self._process_capture(result)
+        for attempt in range(max_retries):
+            # 1. Capture Raw Data (Run Sweeps)
+            result = self._run_sweep()
 
-        # 3. DSP Verification
-        metrics = self.verifier.calculate_metrics(ir_full, ir_linear, result.get("psr", 0.0))
-        logger.info(
-            f"DSP Metrics: SNR={metrics['snr_db']:.1f}dB, THD={metrics['thd_pct']:.2f}%, "
-            f"marker clarity={metrics['psr_db']:.1f}dB")
+            # Layer 1: Immediate stream health check (cheap, no deconvolution)
+            if self._check_stream_health(result):
+                logger.warning(
+                    f"Preview: Dropout detected (stream underflow/overflow), "
+                    f"retry {attempt + 1}/{max_retries}")
+                continue
 
-        warnings = self.verifier.verify(metrics)
-        for w in warnings:
-            logger.warning(f"VERIFICATION FAILURE: {w}")
+            # Layer 2: Silence gap check in loopback (cheap, no deconvolution)
+            if self._check_silence_gaps(result):
+                logger.warning(
+                    f"Preview: Dropout detected (silence gap in loopback), "
+                    f"retry {attempt + 1}/{max_retries}")
+                continue
+
+            # Deconvolution + quality gate
+            ir_full, ir_linear = self._process_capture(result)
+
+            # 3. DSP Verification
+            metrics = self.verifier.calculate_metrics(ir_full, ir_linear, result.get("psr", 0.0))
+
+            # Layer 3: PSR quality gate
+            if self._check_quality(metrics):
+                logger.warning(
+                    f"Preview: Quality below threshold (PSR={metrics['psr']:.2f}), "
+                    f"retry {attempt + 1}/{max_retries}")
+                continue
+
+            # Success
+            logger.info(
+                f"DSP Metrics: SNR={metrics['snr_db']:.1f}dB, THD={metrics['thd_pct']:.2f}%, "
+                f"marker clarity={metrics['psr_db']:.1f}dB")
+
+            warnings = self.verifier.verify(metrics)
+            for w in warnings:
+                logger.warning(f"VERIFICATION FAILURE: {w}")
+            return {
+                "fs": self.hw["fs"],
+                "ir_linear": ir_linear,
+                "ir_full": ir_full,
+                "sweep_metadata": self._sweep_metadata(result),
+                "metrics": metrics,
+                "capture_metadata": result['capture_metadata'],
+                "saved": False,
+            }
+
+        # All retries exhausted
+        logger.error(
+            f"Preview measurement failed after {max_retries} retries due to dropout")
         return {
             "fs": self.hw["fs"],
-            "ir_linear": ir_linear,
-            "ir_full": ir_full,
-            "sweep_metadata": self._sweep_metadata(result),
-            "metrics": metrics,
-            "capture_metadata": result['capture_metadata'],
+            "ir_linear": None,
+            "ir_full": None,
+            "sweep_metadata": {},
+            "metrics": {},
+            "capture_metadata": {},
             "saved": False,
+            "error": f"Preview measurement failed after {max_retries} retries due to dropout",
         }
 
     def play_sine(self, frequency: float, level_dbfs: float, duration_s: Optional[float] = 1.0) -> None:
@@ -2833,6 +3044,8 @@ class AudioFactory:
             'pre_sil_ms': AudioFactory._get_required_config(config, sweep_section, 'pre_sil_ms', float),
             'post_sil_ms': AudioFactory._get_required_config(config, sweep_section, 'post_sil_ms', float),
             'marker_gap_ms': 20.0,  # Fixed marker settling gap; adjust here if needed.
+            'max_capture_retries': config.getint(sweep_section, 'max_capture_retries', fallback=3),
+            'retry_psr_threshold': config.getfloat(sweep_section, 'retry_psr_threshold', fallback=3.0),
         }
 
         # Initialize core components
