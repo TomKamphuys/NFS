@@ -328,13 +328,22 @@ class AudioSetupPane(QWidget):
         self.wasapi = QCheckBox("WASAPI exclusive")
         self.wasapi.setChecked(_parse_bool(_value(parser, "audio", "wasapi_exclusive", "False")))
         self.wasapi.setStyleSheet(toggle_style())
+        self.keep_stream_open = QCheckBox("Keep audio stream open for measurement sets")
+        self.keep_stream_open.setChecked(_parse_bool(_value(parser, "audio", "keep_stream_open", "False")))
+        self.keep_stream_open.setStyleSheet(toggle_style())
+        self.keep_stream_open.setToolTip(
+            "Open the hardware stream once per measurement set and close it when the set ends. "
+            "Output is silent between captures and while paused. "
+            "Single measurements, test sweeps and sine tones use their usual stream lifecycle."
+        )
         blocksize_label = QLabel("Blocksize")
         adv_grid.addWidget(blocksize_label, 0, 0)
         adv_grid.addWidget(self.blocksize, 0, 1)
         adv_grid.addWidget(self.wasapi, 0, 2)
+        adv_grid.addWidget(self.keep_stream_open, 1, 0, 1, 3)
         self._collapse_group_children(
             advanced_audio,
-            [blocksize_label, self.blocksize, self.wasapi],
+            [blocksize_label, self.blocksize, self.wasapi, self.keep_stream_open],
         )
         layout.addWidget(advanced_audio)
 
@@ -690,7 +699,8 @@ class AudioSetupPane(QWidget):
         )
         self.pre_sil.setToolTip(
             "Silent recording before the first marker, allowing the audio driver "
-            "and interface to settle. Applied once at the start of each acquisition."
+            "and interface to settle. Applied once per measurement set when its audio "
+            "stream stays open, otherwise once per acquisition."
         )
         self.post_sil.setToolTip(
             "Record room decay after each sweep for this duration. The same silent "
@@ -844,7 +854,7 @@ class AudioSetupPane(QWidget):
     def _connect_auto_apply_controls(self) -> None:
         immediate_controls = [
             self.in_mic_channel, self.in_loop_channel, self.out_speaker_channel, self.out_ref_channel,
-            self.fs, self.wasapi, self.hpf_enable, self.hpf_corr, self.naming,
+            self.fs, self.wasapi, self.keep_stream_open, self.hpf_enable, self.hpf_corr, self.naming,
             self.align, self.debug, self.loopback_correction,
         ]
         commit_controls = [
@@ -1078,6 +1088,7 @@ class AudioSetupPane(QWidget):
             ("audio", "fs"): self._combo_data(self.fs),
             ("audio", "blocksize"): int(self.blocksize.value()),
             ("audio", "wasapi_exclusive"): self.wasapi.isChecked(),
+            ("audio", "keep_stream_open"): self.keep_stream_open.isChecked(),
             ("sweep", "naming_convention"): self.naming.currentText(),
             ("sweep", "sweep_dur_s"): self.sweep_dur.value(),
             ("sweep", "sweep_level_dbfs"): self.level.value(),

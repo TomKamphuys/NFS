@@ -149,6 +149,8 @@ EDITABLE_SCHEMA: Dict[str, List[SchemaEntry]] = {
         ("fs", "int", "Sample rate in Hz. Must match the device's configured rate.", None),
         ("blocksize", "int",
          "Audio buffer size in samples. Must match the ASIO panel if applicable.", None),
+        ("keep_stream_open", "bool",
+         "Keep one running audio stream for each measurement set, with driver settling once at its first capture.", None),
         ("wasapi_exclusive", "bool",
          "Request exclusive WASAPI mode. Only relevant on Windows when not using ASIO.", None),
     ],

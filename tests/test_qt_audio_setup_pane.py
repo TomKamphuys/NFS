@@ -735,6 +735,9 @@ def test_audio_pane_updates_config_and_project_memory_without_project_json(tmp_p
     project.set_project_dir(session_dir, str(config_file))
     pane = AudioSetupPane(backend, str(config_file))
     try:
+        assert not pane.keep_stream_open.isChecked()
+        pane.keep_stream_open.setChecked(True)
+        assert "keep_stream_open = True" in config_file.read_text(encoding="utf-8")
         pane.loopback_correction.setChecked(False)
         assert "loopback_correction = False" in config_file.read_text(encoding="utf-8")
         pane.post_sil.setValue(350.0)

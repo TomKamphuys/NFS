@@ -15,6 +15,10 @@ The script utilizes the `sounddevice` library with **ASIO** support enabled by d
 * **Dynamic IDs:** Because device IDs can dynamically change when hardware is added or removed (such as connecting a Bluetooth headset), it is highly recommended to use the provided `list_sound_devices.py` CLI script to confirm your IDs after any change.
 * **Initialization Tip:** When an audio device is first initialized, the very beginning of the audio stream can sometimes be cut off by the interface driver. It is good practice to run at least one test sweep after starting the system to allow the hardware to lock onto the sample rate and protocol.
 
+### Measurement-set stream lifetime
+
+Audio Setup's **Advanced audio settings** includes **Keep audio stream open for measurement sets** (`[audio] keep_stream_open`, default `False`). Enabling it opens and starts the hardware stream once for the measurement set and closes it when the set completes, stops, or fails. Each position still has its own capture and saved files. Outputs remain silent during motion, processing, and pauses. Driver settle time applies to the first capture in the set. Resuming a pause continues with the same stream. Single measurements, test sweeps, and sine tones retain their existing stream lifecycle.
+
 ### The 48kHz Sweet Spot
 While modern interfaces support extremely high sample rates, **48kHz** is generally the optimal setting for this system.
 * It provides a comfortable buffer above the 20kHz audible band for the anti-aliasing filters to roll off smoothly.

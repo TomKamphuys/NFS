@@ -552,3 +552,19 @@ def test_invalid_inverse_timing_rejected(kw):
     with pytest.raises(ValueError):
         DeconvolutionEngine(48000).process_ir(np.ones(1000), np.ones(1000), **kw)
 
+
+
+@pytest.mark.parametrize('setting,expected', [(None, False), ('False', False), ('True', True)])
+def test_stream_session_config_is_optional_and_mock_interface_has_no_device_stream(
+        mock_config, monkeypatch, setting, expected):
+    config = configparser.ConfigParser()
+    config.read(mock_config)
+    if setting is not None:
+        config.set('audio', 'keep_stream_open', setting)
+    with mock_config.open('w') as handle:
+        config.write(handle)
+    engine = AudioFactory.create(str(mock_config))
+    assert engine.hw['keep_stream_open'] is expected
+    monkeypatch.setattr(engine, '_get_api_name', lambda *args: pytest.fail('Mock must not query hardware'))
+    with engine.measurement_session():
+        assert engine._sweep_stream is None

@@ -265,59 +265,60 @@ class NearFieldScanner:
         try:
             self._clear_position_log()
 
-            self._measurement_motion_manager.move_to_safe_starting_radius()
-            total = self._measurement_motion_manager.total_points()
-            started_at = time.monotonic()
-            self._emit_measurement_progress(
-                progress_callback,
-                "started",
-                current,
-                total,
-                timestamp=started_at,
-                eta_seconds=eta_seconds,
-                elapsed_seconds=elapsed_seconds,
-            )
-            while not self._measurement_motion_manager.ready():
-                if not self._wait_while_measurement_paused():
-                    logger.info("Measurement set stopped before next point.")
-                    stopped_early = True
-                    break
-
-                self._measurement_motion_manager.next()
-
-                if self._measurement_stop_requested.is_set():
-                    logger.info("Measurement set stopped after current move.")
-                    stopped_early = True
-                    break
-
-                current += 1
-                progress = (current / total) * 100 if total > 0 else 0
-                logger.info(f"Measuring point {current} of {total}... {progress:.1f}% complete")
-
-                position = self._scanner.get_position()
-                self._append_position_to_file(position)
-                self._update_audio_position_callback(position)
-
-                self._audio.measure_ir(position, session_name)
-                timestamp = time.monotonic()
-                if started_at is not None:
-                    elapsed_seconds = timestamp - started_at
-                if started_at is not None and total > 0 and current >= 2:
-                    seconds_per_point = (timestamp - started_at) / current
-                    eta_seconds = seconds_per_point * max(0, total - current)
+            with self._audio.measurement_session():
+                self._measurement_motion_manager.move_to_safe_starting_radius()
+                total = self._measurement_motion_manager.total_points()
+                started_at = time.monotonic()
                 self._emit_measurement_progress(
                     progress_callback,
-                    "point_complete",
+                    "started",
                     current,
                     total,
-                    position={"r": position.r(), "phi": position.t(), "z": position.z()},
-                    timestamp=timestamp,
+                    timestamp=started_at,
                     eta_seconds=eta_seconds,
                     elapsed_seconds=elapsed_seconds,
                 )
+                while not self._measurement_motion_manager.ready():
+                    if not self._wait_while_measurement_paused():
+                        logger.info("Measurement set stopped before next point.")
+                        stopped_early = True
+                        break
 
-            self._measurement_motion_manager.reset()
-            self._measurement_motion_manager.move_to_park_position()
+                    self._measurement_motion_manager.next()
+
+                    if self._measurement_stop_requested.is_set():
+                        logger.info("Measurement set stopped after current move.")
+                        stopped_early = True
+                        break
+
+                    current += 1
+                    progress = (current / total) * 100 if total > 0 else 0
+                    logger.info(f"Measuring point {current} of {total}... {progress:.1f}% complete")
+
+                    position = self._scanner.get_position()
+                    self._append_position_to_file(position)
+                    self._update_audio_position_callback(position)
+
+                    self._audio.measure_ir(position, session_name)
+                    timestamp = time.monotonic()
+                    if started_at is not None:
+                        elapsed_seconds = timestamp - started_at
+                    if started_at is not None and total > 0 and current >= 2:
+                        seconds_per_point = (timestamp - started_at) / current
+                        eta_seconds = seconds_per_point * max(0, total - current)
+                    self._emit_measurement_progress(
+                        progress_callback,
+                        "point_complete",
+                        current,
+                        total,
+                        position={"r": position.r(), "phi": position.t(), "z": position.z()},
+                        timestamp=timestamp,
+                        eta_seconds=eta_seconds,
+                        elapsed_seconds=elapsed_seconds,
+                    )
+
+                self._measurement_motion_manager.reset()
+                self._measurement_motion_manager.move_to_park_position()
 
         except Exception as exc:
             failure_exc = exc

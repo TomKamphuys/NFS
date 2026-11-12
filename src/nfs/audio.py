@@ -81,7 +81,7 @@ import threading
 import time
 import uuid
 from abc import ABC, abstractmethod
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from typing import Callable, Optional, Dict, Any, List, Tuple
 from nfs import registry
@@ -148,6 +148,7 @@ SINE_RMS_FROM_PEAK = 1.0 / np.sqrt(2.0)
 _LINEAR_IR_ORIGIN_SAMPLE = 50
 _EXPORT_FADE_FRACTION = 0.1  # End fade lasts 10% of the playback sweep duration.
 _METER_LOCK = threading.Lock()
+_OPEN_AUDIO_STREAMS: set[int] = set()
 _METER_STATE = {
     "active": False,
     "updated_at": 0.0,
@@ -493,6 +494,25 @@ class _AudioMeterWorker:
             self._last_reported_skipped_frames = self._skipped_meter_frames
 
 
+def _set_audio_stream_open(stream, opened: bool) -> None:
+    """Publish hardware resource ownership independently of meter activity."""
+    with _METER_LOCK:
+        if opened:
+            _OPEN_AUDIO_STREAMS.add(id(stream))
+        else:
+            _OPEN_AUDIO_STREAMS.discard(id(stream))
+
+
+@contextmanager
+def _track_open_audio_stream(stream):
+    """Track an allocated stream until its owning context finishes closing it."""
+    _set_audio_stream_open(stream, True)
+    try:
+        yield stream
+    finally:
+        _set_audio_stream_open(stream, False)
+
+
 def update_audio_meter_state(
     outputs: Optional[np.ndarray] = None,
     inputs: Optional[np.ndarray] = None,
@@ -547,6 +567,7 @@ def get_audio_meter_state() -> Dict[str, Any]:
             _METER_STATE["c_weighted_inputs"] = _two_channel_meters(np.zeros((1, 2), dtype=np.float32))
         return {
             "active": bool(_METER_STATE["active"]),
+            "stream_open": bool(_OPEN_AUDIO_STREAMS),
             "updated_at": float(_METER_STATE["updated_at"]),
             "outputs": [dict(item) for item in _METER_STATE["outputs"]],
             "inputs": [dict(item) for item in _METER_STATE["inputs"]],
@@ -1706,7 +1727,146 @@ class DeconvolutionEngine:
         return h_full, h_linear
 
 
+class _SweepCapture:
+    """Buffers and completion state belonging to exactly one measurement point."""
+
+    def __init__(self, speaker: np.ndarray, reference: np.ndarray):
+        self.outputs = (speaker, reference)
+        self.loop = np.zeros(len(speaker), dtype=np.float32)
+        self.mic = np.zeros(len(speaker), dtype=np.float32)
+        self.index = 0
+        self.status = []
+        self.done = threading.Event()
+
+
+class _SweepStream:
+    """Own a duplex stream independently of the individual captures it serves.
+
+    One calling thread opens, captures and closes (including ASIO COM). The
+    callback consumes a published capture and emits silence while idle. Only
+    per-capture buffers are retained, so storage stays bounded across long scans.
+    """
+
+    def __init__(self, hardware: Dict[str, Any], api_name: Callable[[int], str]):
+        self.hw = hardware
+        if hardware['ch_out_spkr'] == hardware['ch_out_ref'] or hardware['ch_in_mic'] == hardware['ch_in_loop']:
+            raise ValueError("Dual-channel capture requires distinct speaker/reference outputs and mic/loop inputs")
+        in_api = api_name(hardware['dev_in'])
+        out_api = api_name(hardware['dev_out'])
+        self._asio = "ASIO" in in_api or "ASIO" in out_api
+        self._input_roles = (0, 1) if "ASIO" in in_api else (
+            hardware['ch_in_loop'], hardware['ch_in_mic'])
+        self._output_roles = (0, 1) if "ASIO" in out_api else (
+            hardware['ch_out_spkr'], hardware['ch_out_ref'])
+        self._input_settings = _stream_channel_settings(
+            in_api, (hardware['ch_in_loop'], hardware['ch_in_mic']), hardware['wasapi_exclusive'])
+        self._output_settings = _stream_channel_settings(
+            out_api, (hardware['ch_out_spkr'], hardware['ch_out_ref']), hardware['wasapi_exclusive'])
+        self._stream = None
+        self._capture: _SweepCapture | None = None
+        self._owner_thread = None
+        self._meter_worker = None
+        self.has_captured = False
+        self._callback_error: Exception | None = None
+
+    @contextmanager
+    def open(self):
+        if self._owner_thread is not None:
+            raise RuntimeError("Sweep stream is already open")
+        self._owner_thread = threading.get_ident()
+        try:
+            with ExitStack() as resources:
+                resources.enter_context(_asio_thread_context(self._asio))
+                self._meter_worker = _AudioMeterWorker(self.hw['fs'], self.hw['blocksize'])
+                self._meter_worker.start()
+                resources.callback(reset_audio_meter_state, active=False)
+                resources.callback(self._meter_worker.stop)
+                stream = sd.Stream(
+                    device=(self.hw['dev_in'], self.hw['dev_out']),
+                    samplerate=self.hw['fs'], blocksize=self.hw['blocksize'],
+                    dtype="float32", channels=(self._input_settings[0], self._output_settings[0]),
+                    dither_off=True,
+                    extra_settings=(self._input_settings[1], self._output_settings[1]),
+                    callback=self._callback)
+                resources.enter_context(_track_open_audio_stream(stream))
+                try:
+                    self._stream = resources.enter_context(stream)
+                except BaseException:
+                    # Stream.__enter__ starts PortAudio. If start fails, its
+                    # context has not been entered, but the device is open.
+                    stream.close()
+                    raise
+                yield self
+        finally:
+            self._stream = None
+            self._meter_worker = None
+            self._owner_thread = None
+
+    def capture(self, prepared: Dict[str, Any]) -> Tuple[np.ndarray, np.ndarray]:
+        if self._owner_thread is not None and self._owner_thread != threading.get_ident():
+            raise RuntimeError("Sweep captures must run on the thread that opened the stream")
+        if self._capture is not None:
+            raise RuntimeError("A sweep capture is already in progress")
+        if self._callback_error is not None:
+            raise RuntimeError("Audio stream callback failed") from self._callback_error
+        capture = _SweepCapture(prepared['tx_speaker'], prepared['tx_loop'])
+        # Publish complete buffers before starting a standalone stream. A session
+        # stream is already running and picks these up at its next callback.
+        self._capture = capture
+        try:
+            if self._stream is None:
+                with self.open():
+                    self._wait_for_capture(capture, prepared)
+            else:
+                self._wait_for_capture(capture, prepared)
+        finally:
+            self._capture = None
+        self.has_captured = True
+        return capture.mic, capture.loop
+
+    def _wait_for_capture(self, capture: _SweepCapture, prepared: Dict[str, Any]) -> None:
+        completed = capture.done.wait(len(capture.mic) / self.hw['fs'] + 10)
+        if self._callback_error is not None:
+            raise RuntimeError("Audio stream callback failed") from self._callback_error
+        if not completed:
+            raise RuntimeError("Audio capture did not finish within the expected duration")
+        prepared['timing']['actual_sample_rate'] = float(self._stream.samplerate)
+        prepared['timing']['stream_latency_s'] = list(self._stream.latency)
+        prepared['timing']['stream_status'] = capture.status
+
+    def _callback(self, indata, outdata, frames, time_info, status):
+        capture = self._capture
+        outdata.fill(0)
+        try:
+            if capture is not None and not capture.done.is_set():
+                start = capture.index
+                count = min(frames, len(capture.mic) - start)
+                end = start + count
+                if status:
+                    capture.status.append({"sample": start, "status": str(status)})
+                for signal, channel in zip(capture.outputs, self._output_roles):
+                    outdata[:count, channel] = signal[start:end]
+                capture.loop[start:end] = indata[:count, self._input_roles[0]]
+                capture.mic[start:end] = indata[:count, self._input_roles[1]]
+                capture.index = end
+            self._meter_worker.submit(outdata, self._output_roles, indata, self._input_roles, status)
+        except Exception as exc:
+            self._callback_error = exc
+            outdata.fill(0)
+            if capture is not None:
+                capture.done.set()
+            raise
+        if capture is not None and capture.index >= len(capture.mic):
+            # Publish completion last. The waiting thread can now use the buffers.
+            capture.done.set()
+
+
 class IAudio(ABC):
+    @contextmanager
+    def measurement_session(self):
+        """Scope resources shared by a measurement set. Default backends need none."""
+        yield
+
     @abstractmethod
     def capture_ir(self, ir_path: Path, dist_path: Path) -> dict[str, Any]:
         """Capture, process, and save IR to the given paths."""
@@ -1767,6 +1927,7 @@ class Audio(IAudio):
 
         self.hw = hw_config
         self.cap = capture_config
+        self._sweep_stream: _SweepStream | None = None
         self._sine_stream = None
         self._sine_com_context = None
         self._sine_owner_thread = None
@@ -1906,7 +2067,7 @@ class Audio(IAudio):
                 f.comment = title
             f.write(data)
 
-    def _prepare_sweep(self) -> Dict[str, Any]:
+    def _prepare_sweep(self, include_driver_settle: bool = True) -> Dict[str, Any]:
         """Build marker, settling gap and simultaneous ESS for every repeat."""
         fs = self.hw['fs']
         # Generate the digital sweep and its inverse *once*. The same samples
@@ -1943,7 +2104,7 @@ class Audio(IAudio):
                 raise ValueError(f"{key} must be finite and nonnegative")
             return int(round(value * fs / 1000))
 
-        pre = milliseconds('pre_sil_ms')
+        pre = milliseconds('pre_sil_ms') if include_driver_settle else 0
         # The marker plays first on the reference output. Both outputs then
         # wait during the gap before their sweeps start together.
         gap = milliseconds('marker_gap_ms', 20.0)
@@ -2080,121 +2241,30 @@ class Audio(IAudio):
             },
         }
 
+    @contextmanager
+    def measurement_session(self):
+        """Optionally retain a running hardware stream for this measurement set."""
+        if not self.hw.get('keep_stream_open', False):
+            yield
+            return
+        if self._sweep_stream is not None:
+            raise RuntimeError("An audio measurement session is already active")
+        transport = _SweepStream(self.hw, self._get_api_name)
+        with transport.open():
+            self._sweep_stream = transport
+            try:
+                yield
+            finally:
+                self._sweep_stream = None
+
     def _run_sweep(self) -> Dict[str, Any]:
-        """
-        Executes the playback and recording of the composite signal.
-        Handles stream synchronization, multiple sweep averaging, and loopback alignment.
-        """
-        if self.hw['ch_out_spkr'] == self.hw['ch_out_ref'] or self.hw['ch_in_mic'] == self.hw['ch_in_loop']:
-            raise ValueError("Dual-channel capture requires distinct speaker/reference outputs and mic/loop inputs")
-        prepared = self._prepare_sweep()
-        tx_sweep_long = prepared['tx_speaker']
-        tx_ref_long = prepared['tx_loop']
-        total_len = len(tx_sweep_long)
-
-        # Allocate one column per physical channel. Channel numbers in the
-        # saved hardware settings are zero-based, even for ASIO devices.
-        out_ch_count = max(self.hw['ch_out_spkr'], self.hw['ch_out_ref']) + 1
-
-        out_frames = np.zeros((total_len, out_ch_count), dtype=np.float32)
-        out_frames[:, self.hw['ch_out_spkr']] = tx_sweep_long
-        out_frames[:, self.hw['ch_out_ref']] = tx_ref_long
-
-        rec_loop = np.zeros(total_len, dtype=np.float32)
-        rec_mic = np.zeros(total_len, dtype=np.float32)
-
-        # ASIO uses channel selectors; other APIs use columns up to the
-        # highest channel number. The callback below handles both layouts.
-        out_api = self._get_api_name(self.hw['dev_out'])
-        in_api = self._get_api_name(self.hw['dev_in'])
-        use_asio_in, use_asio_out = ("ASIO" in in_api), ("ASIO" in out_api)
-
-        # Use the same channel mapping policy for sweep and sine playback.
-        in_args = _stream_channel_settings(
-            in_api, (self.hw['ch_in_loop'], self.hw['ch_in_mic']), self.hw['wasapi_exclusive'])
-        out_args = _stream_channel_settings(
-            out_api, (self.hw['ch_out_spkr'], self.hw['ch_out_ref']), self.hw['wasapi_exclusive'])
-
-        idx_play, idx_rec = 0, 0
-        stream_status = []
-        done_evt = threading.Event()
-        meter_worker = _AudioMeterWorker(self.hw['fs'], self.hw['blocksize'])
-        meter_worker.start()
-        output_meter_roles = (0, 1) if use_asio_out else (
-            self.hw['ch_out_spkr'],
-            self.hw['ch_out_ref'],
-        )
-        input_meter_roles = (0, 1) if use_asio_in else (
-            self.hw['ch_in_loop'],
-            self.hw['ch_in_mic'],
-        )
-
-        # PortAudio calls this function with small blocks of live samples.
-        # Keep it to copying buffers and simple bookkeeping; file saving and
-        # FFT processing happen later, outside the real-time audio callback.
-        def callback(indata, outdata, frames, time_info, status):
-            nonlocal idx_play, idx_rec
-            if status:
-                stream_status.append({"sample": idx_rec, "status": str(status)})
-
-            # Copy the next playback block. The two ASIO callback columns
-            # correspond to the selected speaker/reference physical channels.
-            n_out = min(frames, total_len - idx_play)
-            if use_asio_out:
-                outdata[:n_out, 0] = out_frames[idx_play:idx_play + n_out, self.hw['ch_out_spkr']]
-                outdata[:n_out, 1] = out_frames[idx_play:idx_play + n_out, self.hw['ch_out_ref']]
-                if frames > n_out:
-                    outdata[n_out:] = 0
-            else:
-                outdata[:n_out, :out_args[0]] = out_frames[idx_play:idx_play + n_out, :out_args[0]]
-                if frames > n_out:
-                    outdata[n_out:] = 0
-
-            # Record the reference and microphone in separate arrays. For
-            # ASIO, input columns 0/1 correspond to the selected loop/mic.
-            n_in = min(frames, total_len - idx_rec)
-            if n_in > 0:
-                if use_asio_in:
-                    rec_loop[idx_rec:idx_rec + n_in] = indata[:n_in, 0]
-                    rec_mic[idx_rec:idx_rec + n_in] = indata[:n_in, 1]
-                else:
-                    rec_loop[idx_rec:idx_rec + n_in] = indata[:n_in, self.hw['ch_in_loop']]
-                    rec_mic[idx_rec:idx_rec + n_in] = indata[:n_in, self.hw['ch_in_mic']]
-
-            meter_worker.submit(
-                outdata,
-                output_meter_roles,
-                indata,
-                input_meter_roles,
-                status,
-            )
-
-            # Signal the waiting thread only when both directions are done.
-            idx_play += n_out
-            idx_rec += n_in
-            if idx_play >= total_len and idx_rec >= total_len:
-                done_evt.set()
-
-        # ASIO needs COM on this calling thread for the stream's whole life.
-        # The with blocks close the stream before releasing our COM reference.
-        try:
-            with _asio_thread_context(use_asio_in or use_asio_out), sd.Stream(device=(self.hw['dev_in'], self.hw['dev_out']), samplerate=self.hw['fs'],
-                           blocksize=self.hw['blocksize'],
-                           dtype="float32", channels=(in_args[0], out_args[0]), dither_off=True,
-                           extra_settings=(in_args[1], out_args[1]), callback=callback) as stream:
-                if not done_evt.wait(total_len / self.hw['fs'] + 10):
-                    raise RuntimeError("Audio capture did not finish within the expected duration")
-                # These are observed stream facts, useful when replaying or
-                # diagnosing captures made on a different audio interface.
-                prepared['timing']['actual_sample_rate'] = float(stream.samplerate)
-                prepared['timing']['stream_latency_s'] = list(stream.latency)
-                prepared['timing']['stream_status'] = stream_status
-        finally:
-            meter_worker.stop()
-            reset_audio_meter_state(active=False)
-
-        # Align and average after the stream has closed; the raw arrays remain
-        # available for the optional debug archive.
+        """Acquire one position through the shared duplex transport, then process it."""
+        transport = self._sweep_stream or _SweepStream(self.hw, self._get_api_name)
+        if transport.has_captured:
+            prepared = self._prepare_sweep(include_driver_settle=False)
+        else:
+            prepared = self._prepare_sweep()
+        rec_mic, rec_loop = transport.capture(prepared)
         return self._finish_sweep(prepared, rec_mic, rec_loop)
 
     def _process_capture(self, result: Dict[str, Any]) -> tuple[np.ndarray, np.ndarray]:
@@ -2428,7 +2498,7 @@ class Audio(IAudio):
                     done_evt.set()
 
             try:
-                with _asio_thread_context(use_asio_in or use_asio_out), sd.Stream(
+                with _asio_thread_context(use_asio_in or use_asio_out), _track_open_audio_stream(sd.Stream(
                     device=(in_dev, out_dev),
                     samplerate=fs,
                     blocksize=self.hw['blocksize'],
@@ -2437,7 +2507,7 @@ class Audio(IAudio):
                     dither_off=True,
                     extra_settings=(in_args[1], out_args_extra),
                     callback=callback,
-                ):
+                )) as stream, stream:
                     done_evt.wait()
             finally:
                 meter_worker.stop()
@@ -2497,6 +2567,7 @@ class Audio(IAudio):
                     dtype='float32',
                     dither_off=True,
                 )
+                _set_audio_stream_open(self._sine_stream, True)
                 self._sine_stream.start()
             except Exception:
                 # Also close an allocated stream when start(), rather than
@@ -2524,6 +2595,8 @@ class Audio(IAudio):
                     self._sine_stream.close()
             except Exception as e:
                 logger.debug(f"Error closing sine stream: {e}")
+            finally:
+                _set_audio_stream_open(self._sine_stream, False)
             self._sine_stream = None
         if self._sine_com_context is not None:
             context = self._sine_com_context
@@ -2570,6 +2643,11 @@ class MockInterfaceAudio(Audio):
         )
         self._position_callback = position_callback
         self._speaker_model = speaker_model
+
+    @contextmanager
+    def measurement_session(self):
+        """Simulated acquisitions have no hardware stream to retain."""
+        yield
 
     def set_position_callback(self, callback: Optional[Callable[[], CylindricalPosition]]) -> None:
         """Update the position callback at runtime before each capture."""
@@ -2815,6 +2893,7 @@ class AudioFactory:
             'fs': fs,
             'blocksize': AudioFactory._get_required_config(config, audio_section, 'blocksize', int),
             'wasapi_exclusive': AudioFactory._get_required_config(config, audio_section, 'wasapi_exclusive', bool),
+            'keep_stream_open': config.getboolean(audio_section, 'keep_stream_open', fallback=False),
         }
 
         naming_convention_str = config.get(sweep_section, 'naming_convention', fallback='dimitri').strip()

@@ -755,3 +755,16 @@ def test_audio_factory_rejects_invalid_boolean():
     config['sweep'] = {'debug_saves': 'perhaps'}
     with pytest.raises(ValueError, match='Not a boolean'):
         AudioFactory._get_required_config(config, 'sweep', 'debug_saves', bool)
+
+
+def test_stream_open_state_survives_silent_or_stale_meters(monkeypatch):
+    with audio_module._track_open_audio_stream(object()):
+        audio_module.update_audio_meter_state()
+        updated_at = audio_module.get_audio_meter_state()["updated_at"]
+        monkeypatch.setattr(audio_module.time, "time", lambda: updated_at + 10)
+        state = audio_module.get_audio_meter_state()
+        assert state["active"] is False
+        assert state["stream_open"] is True
+        audio_module.reset_audio_meter_state()
+        assert audio_module.get_audio_meter_state()["stream_open"] is True
+    assert audio_module.get_audio_meter_state()["stream_open"] is False

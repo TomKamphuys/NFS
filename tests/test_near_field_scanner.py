@@ -1,4 +1,4 @@
-from unittest.mock import Mock, patch, mock_open
+from unittest.mock import MagicMock, Mock, patch, mock_open
 from pathlib import Path
 import pytest
 from nfs.datatypes import CylindricalPosition
@@ -9,7 +9,7 @@ from nfs.nfs import NearFieldScanner
 def mocks():
     return {
         'scanner': Mock(),
-        'audio': Mock(),
+        'audio': MagicMock(),
         'motion_manager': Mock(),
     }
 

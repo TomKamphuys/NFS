@@ -81,6 +81,7 @@ def test_sine_bypasses_sweep_protection_in_both_modes(monkeypatch, sounddevice, 
     from contextlib import nullcontext
     from test_audio_capture import make_engine
     engine = make_engine()
+    engine.hw['keep_stream_open'] = True
     fs = engine.hw['fs']
     engine.protection_filter = audio.ProtectionFilter(fs, 10000, 4)
     monkeypatch.setattr(engine, '_get_api_name', lambda dev: 'ASIO')
@@ -96,6 +97,7 @@ def test_sine_bypasses_sweep_protection_in_both_modes(monkeypatch, sounddevice, 
             self.callback = kw['callback']
 
         def start(self):
+            assert audio.get_audio_meter_state()['stream_open'] is True
             for size in (count // 2, count - count // 2):
                 output = np.empty((size, 2), dtype=np.float32)
                 self.callback(np.zeros_like(output), output, size, None, False)
@@ -117,7 +119,9 @@ def test_sine_bypasses_sweep_protection_in_both_modes(monkeypatch, sounddevice, 
     monkeypatch.setattr(sounddevice, 'Stream', Stream)
     engine.play_sine(500, -12, None if continuous else .01)
     if continuous:
+        assert audio.get_audio_meter_state()['stream_open'] is True
         engine.stop_sine()
+    assert audio.get_audio_meter_state()['stream_open'] is False
     output = np.concatenate(blocks)
     expected = np.sin(2*np.pi*500*np.arange(count)/fs) * 10**(-12/20)
     np.testing.assert_allclose(output[:, 0], expected, atol=3e-8, rtol=0)

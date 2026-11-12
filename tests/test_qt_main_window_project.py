@@ -190,3 +190,99 @@ def test_qt_save_button_updates_existing_json_with_flushed_hpf_settings(tmp_path
     assert '"protect_hpf_hz": "700"' in content
     assert '"protect_hpf_order": "3"' in content
     assert '"protect_hpf_hz": "None"' not in content
+
+
+@pytest.mark.parametrize("rebuilds", [1, 2])
+def test_rebuilt_controls_update_live_positions_and_3d_progress(tmp_path, monkeypatch, qtbot, rebuilds):
+    import threading
+    import pandas as pd
+    import harmonic_drive_qt.main_window as main_window
+    import harmonic_drive_qt.live_capture as live_capture
+    from harmonic_drive_qt.qt_compat import QStackedWidget, Signal, QWidget
+
+    class Controls(QWidget):
+        measurement_saved = Signal()
+        progress_event = Signal(dict)
+
+        def __init__(self, backend, require_session_folder):
+            super().__init__()
+
+    monkeypatch.setattr(main_window, "ControlPane", Controls)
+    monkeypatch.setattr(live_capture, "_get_viewer_settings", lambda: {})
+    window = _window_shell(tmp_path / "config.ini")
+    window.left_stack = QStackedWidget()
+    qtbot.addWidget(window.left_stack)
+    window.control_pane = Controls(window.backend, window.require_session_folder)
+    window.left_stack.addWidget(window.control_pane)
+
+    pane = live_capture.LiveCapturePane.__new__(live_capture.LiveCapturePane)
+    QWidget.__init__(pane)
+    qtbot.addWidget(pane)
+    pane._completed_positions = []
+    pane.grid_df = pd.DataFrame({
+        "r_xy_mm": [100, 100, 100], "phi_deg": [0, 10, 20], "z_mm": [0, 0, 0],
+    })
+    pane.positions = Mock()
+    pane.progress_engine = Mock(N=3)
+    pane.progress_canvas = Mock()
+    pane.refresh_all = Mock()
+    window.live_capture = pane
+    window._connect_control_pane_signals()
+
+    for _ in range(rebuilds):
+        window._rebuild_control_pane()
+
+    def measure():
+        window.control_pane.progress_event.emit({"status": "started", "current": 0, "total": 3})
+        for current, angle in enumerate((0, 10), start=1):
+            window.control_pane.progress_event.emit({
+                "status": "point_complete", "current": current, "total": 3,
+                "position": {"r": 100, "phi": angle, "z": 0},
+            })
+        window.control_pane.progress_event.emit({"status": "finished", "current": 2, "total": 3})
+
+    worker = threading.Thread(target=measure)
+    worker.start()
+    worker.join(timeout=2)
+    assert not worker.is_alive()
+    qtbot.waitUntil(lambda: len(pane._completed_positions) == 2)
+
+    assert [pos["phi"] for pos in pane._completed_positions] == [0, 10]
+    assert pane.positions.set_data_with_progress.call_args.args[2] == [0, 10]
+    assert pane.progress_engine.curr_idx == 1
+    assert pane.progress_engine.exact_idx == 1.0
+    pane.progress_engine.update_plot.assert_called()
+    pane.progress_canvas.draw_idle.assert_called()
+    pane.refresh_all.assert_not_called()
+    window.control_pane.measurement_saved.emit()
+    pane.refresh_all.assert_called_once_with()
+
+
+def test_live_capture_stream_led_tracks_resource_state(tmp_path, monkeypatch, qtbot):
+    import harmonic_drive_qt.live_capture as live_capture
+    from nfs.audio import get_audio_meter_state
+
+    config_file = tmp_path / "config.ini"
+    config_file.write_text("[app]\ncoord_viewer_backend = matplotlib\n", encoding="utf-8")
+    monkeypatch.setattr(live_capture, "_load_grid_dataframe", lambda: None)
+    monkeypatch.setattr(live_capture, "_load_grid_points", lambda: [])
+    monkeypatch.setattr(live_capture, "_load_latest_ir", lambda: (None, None, None))
+    backend = Mock()
+    state = dict(get_audio_meter_state(), active=False, stream_open=False)
+    backend.get_audio_meter_state.return_value = state
+    pane = live_capture.LiveCapturePane(backend, str(config_file))
+    qtbot.addWidget(pane)
+    try:
+        assert pane.stream_status.text() == "Stream closed"
+        assert pane.stream_led.property("streamOpen") is False
+        state["stream_open"] = True
+        qtbot.waitUntil(lambda: pane.stream_status.text() == "Stream open")
+        assert pane.stream_led.property("streamOpen") is True
+        assert "#22c55e" in pane.stream_led.styleSheet()
+        state.update(active=True, stream_open=False)
+        qtbot.waitUntil(lambda: pane.stream_status.text() == "Stream closed")
+        assert pane.stream_led.property("streamOpen") is False
+        assert "#94a3b8" in pane.stream_led.styleSheet()
+    finally:
+        pane.meter_timer.stop()
+        pane.watch_timer.stop()

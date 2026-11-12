@@ -633,7 +633,21 @@ class LiveCapturePane(QWidget):
         scroll.setWidget(content_root)
         self.sections: list[LiveSection] = []
 
-        meters_section, m_content = self._add_section("Audio Meters")
+        stream_status_widget = QWidget()
+        stream_status_layout = QHBoxLayout(stream_status_widget)
+        stream_status_layout.setContentsMargins(0, 0, 0, 0)
+        stream_status_layout.setSpacing(6)
+        self.stream_led = QFrame()
+        self.stream_led.setFixedSize(12, 12)
+        self.stream_led.setProperty("streamOpen", False)
+        self.stream_led.setStyleSheet("background-color: #94a3b8; border: 1px solid #64748b; border-radius: 6px;")
+        self.stream_led.setAccessibleName("Audio stream status")
+        self.stream_status = QLabel("Stream closed")
+        self.stream_status.setStyleSheet("color: #475569; font-size: 11px; border: none;")
+        stream_status_widget.setToolTip("Green while a hardware audio stream is open, including silent gaps and pauses.")
+        stream_status_layout.addWidget(self.stream_led)
+        stream_status_layout.addWidget(self.stream_status)
+        meters_section, m_content = self._add_section("Audio Meters", header_widget=stream_status_widget)
         meters_layout = QGridLayout(m_content)
         meters_layout.setContentsMargins(12, 12, 12, 12)
         meters_layout.setSpacing(8)
@@ -972,6 +986,14 @@ class LiveCapturePane(QWidget):
         if not self.visible_active:
             return
         state = self.backend.get_audio_meter_state()
+        opened = bool(state.get("stream_open", False))
+        if self.stream_led.property("streamOpen") != opened:
+            self.stream_led.setProperty("streamOpen", opened)
+            fill, border = ("#22c55e", "#15803d") if opened else ("#94a3b8", "#64748b")
+            self.stream_led.setStyleSheet(
+                f"background-color: {fill}; border: 1px solid {border}; border-radius: 6px;"
+            )
+            self.stream_status.setText("Stream open" if opened else "Stream closed")
         labels = self._channel_labels()
         meter_data = [
             state["inputs"][1],
