@@ -15,7 +15,7 @@ from nfs.debug_artifacts import DebugArtifactFactory
 def make_engine():
     fs = 48000
     hw = dict(dev_in=18, dev_out=18, ch_in_loop=1, ch_in_mic=0,
-              ch_out_spkr=0, ch_out_ref=1, fs=fs, blocksize=256, wasapi_exclusive=False)
+              ch_out_spkr=0, ch_out_ref=1, fs=fs, wasapi_exclusive=False)
     cap = dict(num_sweeps=1, sweep_dur_s=.5, sweep_level_dbfs=-12,
                pre_sil_ms=50, post_sil_ms=50, debug_saves=False)
     return audio.Audio(
@@ -111,7 +111,6 @@ def test_stream_closes_before_com_release_and_uses_asio_roles(
         ch_out_spkr=3,
         ch_out_ref=1,
         fs=fs,
-        blocksize=256,
         wasapi_exclusive=False,
     )
     cap = dict(

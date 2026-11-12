@@ -147,8 +147,6 @@ EDITABLE_SCHEMA: Dict[str, List[SchemaEntry]] = {
         ("out_dev_name", "str", "Saved output device name used to recover from device ID changes.", None),
         ("out_dev_hostapi", "str", "Saved output host API used to disambiguate audio devices.", None),
         ("fs", "int", "Sample rate in Hz. Must match the device's configured rate.", None),
-        ("blocksize", "int",
-         "Audio buffer size in samples. Must match the ASIO panel if applicable.", None),
         ("wasapi_exclusive", "bool",
          "Request exclusive WASAPI mode. Only relevant on Windows when not using ASIO.", None),
     ],

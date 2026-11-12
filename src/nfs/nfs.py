@@ -298,6 +298,21 @@ class NearFieldScanner:
                 self._append_position_to_file(position)
                 self._update_audio_position_callback(position)
 
+                pos_dict = {"r": position.r(), "phi": position.t(), "z": position.z()}
+
+                # Emit progress immediately when arriving at the next point so the GUI
+                # highlights it before the measurement completes
+                self._emit_measurement_progress(
+                    progress_callback,
+                    "point_started",
+                    current,
+                    total,
+                    position=pos_dict,
+                    timestamp=time.monotonic(),
+                    eta_seconds=eta_seconds,
+                    elapsed_seconds=elapsed_seconds,
+                )
+
                 result = self._audio.measure_ir(position, session_name)
                 timestamp = time.monotonic()
                 if started_at is not None:
@@ -305,8 +320,6 @@ class NearFieldScanner:
                 if started_at is not None and total > 0 and current >= 2:
                     seconds_per_point = (timestamp - started_at) / current
                     eta_seconds = seconds_per_point * max(0, total - current)
-
-                pos_dict = {"r": position.r(), "phi": position.t(), "z": position.z()}
 
                 # Check if the measurement failed (e.g., dropout retries exhausted)
                 if result.get("error"):

@@ -20,7 +20,6 @@ def mock_config(tmp_path):
         'in_ch_loop': '0',
         'out_ch_spkr': '0',
         'out_ch_ref': '1',
-        'blocksize': '1024',
         'wasapi_exclusive': 'False'
     }
     config['sweep'] = {

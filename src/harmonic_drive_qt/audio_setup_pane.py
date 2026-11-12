@@ -323,18 +323,13 @@ class AudioSetupPane(QWidget):
         advanced_audio.setCheckable(True)
         advanced_audio.setChecked(False)
         adv_grid = QGridLayout(advanced_audio)
-        self.blocksize = self._spin(_int_value(parser, "audio", "blocksize", 2048), 0, 65536, "", 0)
-        self.blocksize.setSpecialValueText("Automatic")
         self.wasapi = QCheckBox("WASAPI exclusive")
         self.wasapi.setChecked(_parse_bool(_value(parser, "audio", "wasapi_exclusive", "False")))
         self.wasapi.setStyleSheet(toggle_style())
-        blocksize_label = QLabel("Blocksize")
-        adv_grid.addWidget(blocksize_label, 0, 0)
-        adv_grid.addWidget(self.blocksize, 0, 1)
-        adv_grid.addWidget(self.wasapi, 0, 2)
+        adv_grid.addWidget(self.wasapi, 0, 0)
         self._collapse_group_children(
             advanced_audio,
-            [blocksize_label, self.blocksize, self.wasapi],
+            [self.wasapi],
         )
         layout.addWidget(advanced_audio)
 
@@ -861,7 +856,7 @@ class AudioSetupPane(QWidget):
             self.align, self.debug, self.loopback_correction,
         ]
         commit_controls = [
-            self.blocksize, self.sweep_dur, self.num_sweeps,
+            self.sweep_dur, self.num_sweeps,
             self.hpf_order, self.hpf_cap, self.pre_sil, self.post_sil, self.taper,
             self.max_retries, self.retry_psr,
         ]
@@ -1090,7 +1085,6 @@ class AudioSetupPane(QWidget):
             ("audio", "out_dev_name"): out_name,
             ("audio", "out_dev_hostapi"): out_api,
             ("audio", "fs"): self._combo_data(self.fs),
-            ("audio", "blocksize"): int(self.blocksize.value()),
             ("audio", "wasapi_exclusive"): self.wasapi.isChecked(),
             ("sweep", "naming_convention"): self.naming.currentText(),
             ("sweep", "sweep_dur_s"): self.sweep_dur.value(),

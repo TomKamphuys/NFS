@@ -499,7 +499,7 @@ def test_integration_with_mock_audio(tmp_path):
     config['audio'] = {
         'mode': 'mock_interface', 'fs': '48000', 'in_dev': '0', 'out_dev': '0',
         'in_ch_mic': '1', 'in_ch_loop': '0', 'out_ch_spkr': '0', 'out_ch_ref': '1',
-        'blocksize': '1024', 'wasapi_exclusive': 'False'
+        'wasapi_exclusive': 'False'
     }
     config['sweep'] = {
         'sweep_dur_s': '0.5', 'sweep_level_dbfs': '-10', 'num_sweeps': '1',
@@ -540,7 +540,6 @@ def test_audio_factory_accepts_comma_decimal_config_values(tmp_path):
         "in_ch_loop": "0",
         "out_ch_spkr": "0",
         "out_ch_ref": "1",
-        "blocksize": "1024",
         "wasapi_exclusive": "False",
     }
     config["sweep"] = {
@@ -655,7 +654,6 @@ def test_audio_factory_rejects_saved_pair_when_only_wrong_hostapi_exists(mock_ca
         "in_ch_loop": "1",
         "out_ch_spkr": "0",
         "out_ch_ref": "1",
-        "blocksize": "1024",
         "wasapi_exclusive": "False",
     }
     config["sweep"] = {
@@ -711,7 +709,6 @@ def test_audio_factory_resolves_saved_identity_without_configured_ids(mock_catal
         "in_ch_loop": "1",
         "out_ch_spkr": "0",
         "out_ch_ref": "1",
-        "blocksize": "1024",
         "wasapi_exclusive": "False",
     }
     config["sweep"] = {

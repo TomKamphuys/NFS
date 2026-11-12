@@ -89,7 +89,7 @@ class ControlPane(QWidget):
         self.position_timer.start()
 
         self.progress_timer = QTimer(self)
-        self.progress_timer.setInterval(500)
+        self.progress_timer.setInterval(200)
         self.progress_timer.timeout.connect(self.refresh_progress)
         self.progress_timer.start()
 
@@ -892,8 +892,8 @@ class ControlPane(QWidget):
             "<tr style='color:#64748b; font-size:12px; font-weight:800;'>"
             "<td style='width:18px; padding:0 4px 4px 0; text-align:center;'></td>"
             "<td style='padding:0 8px 4px 0;'>Point</td>"
-            "<td style='padding:0 12px 4px 0; text-align:right;'>Radius</td>"
             "<td style='padding:0 12px 4px 0; text-align:right;'>Phi</td>"
+            "<td style='padding:0 12px 4px 0; text-align:right;'>Radius</td>"
             "<td style='padding:0 2px 4px 0; text-align:right;'>Height</td>"
             "</tr>"
         ]
@@ -912,8 +912,8 @@ class ControlPane(QWidget):
                     f"<tr style='{style}'>"
                     f"<td style='width:18px; padding:3px 4px 3px 0; text-align:center; color:#2563eb;'>{marker}</td>"
                     f"<td style='padding:3px 8px 3px 0;'>{label}</td>"
-                    f"<td style='padding:3px 12px 3px 0; text-align:right;'>{point['r']:7.1f} mm</td>"
                     f"<td style='padding:3px 12px 3px 0; text-align:right;'>{point['p']:7.1f}&deg;</td>"
+                    f"<td style='padding:3px 12px 3px 0; text-align:right;'>{point['r']:7.1f} mm</td>"
                     f"<td style='padding:3px 2px 3px 0; text-align:right;'>{point['z']:7.1f} mm</td>"
                     "</tr>"
                 )

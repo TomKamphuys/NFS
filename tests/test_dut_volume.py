@@ -30,7 +30,6 @@ motion_manager = motion_manager
 [audio]
 mode = mock_interface
 fs = 48000
-blocksize = 2048
 in_ch_mic = 0
 in_ch_loop = 1
 out_ch_spkr = 0

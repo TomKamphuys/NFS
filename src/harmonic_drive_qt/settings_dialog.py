@@ -26,6 +26,7 @@ from .qt_compat import (
     QComboBox,
     QDialog,
     QEvent,
+    QFileDialog,
     QObject,
     QFrame,
     QGridLayout,
@@ -570,10 +571,12 @@ class SettingsDialog(QDialog):
         for key, kind, tooltip, options in self._all_measurement_points_fields():
             raw = self._measurement_points_raw_value(mp_section_name, key)
             label = DISPLAY_LABELS.get(key, key.replace('_', ' ').title())
-            _widget, row = self._add_field(
+            widget, row = self._add_field(
                 layout, "__measurement_points__", key, label, kind, raw, options
             )
             self.measurement_points_extra_widgets[key] = row
+            if key == "filename" and isinstance(widget, QLineEdit):
+                self._add_filename_browse_button(widget, row)
 
         def update_measurement_points_fields(*_args) -> None:
             mp_type = self._combo_or_text(self.measurement_points_type_input)
@@ -648,6 +651,66 @@ class SettingsDialog(QDialog):
                 widget.setCurrentText(raw)
         elif isinstance(widget, QLineEdit) and widget.text() != raw:
             widget.setText(raw)
+
+    def _add_filename_browse_button(self, line_edit: QLineEdit, row: QWidget) -> None:
+        """Add a Select button next to a filename line edit for browsing files."""
+        old_layout = row.layout()
+        if old_layout is None:
+            return
+        # Remove the line edit from the vertical layout
+        old_layout.removeWidget(line_edit)
+        # Also remove the label from the old layout so we can regroup everything
+        label = None
+        for i in range(old_layout.count()):
+            item = old_layout.itemAt(i)
+            if item and item.widget() and isinstance(item.widget(), QLabel):
+                label = item.widget()
+                old_layout.removeWidget(label)
+                break
+        # Create a container widget with a vertical layout: label on top, then textbox + button
+        container = QWidget()
+        v_layout = QVBoxLayout(container)
+        v_layout.setContentsMargins(0, 0, 0, 0)
+        v_layout.setSpacing(2)
+        if label:
+            v_layout.addWidget(label)
+        # Horizontal row for the line edit and button side by side
+        h_layout = QHBoxLayout()
+        h_layout.setContentsMargins(0, 0, 0, 0)
+        h_layout.setSpacing(4)
+        h_layout.addWidget(line_edit)
+        select_btn = QPushButton("Select")
+        select_btn.setFixedWidth(60)
+        select_btn.setStyleSheet(
+            "QPushButton { border: 1px solid #cbd5e1; border-radius: 3px; "
+            "background: #f8fafc; color: #334155; font-size: 8.5pt; "
+            "padding: 2px 8px; min-height: 20px; }"
+            "QPushButton:hover { background: #e2e8f0; }"
+        )
+        select_btn.clicked.connect(lambda: self._browse_filename(line_edit))
+        h_layout.addWidget(select_btn)
+        v_layout.addLayout(h_layout)
+        # Insert the container widget where the line edit was
+        old_layout.insertWidget(0, container)
+
+    def _browse_filename(self, line_edit: QLineEdit) -> None:
+        """Open a file dialog and set the selected file path into the line edit."""
+        current_text = line_edit.text().strip()
+        initial_dir = ""
+        if current_text:
+            path = Path(current_text)
+            if path.is_absolute():
+                initial_dir = str(path.parent)
+            else:
+                initial_dir = str(path)
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select measurement points file",
+            initial_dir,
+            "CSV Files (*.csv);;All Files (*)",
+        )
+        if file_path:
+            line_edit.setText(file_path)
 
     def _add_field(self, layout, section, key, label, kind, raw, options):
         w = QWidget()

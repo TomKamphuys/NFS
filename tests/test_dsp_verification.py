@@ -101,7 +101,6 @@ def test_integration_with_mock_audio(tmp_path):
             'in_ch_loop': '0',
             'out_ch_spkr': '0',
             'out_ch_ref': '1',
-            'blocksize': '1024',
             'wasapi_exclusive': 'False'
         }
 

@@ -49,7 +49,6 @@ def test_plain_audio_combos_use_content_sizing_without_custom_popup(tmp_path, mo
         "out_ch_spkr = 0\n"
         "out_ch_ref = 1\n"
         "fs = 48000\n"
-        "blocksize = 2048\n"
         "wasapi_exclusive = False\n"
         "in_dev_hostapi = ASIO\n"
         "out_dev_hostapi = ASIO\n"
@@ -142,7 +141,6 @@ def test_audio_pane_saves_comma_decimal_text_fields_as_dot_decimals(tmp_path, mo
         "out_ch_spkr = 0\n"
         "out_ch_ref = 1\n"
         "fs = 48000\n"
-        "blocksize = 2048\n"
         "wasapi_exclusive = False\n"
         "in_dev_hostapi = ASIO\n"
         "out_dev_hostapi = ASIO\n"
@@ -203,7 +201,6 @@ def test_audio_spin_edits_save_only_after_editing_finished(tmp_path, monkeypatch
         "out_ch_spkr = 0\n"
         "out_ch_ref = 1\n"
         "fs = 48000\n"
-        "blocksize = 2048\n"
         "wasapi_exclusive = False\n"
         "in_dev_hostapi = ASIO\n"
         "out_dev_hostapi = ASIO\n"
@@ -245,14 +242,6 @@ def test_audio_spin_edits_save_only_after_editing_finished(tmp_path, monkeypatch
 
         assert "sweep_dur_s = 2.0" in config_file.read_text(encoding="utf-8")
         backend.load.assert_called_once()
-
-        pane.blocksize.setValue(0)
-        assert pane.blocksize.value() == 0
-        assert pane.blocksize.specialValueText() == "Automatic"
-        pane.blocksize.editingFinished.emit()
-
-        assert "blocksize = 0" in config_file.read_text(encoding="utf-8")
-        assert backend.load.call_count == 2
     finally:
         pane.auto_apply_timer.stop()
         pane.cal_timer.stop()
@@ -271,7 +260,6 @@ def test_output_level_spin_arrows_save_without_reload_and_update_running_sine(tm
         "out_ch_spkr = 0\n"
         "out_ch_ref = 1\n"
         "fs = 48000\n"
-        "blocksize = 2048\n"
         "wasapi_exclusive = False\n"
         "in_dev_hostapi = ASIO\n"
         "out_dev_hostapi = ASIO\n"
@@ -335,7 +323,6 @@ def test_audio_pane_prefers_saved_name_and_hostapi_over_stale_id(tmp_path, monke
         "out_ch_spkr = 0\n"
         "out_ch_ref = 1\n"
         "fs = 48000\n"
-        "blocksize = 2048\n"
         "wasapi_exclusive = False\n"
         "in_dev_name = RME Interface\n"
         "in_dev_hostapi = ASIO\n"
@@ -473,7 +460,6 @@ def test_audio_pane_resets_channels_to_first_then_second_on_api_change(tmp_path,
         "out_ch_spkr = 1\n"
         "out_ch_ref = 0\n"
         "fs = 48000\n"
-        "blocksize = 2048\n"
         "wasapi_exclusive = False\n"
         "in_dev_name = Direct Device\n"
         "in_dev_hostapi = Windows DirectSound\n"
@@ -544,7 +530,6 @@ def test_audio_pane_prefers_48khz_when_api_changes(tmp_path, monkeypatch):
         "out_ch_spkr = 0\n"
         "out_ch_ref = 1\n"
         "fs = 96000\n"
-        "blocksize = 2048\n"
         "wasapi_exclusive = False\n"
         "in_dev_name = Direct Device\n"
         "in_dev_hostapi = Windows DirectSound\n"
@@ -611,7 +596,6 @@ def test_disabled_protection_hpf_shows_500hz_default_and_saves_when_enabled(tmp_
         "out_ch_spkr = 0\n"
         "out_ch_ref = 1\n"
         "fs = 48000\n"
-        "blocksize = 2048\n"
         "wasapi_exclusive = False\n"
         "in_dev_name = ASIO Device\n"
         "in_dev_hostapi = ASIO\n"
@@ -694,7 +678,6 @@ def test_audio_pane_updates_config_and_project_memory_without_project_json(tmp_p
         "out_ch_spkr = 0\n"
         "out_ch_ref = 1\n"
         "fs = 48000\n"
-        "blocksize = 2048\n"
         "wasapi_exclusive = False\n"
         "in_dev_hostapi = ASIO\n"
         "out_dev_hostapi = ASIO\n"
@@ -784,7 +767,6 @@ def test_audio_auto_apply_does_not_overwrite_saved_calibration(tmp_path, monkeyp
         "out_ch_spkr = 0\n"
         "out_ch_ref = 1\n"
         "fs = 48000\n"
-        "blocksize = 2048\n"
         "wasapi_exclusive = False\n"
         "in_dev_hostapi = ASIO\n"
         "out_dev_hostapi = ASIO\n"
@@ -853,7 +835,6 @@ def test_audio_pane_loads_saved_calibration_fields_without_live_mic_level(tmp_pa
         "out_ch_spkr = 0\n"
         "out_ch_ref = 1\n"
         "fs = 48000\n"
-        "blocksize = 2048\n"
         "wasapi_exclusive = False\n"
         "in_dev_hostapi = ASIO\n"
         "out_dev_hostapi = ASIO\n"
@@ -930,7 +911,6 @@ def test_spl_calibration_weighting_selector_changes_meter_source_and_label(tmp_p
         "out_ch_spkr = 0\n"
         "out_ch_ref = 1\n"
         "fs = 48000\n"
-        "blocksize = 2048\n"
         "wasapi_exclusive = False\n"
         "in_dev_hostapi = ASIO\n"
         "out_dev_hostapi = ASIO\n"
@@ -1016,7 +996,6 @@ def test_save_spl_calibration_can_create_missing_project_json_after_prompt(tmp_p
         "out_ch_spkr = 0\n"
         "out_ch_ref = 1\n"
         "fs = 48000\n"
-        "blocksize = 2048\n"
         "wasapi_exclusive = False\n"
         "in_dev_hostapi = ASIO\n"
         "out_dev_hostapi = ASIO\n"
@@ -1091,7 +1070,6 @@ def test_voltage_calibration_can_save_output_only_then_input_spl(tmp_path, monke
         "out_ch_spkr = 0\n"
         "out_ch_ref = 1\n"
         "fs = 48000\n"
-        "blocksize = 2048\n"
         "wasapi_exclusive = False\n"
         "in_dev_hostapi = ASIO\n"
         "out_dev_hostapi = ASIO\n"

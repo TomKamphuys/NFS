@@ -100,6 +100,9 @@ from . import _audio_backend as sd
 from .naming import IRNamingConvention, NamingConventionFactory
 from .debug_artifacts import DebugArtifactHandler, DebugArtifactFactory
 
+# Block size is hardcoded to 0 (auto) — let the audio driver decide.
+BLOCKSIZE = 0
+
 
 def _set_realtime_priority() -> None:
     """Set the Windows process to real-time priority to reduce audio buffer underruns.
@@ -319,11 +322,11 @@ class _AudioMeterWorker:
         "output_overflow",
     )
 
-    def __init__(self, sample_rate: int, blocksize: int = 0) -> None:
+    def __init__(self, sample_rate: int) -> None:
         self.sample_rate = int(sample_rate)
         # Capacity absorbs brief scheduling stalls; it is not a delay target.
         # Processing is capped to the newest 100 ms so meters remain responsive.
-        self._capacity = max(8192, self.sample_rate, int(blocksize))
+        self._capacity = max(8192, self.sample_rate)
         self._max_meter_frames = max(1, int(round(self.sample_rate * 0.1)))
         self._outputs = np.zeros((self._capacity, 2), dtype=np.float32)
         self._inputs = np.zeros((self._capacity, 2), dtype=np.float32)
@@ -2143,7 +2146,7 @@ class Audio(IAudio):
         idx_play, idx_rec = 0, 0
         stream_status = []
         done_evt = threading.Event()
-        meter_worker = _AudioMeterWorker(self.hw['fs'], self.hw['blocksize'])
+        meter_worker = _AudioMeterWorker(self.hw['fs'])
         meter_worker.start()
         output_meter_roles = (0, 1) if use_asio_out else (
             self.hw['ch_out_spkr'],
@@ -2204,7 +2207,7 @@ class Audio(IAudio):
         # The with blocks close the stream before releasing our COM reference.
         try:
             with _asio_thread_context(use_asio_in or use_asio_out), sd.Stream(device=(self.hw['dev_in'], self.hw['dev_out']), samplerate=self.hw['fs'],
-                           blocksize=self.hw['blocksize'],
+                           blocksize=BLOCKSIZE,
                            dtype="float32", channels=(in_args[0], out_args[0]), dither_off=True,
                            extra_settings=(in_args[1], out_args[1]), callback=callback) as stream:
                 if not done_evt.wait(total_len / self.hw['fs'] + 10):
@@ -2610,7 +2613,7 @@ class Audio(IAudio):
 
             idx_play = 0
             done_evt = threading.Event()
-            meter_worker = _AudioMeterWorker(fs, self.hw['blocksize'])
+            meter_worker = _AudioMeterWorker(fs)
             meter_worker.start()
             output_meter_roles = (0, 1) if use_asio_out else (
                 self.hw['ch_out_spkr'],
@@ -2643,7 +2646,7 @@ class Audio(IAudio):
                 with _asio_thread_context(use_asio_in or use_asio_out), sd.Stream(
                     device=(in_dev, out_dev),
                     samplerate=fs,
-                    blocksize=self.hw['blocksize'],
+                    blocksize=BLOCKSIZE,
                     dtype='float32',
                     channels=(in_args[0], out_ch_count),
                     dither_off=True,
@@ -2658,7 +2661,7 @@ class Audio(IAudio):
             # Indefinite playback
             phase = 0.0
             phase_inc = 2 * np.pi * frequency / fs
-            self._sine_meter_worker = _AudioMeterWorker(fs, self.hw['blocksize'])
+            self._sine_meter_worker = _AudioMeterWorker(fs)
             self._sine_meter_worker.start()
             output_meter_roles = (0, 1) if use_asio_out else (
                 self.hw['ch_out_spkr'],
@@ -2702,7 +2705,7 @@ class Audio(IAudio):
                 self._sine_stream = sd.Stream(
                     device=(in_dev, out_dev),
                     samplerate=fs,
-                    blocksize=self.hw['blocksize'],
+                    blocksize=BLOCKSIZE,
                     channels=(in_args[0], out_ch_count),
                     extra_settings=(in_args[1], out_args_extra),
                     callback=callback,
@@ -3089,7 +3092,7 @@ class AudioFactory:
             'ch_out_spkr': AudioFactory._get_required_config(config, audio_section, 'out_ch_spkr', int),
             'ch_out_ref': AudioFactory._get_required_config(config, audio_section, 'out_ch_ref', int),
             'fs': fs,
-            'blocksize': AudioFactory._get_required_config(config, audio_section, 'blocksize', int),
+            'blocksize': BLOCKSIZE,
             'wasapi_exclusive': AudioFactory._get_required_config(config, audio_section, 'wasapi_exclusive', bool),
         }
 

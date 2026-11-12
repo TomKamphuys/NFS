@@ -31,7 +31,6 @@ def make_engine(first=False, injected=False):
         ch_out_spkr=1,
         ch_out_ref=0,
         fs=fs,
-        blocksize=256,
         wasapi_exclusive=False,
     )
     cap = dict(
@@ -507,7 +506,6 @@ def mock_config(tmp_path):
         "in_ch_loop": "0",
         "out_ch_spkr": "0",
         "out_ch_ref": "1",
-        "blocksize": "1024",
         "wasapi_exclusive": "False",
     }
     config["sweep"] = {

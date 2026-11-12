@@ -27,7 +27,6 @@ in_ch_mic = 0
 in_ch_loop = 1
 out_ch_spkr = 0
 out_ch_ref = 1
-blocksize = 256
 wasapi_exclusive = False
 
 [sweep]

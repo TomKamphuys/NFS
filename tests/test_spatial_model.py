@@ -312,7 +312,6 @@ class TestMockInterfaceAudioIntegration:
             "in_ch_loop": "1",
             "out_ch_spkr": "0",
             "out_ch_ref": "1",
-            "blocksize": "1024",
             "wasapi_exclusive": "false",
         }
         config["sweep"] = {
@@ -370,7 +369,6 @@ class TestMockInterfaceAudioIntegration:
             "ch_out_spkr": 0,
             "ch_out_ref": 1,
             "fs": fs,
-            "blocksize": 1024,
             "wasapi_exclusive": False,
         }
         cap_config = {
@@ -437,7 +435,7 @@ class TestMockInterfaceAudioIntegration:
         hw_config = {
             "dev_in": 0, "dev_out": 0, "ch_in_mic": 0, "ch_in_loop": 1,
             "ch_out_spkr": 0, "ch_out_ref": 1, "fs": fs,
-            "blocksize": 1024, "wasapi_exclusive": False,
+            "wasapi_exclusive": False,
         }
         cap_config = {
             "debug_saves": False, "sweep_dur_s": 0.5, "sweep_level_dbfs": -12.0,
@@ -488,7 +486,7 @@ class TestMockInterfaceAudioIntegration:
         hw_config = {
             "dev_in": 0, "dev_out": 0, "ch_in_mic": 0, "ch_in_loop": 1,
             "ch_out_spkr": 0, "ch_out_ref": 1, "fs": fs,
-            "blocksize": 1024, "wasapi_exclusive": False,
+            "wasapi_exclusive": False,
         }
         cap_config = {
             "debug_saves": False, "sweep_dur_s": 0.5, "sweep_level_dbfs": -12.0,

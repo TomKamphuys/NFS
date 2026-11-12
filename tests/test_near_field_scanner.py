@@ -111,18 +111,32 @@ def test_take_measurement_set_reports_progress(mocks):
 
     assert [(event["status"], event["current"], event["total"]) for event in progress_events] == [
         ("started", 0, 3),
+        ("point_started", 1, 3),
         ("point_complete", 1, 3),
+        ("point_started", 2, 3),
         ("point_complete", 2, 3),
+        ("point_started", 3, 3),
         ("point_complete", 3, 3),
         ("finished", 3, 3),
     ]
     assert all("timestamp" in event for event in progress_events)
+    # started event has no eta
     assert progress_events[0]["eta_seconds"] is None
-    assert progress_events[1]["eta_seconds"] is None
-    assert progress_events[2]["eta_seconds"] is not None
-    assert progress_events[2]["eta_seconds"] >= 0
-    assert progress_events[3]["eta_seconds"] is not None
-    assert progress_events[3]["eta_seconds"] >= 0
+    # point_started events before current >= 2 have no eta yet
+    assert progress_events[1]["eta_seconds"] is None  # point_started 1
+    # point_complete 1: current=1, eta still None (needs current >= 2)
+    assert progress_events[2]["eta_seconds"] is None
+    # point_started 2: eta still from before measurement, None
+    assert progress_events[3]["eta_seconds"] is None
+    # point_complete 2: current=2, eta computed
+    assert progress_events[4]["eta_seconds"] is not None
+    assert progress_events[4]["eta_seconds"] >= 0
+    # point_started 3: eta carried over from point_complete 2
+    assert progress_events[5]["eta_seconds"] is not None
+    assert progress_events[5]["eta_seconds"] >= 0
+    # point_complete 3: eta recomputed
+    assert progress_events[6]["eta_seconds"] is not None
+    assert progress_events[6]["eta_seconds"] >= 0
     progress = nfs.get_measurement_progress()
     assert progress["status"] == "finished"
     assert progress["current"] == 3
