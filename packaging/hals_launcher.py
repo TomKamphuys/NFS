@@ -64,6 +64,9 @@ def _prepare_runtime_environment() -> None:
 
 
 def main() -> int:
+    # PyInstaller must divert spawned children before GUI/config startup.
+    from multiprocessing import freeze_support
+    freeze_support()
     arguments = sys.argv[1:]
     if arguments and arguments[0] == "--verify-version":
         if len(arguments) not in (2, 4) or (len(arguments) == 4 and arguments[2] != "--report"):

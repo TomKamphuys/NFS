@@ -143,3 +143,17 @@ def test_version_verification_can_report_actual_version(launcher, tmp_path, monk
 
     assert module.main() == 1
     assert report_file.read_text(encoding="utf-8") == "0.2.1"
+
+
+def test_spawn_dispatch_precedes_runtime_or_gui_startup(launcher, monkeypatch):
+    import multiprocessing
+    module, _bundle = launcher
+    class SpawnDiverted(Exception):
+        pass
+    def divert():
+        raise SpawnDiverted()
+    monkeypatch.setattr(multiprocessing, 'freeze_support', divert)
+    monkeypatch.setattr(module, '_prepare_runtime_environment',
+                        lambda: pytest.fail('Child must not prepare GUI configuration'))
+    with pytest.raises(SpawnDiverted):
+        module.main()
