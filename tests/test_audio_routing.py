@@ -29,9 +29,10 @@ def sounddevice(monkeypatch):
 @pytest.mark.parametrize("operation", ["capture", "finite_sine"])
 def test_non_asio_stream_preserves_physical_channel_columns(monkeypatch, sounddevice, api, operation):
     """Sparse/reordered physical channels must not become ASIO-style columns 0/1."""
+    import dataclasses
     from test_audio_capture import make_engine
     engine = make_engine()
-    engine.hw.update(ch_in_loop=3, ch_in_mic=1, ch_out_spkr=2, ch_out_ref=0,
+    engine.hw = dataclasses.replace(engine.hw, ch_in_loop=3, ch_in_mic=1, ch_out_spkr=2, ch_out_ref=0,
                      wasapi_exclusive=True)
     monkeypatch.setattr(engine, '_get_api_name', lambda dev: api)
     monkeypatch.setattr(sounddevice, 'WasapiSettings', lambda **kw: kw)
@@ -42,7 +43,7 @@ def test_non_asio_stream_preserves_physical_channel_columns(monkeypatch, soundde
     monkeypatch.setattr(engine, '_finish_sweep', lambda p, mic, loop: (mic, loop))
 
     class Stream:
-        samplerate = engine.hw['fs']
+        samplerate = engine.hw.fs
         latency = (0., 0.)
 
         def __init__(self, **kw):
@@ -81,7 +82,7 @@ def test_sine_bypasses_sweep_protection_in_both_modes(monkeypatch, sounddevice, 
     from contextlib import nullcontext
     from test_audio_capture import make_engine
     engine = make_engine()
-    fs = engine.hw['fs']
+    fs = engine.hw.fs
     engine.protection_filter = audio.ProtectionFilter(fs, 10000, 4)
     monkeypatch.setattr(engine, '_get_api_name', lambda dev: 'ASIO')
     monkeypatch.setattr(audio, '_asio_thread_context', lambda enabled: nullcontext())

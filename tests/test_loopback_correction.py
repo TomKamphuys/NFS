@@ -55,8 +55,7 @@ def test_linear_correction_preserves_harmonics_and_delay(fs):
 
 @pytest.mark.parametrize('first', [False,True])
 def test_marker_indices_and_room_echo_survive_correction(first):
-    e=make_engine(first, injected=True)
-    e.cap['loopback_correction']=True
+    e=make_engine(first, injected=True, loopback_correction=True)
     p=e._prepare_sweep()
     mic,loop=ideal_capture(p,delays=(80,80,80),acoustic_delay=23)
     # A real late reflection must not be mistaken for reference filter tail.
@@ -106,8 +105,7 @@ def test_corrected_archive_replays_exactly(tmp_path):
     import soundfile as sf
     from nfs.audio import DSPUtils
     from nfs.datatypes import CylindricalPosition
-    e=make_engine(injected=True)
-    e.cap['loopback_correction']=True
+    e=make_engine(injected=True, loopback_correction=True)
     p=e._prepare_sweep()
     mic,loop=ideal_capture(p,delays=(80,80,80))
     raw=e._finish_sweep(p,mic,loop)

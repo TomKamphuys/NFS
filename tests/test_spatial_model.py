@@ -297,7 +297,7 @@ class TestMockInterfaceAudioIntegration:
 
     def test_mock_audio_without_position_callback(self):
         """Mock audio without position callback should produce flat response."""
-        from nfs.audio import MockInterfaceAudio, AudioFactory
+        from nfs.audio import MockInterfaceAudio, HardwareConfig, CaptureConfig, AudioFactory
         from nfs.utils.spatial import SphericalHarmonicSpeakerModel
 
         # Create a minimal config for mock_interface mode
@@ -349,7 +349,7 @@ class TestMockInterfaceAudioIntegration:
 
     def test_mock_audio_with_spatial_model(self):
         """Mock audio with spatial model should produce different IRs for different positions."""
-        from nfs.audio import MockInterfaceAudio
+        from nfs.audio import MockInterfaceAudio, HardwareConfig, CaptureConfig
         from nfs.utils.spatial import SphericalHarmonicSpeakerModel
         from nfs.audio import (
             SweepGenerator,
@@ -362,25 +362,28 @@ class TestMockInterfaceAudioIntegration:
         from nfs.naming import NamingConventionFactory
 
         fs = 48000
-        hw_config = {
-            "dev_in": 0,
-            "dev_out": 0,
-            "ch_in_mic": 0,
-            "ch_in_loop": 1,
-            "ch_out_spkr": 0,
-            "ch_out_ref": 1,
-            "fs": fs,
-            "blocksize": 1024,
-            "wasapi_exclusive": False,
-        }
-        cap_config = {
-            "debug_saves": False,
-            "sweep_dur_s": 0.5,
-            "sweep_level_dbfs": -12.0,
-            "num_sweeps": 1,
-            "pre_sil_ms": 10.0,
-            "post_sil_ms": 10.0,
-        }
+        hw_config = HardwareConfig(
+            dev_in=0,
+            dev_out=0,
+            ch_in_mic=0,
+            ch_in_loop=1,
+            ch_out_spkr=0,
+            ch_out_ref=1,
+            fs=fs,
+            blocksize=1024,
+            wasapi_exclusive=False,
+        )
+        cap_config = CaptureConfig(
+            loopback_correction=False,
+            naming_convention="dimitri",
+            debug_saves=False,
+            sweep_dur_s=0.5,
+            sweep_level_dbfs=-12.0,
+            num_sweeps=1,
+            pre_sil_ms=10.0,
+            post_sil_ms=10.0,
+            marker_gap_ms=20.0,
+        )
 
         sweep_gen = SweepGenerator(fs, 0.5, f1=1.0, level_dbfs=-12.0)
         marker_gen = MarkerGenerator(fs, 100.0, (500.0, 5000.0), -12.0)
@@ -389,7 +392,7 @@ class TestMockInterfaceAudioIntegration:
         naming = NamingConventionFactory.create("dimitri")
 
         from nfs.debug_artifacts import DebugArtifactFactory
-        debug_handler = DebugArtifactFactory.create(False, hw_config)
+        debug_handler = DebugArtifactFactory.create(False, hw_config.fs)
 
         speaker_model = SphericalHarmonicSpeakerModel(order=1)
 
@@ -423,7 +426,7 @@ class TestMockInterfaceAudioIntegration:
 
     def test_set_position_callback(self):
         """set_position_callback should update the callback."""
-        from nfs.audio import MockInterfaceAudio
+        from nfs.audio import MockInterfaceAudio, HardwareConfig, CaptureConfig
         from nfs.audio import (
             SweepGenerator,
             MarkerGenerator,
@@ -434,21 +437,22 @@ class TestMockInterfaceAudioIntegration:
         from nfs.debug_artifacts import DebugArtifactFactory
 
         fs = 48000
-        hw_config = {
-            "dev_in": 0, "dev_out": 0, "ch_in_mic": 0, "ch_in_loop": 1,
-            "ch_out_spkr": 0, "ch_out_ref": 1, "fs": fs,
-            "blocksize": 1024, "wasapi_exclusive": False,
-        }
-        cap_config = {
-            "debug_saves": False, "sweep_dur_s": 0.5, "sweep_level_dbfs": -12.0,
-            "num_sweeps": 1, "pre_sil_ms": 10.0, "post_sil_ms": 10.0,
-        }
+        hw_config = HardwareConfig(
+            dev_in=0, dev_out=0, ch_in_mic=0, ch_in_loop=1,
+            ch_out_spkr=0, ch_out_ref=1, fs=fs,
+            blocksize=1024, wasapi_exclusive=False,
+        )
+        cap_config = CaptureConfig(
+            loopback_correction=False, naming_convention="dimitri",
+            debug_saves=False, sweep_dur_s=0.5, sweep_level_dbfs=-12.0,
+            num_sweeps=1, pre_sil_ms=10.0, post_sil_ms=10.0, marker_gap_ms=20.0,
+        )
         sweep_gen = SweepGenerator(fs, 0.5, f1=1.0, level_dbfs=-12.0)
         marker_gen = MarkerGenerator(fs, 100.0, (500.0, 5000.0), -12.0)
         alignment_engine = AlignmentEngine(fs, 1, True, 5.0, marker_gen.dur_ms)
         deconv_engine = DeconvolutionEngine(fs)
         naming = NamingConventionFactory.create("dimitri")
-        debug_handler = DebugArtifactFactory.create(False, hw_config)
+        debug_handler = DebugArtifactFactory.create(False, hw_config.fs)
 
         audio = MockInterfaceAudio(
             hw_config=hw_config,
@@ -474,7 +478,7 @@ class TestMockInterfaceAudioIntegration:
 
     def test_backward_compatibility_no_speaker_model(self):
         """Mock audio without speaker_model should behave as before."""
-        from nfs.audio import MockInterfaceAudio
+        from nfs.audio import MockInterfaceAudio, HardwareConfig, CaptureConfig
         from nfs.audio import (
             SweepGenerator,
             MarkerGenerator,
@@ -485,21 +489,22 @@ class TestMockInterfaceAudioIntegration:
         from nfs.debug_artifacts import DebugArtifactFactory
 
         fs = 48000
-        hw_config = {
-            "dev_in": 0, "dev_out": 0, "ch_in_mic": 0, "ch_in_loop": 1,
-            "ch_out_spkr": 0, "ch_out_ref": 1, "fs": fs,
-            "blocksize": 1024, "wasapi_exclusive": False,
-        }
-        cap_config = {
-            "debug_saves": False, "sweep_dur_s": 0.5, "sweep_level_dbfs": -12.0,
-            "num_sweeps": 1, "pre_sil_ms": 10.0, "post_sil_ms": 10.0,
-        }
+        hw_config = HardwareConfig(
+            dev_in=0, dev_out=0, ch_in_mic=0, ch_in_loop=1,
+            ch_out_spkr=0, ch_out_ref=1, fs=fs,
+            blocksize=1024, wasapi_exclusive=False,
+        )
+        cap_config = CaptureConfig(
+            loopback_correction=False, naming_convention="dimitri",
+            debug_saves=False, sweep_dur_s=0.5, sweep_level_dbfs=-12.0,
+            num_sweeps=1, pre_sil_ms=10.0, post_sil_ms=10.0, marker_gap_ms=20.0,
+        )
         sweep_gen = SweepGenerator(fs, 0.5, f1=1.0, level_dbfs=-12.0)
         marker_gen = MarkerGenerator(fs, 100.0, (500.0, 5000.0), -12.0)
         alignment_engine = AlignmentEngine(fs, 1, True, 5.0, marker_gen.dur_ms)
         deconv_engine = DeconvolutionEngine(fs)
         naming = NamingConventionFactory.create("dimitri")
-        debug_handler = DebugArtifactFactory.create(False, hw_config)
+        debug_handler = DebugArtifactFactory.create(False, hw_config.fs)
 
         audio = MockInterfaceAudio(
             hw_config=hw_config,

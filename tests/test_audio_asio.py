@@ -8,16 +8,18 @@ import numpy as np
 import pytest
 
 import nfs.audio as audio
+from nfs.audio import HardwareConfig, CaptureConfig
 from nfs.naming import NamingConventionFactory
 from nfs.debug_artifacts import DebugArtifactFactory
 
 
 def make_engine():
     fs = 48000
-    hw = dict(dev_in=18, dev_out=18, ch_in_loop=1, ch_in_mic=0,
+    hw = HardwareConfig(dev_in=18, dev_out=18, ch_in_loop=1, ch_in_mic=0,
               ch_out_spkr=0, ch_out_ref=1, fs=fs, blocksize=256, wasapi_exclusive=False)
-    cap = dict(num_sweeps=1, sweep_dur_s=.5, sweep_level_dbfs=-12,
-               pre_sil_ms=50, post_sil_ms=50, debug_saves=False)
+    cap = CaptureConfig(loopback_correction=False, naming_convention='dimitri',
+               num_sweeps=1, sweep_dur_s=.5, sweep_level_dbfs=-12,
+               pre_sil_ms=50, post_sil_ms=50, debug_saves=False, marker_gap_ms=20.0)
     return audio.Audio(
         hw,
         cap,
@@ -26,7 +28,7 @@ def make_engine():
         audio.AlignmentEngine(fs, 1, False, 20, 100),
         audio.DeconvolutionEngine(fs),
         NamingConventionFactory.create('dimitri'),
-        DebugArtifactFactory.create(False, hw),
+        DebugArtifactFactory.create(False, hw.fs),
     )
 
 
@@ -103,7 +105,7 @@ def test_non_asio_or_non_windows_does_not_touch_com(monkeypatch, ole32, platform
 def test_stream_closes_before_com_release_and_uses_asio_roles(
         monkeypatch, ole32, sounddevice, operation):
     fs = 48000
-    hw = dict(
+    hw = HardwareConfig(
         dev_in=18,
         dev_out=18,
         ch_in_loop=2,
@@ -114,13 +116,16 @@ def test_stream_closes_before_com_release_and_uses_asio_roles(
         blocksize=256,
         wasapi_exclusive=False,
     )
-    cap = dict(
+    cap = CaptureConfig(
+        loopback_correction=False,
+        naming_convention='dimitri',
         num_sweeps=1,
         sweep_dur_s=0.5,
         sweep_level_dbfs=-12,
         pre_sil_ms=50,
         post_sil_ms=50,
         debug_saves=False,
+        marker_gap_ms=20.0,
     )
     engine = audio.Audio(
         hw,
@@ -130,7 +135,7 @@ def test_stream_closes_before_com_release_and_uses_asio_roles(
         audio.AlignmentEngine(fs, 1, False, 20, 100),
         audio.DeconvolutionEngine(fs),
         NamingConventionFactory.create('dimitri'),
-        DebugArtifactFactory.create(False, hw),
+        DebugArtifactFactory.create(False, hw.fs),
     )
     monkeypatch.setattr(engine, "_get_api_name", lambda dev: "ASIO")
     meter = Mock()
