@@ -1141,6 +1141,14 @@ class ProtectionFilter:
 #  PROCESSING ENGINES
 # ─────────────────────────────────────────────────────────────────────────────
 
+class CaptureAlignmentError(RuntimeError):
+    """A completed capture could not be aligned to its playback markers."""
+
+    def __init__(self, message: str, capture_context: Optional[Dict[str, Any]] = None):
+        super().__init__(message)
+        self.capture_context = capture_context
+
+
 class AlignmentEngine:
     """Handles cross-correlation and synchronous averaging."""
 
@@ -1242,14 +1250,29 @@ class AlignmentEngine:
         lags_sel, corr_sel = lags[m], scores[m]
 
         if len(lags_sel) == 0:
-            return 0, 0.0, 0.0
+            loopback_peak = float(np.max(np.abs(x))) if len(x) else 0.0
+            loopback_rms = float(np.sqrt(np.mean(np.square(x, dtype=np.float64)))) if len(x) else 0.0
+            logger.warning(
+                f"No Barker marker candidates in search range [{search_start}, {search_end}]; "
+                f"recording_samples={len(x)}, marker_samples={len(ref)}, "
+                f"loopback_peak={loopback_peak:.6g}, loopback_rms={loopback_rms:.6g}")
+            raise CaptureAlignmentError("No Barker marker candidates in the expected search range")
         i = int(np.argmax(corr_sel))
         # Preserve the old raw-correlation return value for callers, while
         # using the normalized score to decide whether the marker is credible.
         peak_val = float(corr[m][i])
         peak_score = float(corr_sel[i])
         if normalize and peak_score < 0.5:
-            raise RuntimeError(f"No reliable Barker marker found (normalised correlation {peak_score:.3f})")
+            loopback_peak = float(np.max(np.abs(x))) if len(x) else 0.0
+            loopback_rms = float(np.sqrt(np.mean(np.square(x, dtype=np.float64)))) if len(x) else 0.0
+            logger.warning(
+                f"No reliable Barker marker: normalized_correlation={peak_score:.3f} "
+                f"(required >= 0.500), candidate_sample={int(lags_sel[i])}, "
+                f"search_range=[{search_start}, {search_end}], "
+                f"recording_samples={len(x)}, marker_samples={len(ref)}, "
+                f"loopback_peak={loopback_peak:.6g}, loopback_rms={loopback_rms:.6g}")
+            raise CaptureAlignmentError(
+                f"No reliable Barker marker found (normalised correlation {peak_score:.3f})")
 
         peak_lag = int(lags_sel[i])
         # Normalize only marker selection. Preserve master's raw-correlation
@@ -1342,10 +1365,11 @@ class AlignmentEngine:
                     "psr": float(psr_local),
                 })
             else:
-                raise RuntimeError(f"Capture ended before sweep {i + 1} and its tail were fully recorded")
+                raise CaptureAlignmentError(
+                    f"Capture ended before sweep {i + 1} and its tail were fully recorded")
 
         if not mic_slices:
-            raise RuntimeError("No valid sweeps captured (Alignment failed).")
+            raise CaptureAlignmentError("No valid sweeps captured (Alignment failed).")
 
         # One ambiguous repeat can spoil an average. Report the weakest
         # assessed repeat rather than silently reporting only the first.
@@ -1890,6 +1914,120 @@ class Audio(IAudio):
             "reference_file": relative.as_posix(),
         }
 
+    def _save_failed_capture(self, capture: Dict[str, Any], measurement_label: str,
+                             attempt: int, attempt_limit: int, reason: str,
+                             save: bool, exception: Optional[BaseException] = None,
+                             metrics: Optional[Dict[str, Any]] = None) -> Optional[Path]:
+        """Archive a rejected completed capture without affecting its retry."""
+        if not save or not self.cap.get('debug_saves', True):
+            return None
+
+        try:
+            failed_root = self.rec_dir / 'failed'
+            failed_root.mkdir(parents=True, exist_ok=True)
+            archive_dir = None
+            for _ in range(10):
+                candidate = failed_root / f"{measurement_label}_{uuid.uuid4().hex}"
+                try:
+                    candidate.mkdir()
+                except FileExistsError:
+                    continue
+                archive_dir = candidate
+                break
+            if archive_dir is None:
+                raise FileExistsError("Could not allocate a unique failed-capture directory")
+
+            capture_filename = f'attempt_{attempt:02d}_capture.wav'
+            failure_filename = f'attempt_{attempt:02d}_failure.json'
+            capture_path = archive_dir / capture_filename
+            failure_path = archive_dir / failure_filename
+            reference = self._save_shared_reference(
+                capture['digital_reference'], capture.get('acquisition_metadata'))
+            raw_channels = capture['raw_recordings']
+            self._save_wav_with_metadata(
+                capture_path, np.column_stack(raw_channels), capture_filename, subtype='FLOAT')
+
+            capture_metadata = capture.get('capture_metadata', {})
+            aligned_repeats = capture_metadata.get('aligned_repeats', []) or []
+            detected_positions = []
+            for repeat_index, row in enumerate(aligned_repeats, start=1):
+                detected = {"repeat": repeat_index}
+                for key in ('marker_start_sample', 'sweep_start_sample'):
+                    if key in row:
+                        detected[key] = int(row[key])
+                detected_positions.append(detected)
+
+            psr = metrics.get('psr') if metrics is not None else capture.get('psr')
+            reference_psr = (capture.get('psr_reference') if metrics is None
+                             else metrics.get('psr_reference'))
+            observed_timing = {
+                key: capture_metadata[key]
+                for key in ('actual_sample_rate', 'stream_latency_s', 'stream_status')
+                if key in capture_metadata
+            }
+            observed_timing['recorded_samples'] = {
+                'electrical_loopback': len(raw_channels[0]),
+                'microphone': len(raw_channels[1]),
+            }
+            document = {
+                'schema_version': 1,
+                'measurement_label': measurement_label,
+                'attempt': attempt,
+                'attempt_limit': attempt_limit,
+                'reason': reason,
+                'exception': ({'type': type(exception).__name__, 'message': str(exception)}
+                              if exception is not None else None),
+                'sample_rate': self.hw['fs'],
+                'channel_mapping': {
+                    'recording_order': ['electrical_loopback', 'microphone'],
+                    'input_channels': {
+                        'electrical_loopback': self.hw['ch_in_loop'],
+                        'microphone': self.hw['ch_in_mic'],
+                    },
+                    'output_channels': {
+                        'speaker_sweep': self.hw['ch_out_spkr'],
+                        'electrical_reference': self.hw['ch_out_ref'],
+                    },
+                },
+                'hardware_settings': dict(self.hw),
+                'capture_settings': dict(self.cap),
+                'planned_playback_marker_positions_samples':
+                    capture_metadata.get('playback_marker_starts'),
+                'observed_stream': observed_timing,
+                'detected_alignment_positions': detected_positions,
+                'quality': {
+                    'psr': float(psr) if psr is not None else None,
+                    'reference_psr': float(reference_psr) if reference_psr is not None else None,
+                    'retry_psr_threshold': self.cap.get('retry_psr_threshold', 3.0),
+                },
+                'artifacts': {
+                    'capture_wav': capture_filename,
+                    'shared_reference_schema': reference['reference_archive_schema'],
+                    'shared_reference_session_id': reference['reference_session_id'],
+                    'shared_reference_id': reference['reference_id'],
+                    'shared_reference_path_relative_to_failure_json':
+                        (Path('..') / '..' / 'debug' / reference['reference_file']).as_posix(),
+                },
+            }
+            json_contents = json.dumps(document, indent=2, allow_nan=False)
+            temporary_path = failure_path.with_suffix(f'.{uuid.uuid4().hex}.tmp')
+            try:
+                with temporary_path.open('x', encoding='utf-8') as handle:
+                    handle.write(json_contents)
+                temporary_path.replace(failure_path)
+            finally:
+                temporary_path.unlink(missing_ok=True)
+
+            logger.info(f"Saved failed capture archive: {capture_path}")
+            logger.info(f"Saved failed capture context: {failure_path}")
+            logger.info(f"Saved failed capture reference: {self.debug_dir / reference['reference_file']}")
+            return failure_path
+        except Exception:
+            logger.exception(
+                f"Could not save failed capture for {measurement_label}, attempt "
+                f"{attempt}/{attempt_limit}; continuing capture retries")
+            return None
+
     def _log_config(self) -> None:
         """Log the current hardware and capture configuration."""
         logger.info(
@@ -2032,12 +2170,36 @@ class Audio(IAudio):
         # The recorded marker supplies timing. It does not replace the clean
         # digital sweep used to calculate the inverse filter.
         timing = dict(prepared['timing'])
-        avg_mic, avg_loop, mic_slices, psr = self.alignment_engine.sync_and_average(
-            rec_mic, rec_loop, prepared['marker'], timing['pre_samples'],
-            timing['slot_samples'], timing['sweep_samples'],
-            sweep_offset_samples=timing['sweep_offset_samples'],
-            capture_tail_samples=timing['capture_tail_samples'],
-        )
+        failure_context = {
+            "capture_metadata": dict(timing),
+            "raw_recordings": (rec_loop, rec_mic),
+            "digital_reference": {
+                "fundamental": prepared['fundamental'],
+                "inverse": prepared['inverse'],
+                "speaker_sweep": prepared['speaker_sweep'],
+                "loopback_sweep": prepared['reference_sweep'],
+                "marker": prepared['marker'],
+                "transmitted_speaker": prepared['tx_speaker'],
+                "transmitted_loopback": prepared['tx_loop'],
+            },
+        }
+        try:
+            avg_mic, avg_loop, mic_slices, psr = self.alignment_engine.sync_and_average(
+                rec_mic, rec_loop, prepared['marker'], timing['pre_samples'],
+                timing['slot_samples'], timing['sweep_samples'],
+                sweep_offset_samples=timing['sweep_offset_samples'],
+                capture_tail_samples=timing['capture_tail_samples'],
+            )
+        except CaptureAlignmentError as exc:
+            failure_metadata = failure_context["capture_metadata"]
+            failure_metadata.update({
+                "aligned_repeats": [dict(row) for row in self.alignment_engine.last_alignment],
+                "raw_capture_channels": ["electrical_loopback", "microphone"],
+                "hardware_config": dict(self.hw),
+                "capture_config": dict(self.cap),
+            })
+            exc.capture_context = failure_context
+            raise
         # Store both planned and detected sample positions. They allow exact
         # offline replay, including any interface latency or repeat jitter.
         timing.update({
@@ -2146,8 +2308,10 @@ class Audio(IAudio):
         idx_play, idx_rec = 0, 0
         stream_status = []
         done_evt = threading.Event()
-        meter_worker = _AudioMeterWorker(self.hw['fs'])
-        meter_worker.start()
+        meter_worker = None
+        if self.hw.get('live_meter_enabled', True):
+            meter_worker = _AudioMeterWorker(self.hw['fs'])
+            meter_worker.start()
         output_meter_roles = (0, 1) if use_asio_out else (
             self.hw['ch_out_spkr'],
             self.hw['ch_out_ref'],
@@ -2189,13 +2353,14 @@ class Audio(IAudio):
                     rec_loop[idx_rec:idx_rec + n_in] = indata[:n_in, self.hw['ch_in_loop']]
                     rec_mic[idx_rec:idx_rec + n_in] = indata[:n_in, self.hw['ch_in_mic']]
 
-            meter_worker.submit(
-                outdata,
-                output_meter_roles,
-                indata,
-                input_meter_roles,
-                status,
-            )
+            if meter_worker is not None:
+                meter_worker.submit(
+                    outdata,
+                    output_meter_roles,
+                    indata,
+                    input_meter_roles,
+                    status,
+                )
 
             # Signal the waiting thread only when both directions are done.
             idx_play += n_out
@@ -2206,10 +2371,16 @@ class Audio(IAudio):
         # ASIO needs COM on this calling thread for the stream's whole life.
         # The with blocks close the stream before releasing our COM reference.
         try:
-            with _asio_thread_context(use_asio_in or use_asio_out), sd.Stream(device=(self.hw['dev_in'], self.hw['dev_out']), samplerate=self.hw['fs'],
-                           blocksize=BLOCKSIZE,
-                           dtype="float32", channels=(in_args[0], out_args[0]), dither_off=True,
-                           extra_settings=(in_args[1], out_args[1]), callback=callback) as stream:
+            with _asio_thread_context(use_asio_in or use_asio_out), sd.Stream(
+                    device=(self.hw['dev_in'], self.hw['dev_out']),
+                    samplerate=self.hw['fs'],
+                    blocksize=BLOCKSIZE,
+                    dtype="float32",
+                    channels=(in_args[0], out_args[0]),
+                    dither_off=True,
+                    extra_settings=(in_args[1], out_args[1]),
+                    callback=callback,
+                    latency='high') as stream:
                 if not done_evt.wait(total_len / self.hw['fs'] + 10):
                     raise RuntimeError("Audio capture did not finish within the expected duration")
                 # These are observed stream facts, useful when replaying or
@@ -2218,7 +2389,8 @@ class Audio(IAudio):
                 prepared['timing']['stream_latency_s'] = list(stream.latency)
                 prepared['timing']['stream_status'] = stream_status
         finally:
-            meter_worker.stop()
+            if meter_worker is not None:
+                meter_worker.stop()
             reset_audio_meter_state(active=False)
 
         # Align and average after the stream has closed; the raw arrays remain
@@ -2270,6 +2442,9 @@ class Audio(IAudio):
         for entry in stream_status:
             status_str = entry.get('status', '')
             if 'Underflow' in status_str or 'Overflow' in status_str:
+                logger.warning(
+                    f"Audio stream reported {status_str} at sample {entry.get('sample', 'unknown')}; "
+                    f"stream entry={entry}")
                 return True
         return False
 
@@ -2328,6 +2503,10 @@ class Audio(IAudio):
 
         peak_energy = np.max(np.abs(sweep_region))
         if peak_energy < 1e-12:
+            rms = float(np.sqrt(np.mean(np.square(sweep_region, dtype=np.float64))))
+            logger.warning(
+                f"Loopback sweep is effectively silent: sample_range=[{check_start}, {check_end}), "
+                f"peak={peak_energy:.6g}, rms={rms:.6g}; silence-gap check cannot identify a window")
             return False  # Entire sweep is silence — something else is wrong
 
         # Threshold: -60 dB relative to peak
@@ -2338,6 +2517,10 @@ class Audio(IAudio):
             window = sweep_region[i:i + window_size]
             rms = np.sqrt(np.mean(window ** 2))
             if rms < threshold:
+                logger.warning(
+                    f"Loopback silence gap: window_start_sample={check_start + i}, "
+                    f"rms={rms:.6g}, threshold={threshold:.6g}, peak={peak_energy:.6g}, "
+                    f"sweep_check_range=[{check_start}, {check_end}), window_samples={window_size}")
                 return True  # Silence gap detected
 
         return False
@@ -2377,23 +2560,46 @@ class Audio(IAudio):
             base_label = base_label[:-3]  # strip _ir suffix for debug labels
 
         max_retries = self.cap.get('max_capture_retries', 3)
+        last_rejection_reason = None
 
         for attempt in range(max_retries):
             # 1. Capture Raw Data (Run Sweeps)
-            result = self._run_sweep()
+            try:
+                result = self._run_sweep()
+            except CaptureAlignmentError as exc:
+                last_rejection_reason = f"alignment failure: {exc}"
+                logger.warning(
+                    f"Capture rejected for {ir_path.name}: {last_rejection_reason}, "
+                    f"retry {attempt + 1}/{max_retries}")
+                if exc.capture_context is not None:
+                    self._save_failed_capture(
+                        exc.capture_context, base_label, attempt + 1, max_retries,
+                        last_rejection_reason, save, exception=exc)
+                continue
+            except Exception:
+                logger.exception(
+                    f"Sweep capture failed for {ir_path.name}, attempt {attempt + 1}/{max_retries}; "
+                    f"exception will be propagated")
+                raise
 
             # Layer 1: Immediate stream health check (cheap, no deconvolution)
             if self._check_stream_health(result):
+                last_rejection_reason = "stream health rejection (underflow/overflow)"
                 logger.warning(
-                    f"Dropout detected (stream underflow/overflow), "
+                    f"Capture rejected for {ir_path.name}: stream underflow/overflow, "
                     f"retry {attempt + 1}/{max_retries}")
+                self._save_failed_capture(
+                    result, base_label, attempt + 1, max_retries, last_rejection_reason, save)
                 continue
 
             # Layer 2: Silence gap check in loopback (cheap, no deconvolution)
             if self._check_silence_gaps(result):
+                last_rejection_reason = "silence gap in loopback"
                 logger.warning(
-                    f"Dropout detected (silence gap in loopback), "
+                    f"Capture rejected for {ir_path.name}: silence gap in loopback, "
                     f"retry {attempt + 1}/{max_retries}")
+                self._save_failed_capture(
+                    result, base_label, attempt + 1, max_retries, last_rejection_reason, save)
                 continue
 
             # Deconvolution + quality gate
@@ -2407,9 +2613,17 @@ class Audio(IAudio):
 
             # Layer 3: PSR quality gate (loopback-based, not affected by mic position)
             if self._check_quality(metrics):
+                psr_threshold = self.cap.get('retry_psr_threshold', 3.0)
+                last_rejection_reason = (
+                    f"quality below threshold (PSR={metrics['psr']:.2f}, "
+                    f"threshold={psr_threshold:.2f})")
                 logger.warning(
-                    f"Quality below threshold (PSR={metrics['psr']:.2f}), "
+                    f"Capture rejected for {ir_path.name}: quality below threshold "
+                    f"(PSR={metrics['psr']:.2f}, threshold={psr_threshold:.2f}), "
                     f"retry {attempt + 1}/{max_retries}")
+                self._save_failed_capture(
+                    result, base_label, attempt + 1, max_retries, last_rejection_reason, save,
+                    metrics=metrics)
                 continue
 
             # Success: proceed to save and return
@@ -2468,9 +2682,10 @@ class Audio(IAudio):
                 "retries": attempt,
             }
 
-        # All retries exhausted — return a failure result without saving files
+        # All attempts exhausted — return a failure result without saving files
+        failure_reason = last_rejection_reason or "no capture attempts were configured"
         logger.error(
-            f"Measurement failed after {max_retries} retries due to dropout, "
+            f"Measurement failed after {max_retries} attempts: {failure_reason}, "
             f"skipping {ir_path.name}")
         return {
             "fs": self.hw["fs"],
@@ -2481,7 +2696,7 @@ class Audio(IAudio):
             "capture_metadata": {},
             "name": ir_path.name,
             "saved": False,
-            "error": f"Measurement failed after {max_retries} retries due to dropout",
+            "error": f"Measurement failed after {max_retries} attempts: {failure_reason}",
         }
 
     def measure_ir(self, position: CylindricalPosition, prefix: str | None = None,
@@ -2613,8 +2828,10 @@ class Audio(IAudio):
 
             idx_play = 0
             done_evt = threading.Event()
-            meter_worker = _AudioMeterWorker(fs)
-            meter_worker.start()
+            meter_worker = None
+            if self.hw.get('live_meter_enabled', True):
+                meter_worker = _AudioMeterWorker(fs)
+                meter_worker.start()
             output_meter_roles = (0, 1) if use_asio_out else (
                 self.hw['ch_out_spkr'],
                 self.hw['ch_out_ref'],
@@ -2631,13 +2848,14 @@ class Audio(IAudio):
                     outdata[:n_out, :out_ch_count] = out_data[idx_play:idx_play + n_out, :out_ch_count]
                 if frames > n_out:
                     outdata[n_out:] = 0
-                meter_worker.submit(
-                    outdata,
-                    output_meter_roles,
-                    indata,
-                    input_meter_roles,
-                    status,
-                )
+                if meter_worker is not None:
+                    meter_worker.submit(
+                        outdata,
+                        output_meter_roles,
+                        indata,
+                        input_meter_roles,
+                        status,
+                    )
                 idx_play += n_out
                 if idx_play >= n:
                     done_evt.set()
@@ -2652,17 +2870,20 @@ class Audio(IAudio):
                     dither_off=True,
                     extra_settings=(in_args[1], out_args_extra),
                     callback=callback,
+                    latency='high',
                 ):
                     done_evt.wait()
             finally:
-                meter_worker.stop()
+                if meter_worker is not None:
+                    meter_worker.stop()
                 reset_audio_meter_state(active=False)
         else:
             # Indefinite playback
             phase = 0.0
             phase_inc = 2 * np.pi * frequency / fs
-            self._sine_meter_worker = _AudioMeterWorker(fs)
-            self._sine_meter_worker.start()
+            if self.hw.get('live_meter_enabled', True):
+                self._sine_meter_worker = _AudioMeterWorker(fs)
+                self._sine_meter_worker.start()
             output_meter_roles = (0, 1) if use_asio_out else (
                 self.hw['ch_out_spkr'],
                 self.hw['ch_out_ref'],
@@ -2687,13 +2908,14 @@ class Audio(IAudio):
                     outdata.fill(0)
                     outdata[:, self.hw['ch_out_spkr']] = s
                     outdata[:, self.hw['ch_out_ref']] = s
-                self._sine_meter_worker.submit(
-                    outdata,
-                    output_meter_roles,
-                    indata,
-                    input_meter_roles,
-                    status,
-                )
+                if self._sine_meter_worker is not None:
+                    self._sine_meter_worker.submit(
+                        outdata,
+                        output_meter_roles,
+                        indata,
+                        input_meter_roles,
+                        status,
+                    )
 
             try:
                 # Continuous playback outlives this method. Keep the COM
@@ -2711,6 +2933,7 @@ class Audio(IAudio):
                     callback=callback,
                     dtype='float32',
                     dither_off=True,
+                    latency='high',
                 )
                 self._sine_stream.start()
             except Exception:
@@ -3093,6 +3316,7 @@ class AudioFactory:
             'ch_out_ref': AudioFactory._get_required_config(config, audio_section, 'out_ch_ref', int),
             'fs': fs,
             'blocksize': BLOCKSIZE,
+            'live_meter_enabled': config.getboolean(audio_section, 'live_meter_enabled', fallback=True),
             'wasapi_exclusive': AudioFactory._get_required_config(config, audio_section, 'wasapi_exclusive', bool),
         }
 

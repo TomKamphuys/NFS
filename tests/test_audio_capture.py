@@ -3,6 +3,7 @@
 import configparser
 import json
 import shutil
+from pathlib import Path
 from unittest.mock import Mock
 
 import numpy as np
@@ -17,6 +18,87 @@ from nfs.datatypes import CylindricalPosition
 from nfs.nfs import NearFieldScanner
 
 FS = 48000
+
+
+@pytest.mark.parametrize('setting,expected', [(None, True), ('True', True), ('False', False)])
+def test_live_meter_config(tmp_path, setting, expected):
+    config = configparser.ConfigParser()
+    config.read(Path(__file__).with_name('full_system_mock_config.ini'))
+    if setting is not None:
+        config.set('audio', 'live_meter_enabled', setting)
+    path = tmp_path / 'meter.ini'
+    with path.open('w') as handle:
+        config.write(handle)
+    engine = AudioFactory.create(str(path))
+    assert engine.hw['live_meter_enabled'] is expected
+
+
+@pytest.mark.parametrize('enabled', [False, True, None])
+@pytest.mark.parametrize('operation', ['sweep', 'finite_sine', 'continuous_sine'])
+def test_live_meter_option_preserves_stream_data(monkeypatch, enabled, operation):
+    engine = make_engine()
+    if enabled is not None:
+        engine.hw['live_meter_enabled'] = enabled
+    monkeypatch.setattr(engine, '_get_api_name', lambda dev: 'MME')
+    meter = Mock()
+    factory = Mock(return_value=meter)
+    if enabled is False:
+        factory.side_effect = AssertionError('Disabled meter must not be constructed')
+    monkeypatch.setattr(audio, '_AudioMeterWorker', factory)
+    prepared = engine._prepare_sweep()
+    mic, loop = ideal_capture(prepared)
+    count = len(mic) if operation == 'sweep' else 480
+    inputs = np.column_stack((loop[:count], mic[:count]))
+    outputs = np.full((count, 2), np.nan, dtype=np.float32)
+    closed = []
+
+    class Stream:
+        def __init__(self, **kwargs):
+            self.callback = kwargs['callback']
+            self.samplerate = FS
+            self.latency = (0.01, 0.02)
+
+        def start(self):
+            self.callback(inputs, outputs, count, None, 'Input Overflow')
+
+        def stop(self):
+            pass
+
+        def close(self):
+            closed.append(True)
+
+        def __enter__(self):
+            self.start()
+            return self
+
+        def __exit__(self, *args):
+            self.close()
+
+    monkeypatch.setattr(audio.sd, 'Stream', Stream)
+    if operation == 'sweep':
+        result = engine._run_sweep()
+        np.testing.assert_array_equal(result['raw_recordings'][0], loop)
+        np.testing.assert_array_equal(result['raw_recordings'][1], mic)
+        np.testing.assert_array_equal(outputs[:, engine.hw['ch_out_spkr']], prepared['tx_speaker'])
+        np.testing.assert_array_equal(outputs[:, engine.hw['ch_out_ref']], prepared['tx_loop'])
+        assert result['capture_metadata']['stream_status'] == [
+            {'sample': 0, 'status': 'Input Overflow'}]
+        assert engine._check_stream_health(result)
+    else:
+        engine.play_sine(1000, -12, None if operation == 'continuous_sine' else 0.01)
+        engine.stop_sine()
+        expected = (np.sin(2 * np.pi * 1000 * np.arange(count) / FS)
+                    * audio.DSPUtils.db_to_lin(-12)).astype(np.float32)
+        for channel in range(2):
+            np.testing.assert_allclose(outputs[:, channel], expected, atol=1e-7)
+    assert closed == [True]
+    if enabled is False:
+        factory.assert_not_called()
+    else:
+        factory.assert_called_once_with(FS)
+        meter.start.assert_called_once()
+        meter.submit.assert_called_once()
+        meter.stop.assert_called_once()
 
 
 # Capture sequence and exact replay
@@ -555,7 +637,9 @@ def test_invalid_inverse_timing_rejected(kw):
 
 # Dropout detection helpers and retry loop
 
-def test_check_stream_health_detects_underflow():
+def test_check_stream_health_detects_underflow(monkeypatch):
+    log = Mock()
+    monkeypatch.setattr(audio, 'logger', log)
     e = make_engine()
     e.cap['max_capture_retries'] = 3
     e.cap['retry_psr_threshold'] = 3.0
@@ -568,6 +652,9 @@ def test_check_stream_health_detects_underflow():
         'raw_recordings': (np.ones(1000), np.ones(1000)),
     }
     assert e._check_stream_health(result) is True
+    message = log.warning.call_args.args[0]
+    assert 'InputUnderflow' in message
+    assert 'sample 1000' in message
 
 
 def test_check_stream_health_detects_overflow():
@@ -609,7 +696,9 @@ def test_check_stream_health_clean_when_empty_status():
     assert e._check_stream_health(result) is False
 
 
-def test_check_silence_gaps_detects_gap_in_loopback():
+def test_check_silence_gaps_detects_gap_in_loopback(monkeypatch):
+    log = Mock()
+    monkeypatch.setattr(audio, 'logger', log)
     e = make_engine()
     e.cap['max_capture_retries'] = 3
     e.cap['retry_psr_threshold'] = 3.0
@@ -634,6 +723,31 @@ def test_check_silence_gaps_detects_gap_in_loopback():
         'raw_recordings': (loopback, np.ones(total, dtype=np.float32)),
     }
     assert e._check_silence_gaps(result) is True
+    message = log.warning.call_args.args[0]
+    assert 'Loopback silence gap' in message
+    assert 'window_start_sample=' in message
+    assert 'rms=' in message
+    assert 'threshold=' in message
+
+
+def test_unreliable_marker_logs_search_and_loopback_levels(monkeypatch):
+    log = Mock()
+    monkeypatch.setattr(audio, 'logger', log)
+    e = make_engine()
+    marker = np.ones(16, dtype=np.float32)
+
+    with pytest.raises(RuntimeError, match='normalised correlation 0.000'):
+        e.alignment_engine._matched_filter_detect(
+            np.zeros(128, dtype=np.float32), marker,
+            search_start=5, search_end=64, normalize=True,
+        )
+
+    message = log.warning.call_args.args[0]
+    assert 'normalized_correlation=0.000' in message
+    assert 'candidate_sample=' in message
+    assert 'search_range=[5, 64]' in message
+    assert 'loopback_peak=0' in message
+    assert 'loopback_rms=0' in message
 
 
 def test_check_silence_gaps_clean_loopback():
@@ -827,5 +941,344 @@ def test_retry_loop_exhausts_retries_and_returns_failure(monkeypatch):
     assert call_count[0] == 3
     assert exported['ir_linear'] is None
     assert 'error' in exported
-    assert 'dropout' in exported['error'].lower()
+    assert 'after 3 attempts' in exported['error'].lower()
+    assert 'underflow/overflow' in exported['error'].lower()
 
+
+def test_capture_logs_sweep_exception_and_propagates(tmp_path, monkeypatch):
+    e = make_engine()
+    log = Mock()
+    monkeypatch.setattr(audio, 'logger', log)
+
+    def fail_sweep():
+        raise RuntimeError('marker alignment failed')
+
+    monkeypatch.setattr(e, '_run_sweep', fail_sweep)
+    with pytest.raises(RuntimeError, match='marker alignment failed'):
+        e.capture_ir(tmp_path / 'measurement_ir.wav', tmp_path / 'measurement_dist.wav', save=False)
+
+    message = log.exception.call_args.args[0]
+    assert 'measurement_ir.wav' in message
+    assert 'attempt 1/3' in message
+
+
+def test_quality_rejection_logs_configured_threshold(tmp_path, monkeypatch):
+    e = make_engine()
+    e.cap['max_capture_retries'] = 1
+    e.cap['retry_psr_threshold'] = 4.0
+    log = Mock()
+    monkeypatch.setattr(audio, 'logger', log)
+    monkeypatch.setattr(e, '_run_sweep', lambda: {'capture_metadata': {'sweep_samples': 100}})
+    monkeypatch.setattr(e, '_process_capture', lambda result: (np.zeros(1), np.zeros(1)))
+    monkeypatch.setattr(e.verifier, 'calculate_metrics', lambda *args, **kwargs: {
+        'psr': 2.5,
+        'snr_db': 0.0,
+    })
+
+    e.capture_ir(tmp_path / 'measurement_ir.wav', tmp_path / 'measurement_dist.wav', save=False)
+
+    message = next(call.args[0] for call in log.warning.call_args_list
+                   if 'quality below threshold' in call.args[0])
+    assert 'PSR=2.50' in message
+    assert 'threshold=4.00' in message
+
+
+def test_alignment_failure_retains_current_capture_context():
+    e = make_engine()
+    prepared = e._prepare_sweep()
+    rec_mic = np.linspace(-0.25, 0.25, prepared['timing']['total_samples'], dtype=np.float32)
+    rec_loop = np.linspace(0.5, -0.5, prepared['timing']['total_samples'], dtype=np.float32)
+
+    with pytest.raises(audio.CaptureAlignmentError) as failure:
+        e._finish_sweep(prepared, rec_mic, rec_loop)
+
+    context = failure.value.capture_context
+    np.testing.assert_array_equal(context['raw_recordings'][0], rec_loop)
+    np.testing.assert_array_equal(context['raw_recordings'][1], rec_mic)
+    for key in ('fundamental', 'inverse', 'speaker_sweep', 'loopback_sweep', 'marker'):
+        np.testing.assert_array_equal(context['digital_reference'][key], {
+            'fundamental': prepared['fundamental'],
+            'inverse': prepared['inverse'],
+            'speaker_sweep': prepared['speaker_sweep'],
+            'loopback_sweep': prepared['reference_sweep'],
+            'marker': prepared['marker'],
+        }[key])
+    metadata = context['capture_metadata']
+    assert metadata['playback_marker_starts'] == prepared['timing']['playback_marker_starts']
+    assert metadata['aligned_repeats'] == []
+
+
+def test_capture_retries_alignment_error_then_returns_success(tmp_path, monkeypatch):
+    e = make_engine()
+    prepared = e._prepare_sweep()
+    mic, loop = ideal_capture(prepared)
+    success = e._finish_sweep(prepared, mic, loop)
+    calls = []
+
+    def run_sweep():
+        calls.append(True)
+        if len(calls) == 1:
+            raise audio.CaptureAlignmentError('later marker was not found')
+        return success
+
+    monkeypatch.setattr(e, '_run_sweep', run_sweep)
+    monkeypatch.setattr(e, '_process_capture', lambda result: (np.zeros(1), np.zeros(1)))
+    monkeypatch.setattr(e.verifier, 'calculate_metrics', lambda *args, **kwargs: {
+        'psr': 5.0,
+        'snr_db': 0.0,
+        'thd_pct': 0.0,
+        'psr_db': 0.0,
+        'psr_reference_db': 0.0,
+        'alignment_score_10': 0.0,
+    })
+
+    result = e.capture_ir(tmp_path / 'measurement_ir.wav', tmp_path / 'measurement_dist.wav', save=False)
+
+    assert len(calls) == 2
+    assert result['ir_linear'] is not None
+    assert result['retries'] == 1
+
+
+def test_capture_alignment_exhaustion_reports_reason_and_attempt_count(tmp_path, monkeypatch):
+    e = make_engine()
+    e.cap['max_capture_retries'] = 2
+    calls = []
+
+    def fail_alignment():
+        calls.append(True)
+        raise audio.CaptureAlignmentError('later marker was not found')
+
+    monkeypatch.setattr(e, '_run_sweep', fail_alignment)
+
+    result = e.capture_ir(tmp_path / 'measurement_ir.wav', tmp_path / 'measurement_dist.wav', save=False)
+
+    assert len(calls) == 2
+    assert result['ir_linear'] is None
+    assert 'after 2 attempts' in result['error']
+    assert 'later marker was not found' in result['error']
+
+
+def test_capture_propagates_unrelated_sweep_runtime_error(tmp_path, monkeypatch):
+    e = make_engine()
+    monkeypatch.setattr(e, '_run_sweep', Mock(side_effect=RuntimeError('audio device failure')))
+
+    with pytest.raises(RuntimeError, match='audio device failure'):
+        e.capture_ir(tmp_path / 'measurement_ir.wav', tmp_path / 'measurement_dist.wav', save=False)
+
+
+def _make_archivable_capture(engine, stream_status=None):
+    prepared = engine._prepare_sweep()
+    mic, loop = ideal_capture(prepared, acoustic_delay=31)
+    capture = engine._finish_sweep(prepared, mic, loop)
+    capture['capture_metadata'].update(
+        actual_sample_rate=FS,
+        stream_latency_s=0.012,
+        stream_status=stream_status or [],
+    )
+    return capture
+
+
+@pytest.mark.parametrize('rejection', ['stream', 'silence', 'psr'])
+def test_rejected_capture_archive_preserves_raw_channels_and_reference(tmp_path, monkeypatch, rejection):
+    e = make_engine()
+    e.cap['max_capture_retries'] = 1
+    session_dir = tmp_path / 'session'
+    e.set_session_directory(session_dir)
+    status = [{'sample': 1234, 'status': 'InputUnderflow'}] if rejection == 'stream' else []
+    capture = _make_archivable_capture(e, status)
+    monkeypatch.setattr(e, '_run_sweep', lambda: capture)
+
+    if rejection == 'silence':
+        monkeypatch.setattr(e, '_check_silence_gaps', lambda result: True)
+    elif rejection == 'psr':
+        monkeypatch.setattr(e, '_check_silence_gaps', lambda result: False)
+        monkeypatch.setattr(e, '_process_capture', lambda result: (np.zeros(1), np.zeros(1)))
+        monkeypatch.setattr(e.verifier, 'calculate_metrics', lambda *args, **kwargs: {
+            'psr': 0.25,
+            'psr_reference': None,
+        })
+
+    result = e.capture_ir(
+        session_dir / 'measurement_ir.wav', session_dir / 'Distortion' / 'measurement_dist.wav',
+        save=True, include_debug_artifacts=False)
+
+    assert result['ir_linear'] is None
+    assert not (session_dir / 'measurement_ir.wav').exists()
+    archive_dirs = list((session_dir / 'failed').glob('measurement_*'))
+    assert len(archive_dirs) == 1
+    capture_path = archive_dirs[0] / 'attempt_01_capture.wav'
+    failure_path = archive_dirs[0] / 'attempt_01_failure.json'
+    document = json.loads(failure_path.read_text(encoding='utf-8'))
+    with sf.SoundFile(capture_path) as wav_info:
+        assert wav_info.subtype == 'FLOAT'
+    raw, sample_rate = sf.read(capture_path, dtype='float32', always_2d=True)
+    assert sample_rate == FS
+    assert raw.shape == (len(capture['raw_recordings'][0]), 2)
+    np.testing.assert_array_equal(raw[:, 0], capture['raw_recordings'][0])
+    np.testing.assert_array_equal(raw[:, 1], capture['raw_recordings'][1])
+
+    assert document['schema_version'] == 1
+    assert document['measurement_label'] == 'measurement'
+    assert document['attempt'] == document['attempt_limit'] == 1
+    assert document['sample_rate'] == FS
+    assert document['channel_mapping']['recording_order'] == ['electrical_loopback', 'microphone']
+    assert document['channel_mapping']['input_channels'] == {'electrical_loopback': 0, 'microphone': 1}
+    assert document['planned_playback_marker_positions_samples'] == capture['capture_metadata']['playback_marker_starts']
+    assert document['observed_stream']['actual_sample_rate'] == FS
+    assert document['observed_stream']['stream_latency_s'] == 0.012
+    assert document['observed_stream']['stream_status'] == status
+    assert document['detected_alignment_positions']
+
+    expected_reason = {
+        'stream': 'stream health rejection',
+        'silence': 'silence gap in loopback',
+        'psr': 'quality below threshold (PSR=0.25, threshold=3.00)',
+    }[rejection]
+    assert expected_reason in document['reason']
+    reference_link = document['artifacts']['shared_reference_path_relative_to_failure_json']
+    reference_path = (failure_path.parent / reference_link).resolve()
+    assert reference_path.is_relative_to((session_dir / 'debug').resolve())
+    with np.load(reference_path) as reference:
+        for key, values in capture['digital_reference'].items():
+            np.testing.assert_array_equal(reference[key], values)
+        np.testing.assert_array_equal(reference['marker'], capture['digital_reference']['marker'])
+
+
+@pytest.mark.parametrize(
+    'has_partial_alignment', [False, True],
+    ids=['first-marker-failure', 'later-marker-failure'],
+)
+def test_alignment_rejection_archives_raw_capture_and_partial_positions(
+        tmp_path, monkeypatch, has_partial_alignment):
+    e = make_engine()
+    e.cap['max_capture_retries'] = 1
+    session_dir = tmp_path / 'session'
+    e.set_session_directory(session_dir)
+    prepared = e._prepare_sweep()
+    mic, loop = ideal_capture(prepared, acoustic_delay=31)
+
+    def fail_alignment(*args, **kwargs):
+        e.alignment_engine.last_alignment = []
+        if has_partial_alignment:
+            marker_start = prepared['timing']['playback_marker_starts'][0] + 80
+            e.alignment_engine.last_alignment.append({
+                'repeat': 0,
+                'marker_start_sample': marker_start,
+                'sweep_start_sample': marker_start + prepared['timing']['sweep_offset_samples'],
+            })
+        raise audio.CaptureAlignmentError('later marker was not found')
+
+    monkeypatch.setattr(e.alignment_engine, 'sync_and_average', fail_alignment)
+    with pytest.raises(audio.CaptureAlignmentError) as failure:
+        e._finish_sweep(prepared, mic, loop)
+    monkeypatch.setattr(e, '_run_sweep', Mock(side_effect=failure.value))
+
+    result = e.capture_ir(
+        session_dir / 'measurement_ir.wav', session_dir / 'Distortion' / 'measurement_dist.wav', save=True)
+
+    assert result['ir_linear'] is None
+    archive_dir = next((session_dir / 'failed').glob('measurement_*'))
+    capture_path = archive_dir / 'attempt_01_capture.wav'
+    failure_path = archive_dir / 'attempt_01_failure.json'
+    document = json.loads(failure_path.read_text(encoding='utf-8'))
+    raw, _ = sf.read(capture_path, dtype='float32', always_2d=True)
+    expected_positions = []
+    if has_partial_alignment:
+        marker_start = prepared['timing']['playback_marker_starts'][0] + 80
+        expected_positions.append({
+            'repeat': 1,
+            'marker_start_sample': marker_start,
+            'sweep_start_sample': marker_start + prepared['timing']['sweep_offset_samples'],
+        })
+    np.testing.assert_array_equal(raw[:, 0], loop)
+    np.testing.assert_array_equal(raw[:, 1], mic)
+    assert document['exception'] == {
+        'type': 'CaptureAlignmentError', 'message': 'later marker was not found'}
+    assert document['planned_playback_marker_positions_samples'] == prepared['timing']['playback_marker_starts']
+    assert document['detected_alignment_positions'] == expected_positions
+    reference_path = (failure_path.parent /
+                      document['artifacts']['shared_reference_path_relative_to_failure_json']).resolve()
+    with np.load(reference_path) as reference:
+        for key, values in failure.value.capture_context['digital_reference'].items():
+            np.testing.assert_array_equal(reference[key], values)
+
+
+def test_mixed_rejections_archive_each_attempt_and_repeated_measurement_uniquely(
+        tmp_path, monkeypatch):
+    e = make_engine()
+    e.cap['max_capture_retries'] = 3
+    session_dir = tmp_path / 'session'
+    e.set_session_directory(session_dir)
+    underflow = _make_archivable_capture(e, [{'sample': 55, 'status': 'OutputOverflow'}])
+    clean_capture = _make_archivable_capture(e)
+    captures = iter([underflow, clean_capture, clean_capture, underflow])
+    monkeypatch.setattr(e, '_run_sweep', lambda: next(captures))
+    silence_results = iter([True, False])
+    monkeypatch.setattr(e, '_check_silence_gaps', lambda result: next(silence_results))
+    monkeypatch.setattr(e, '_process_capture', lambda result: (np.zeros(1), np.zeros(1)))
+    monkeypatch.setattr(e.verifier, 'calculate_metrics', lambda *args, **kwargs: {
+        'psr': 0.5,
+        'psr_reference': None,
+    })
+    ir_path = session_dir / 'measurement_ir.wav'
+    dist_path = session_dir / 'Distortion' / 'measurement_dist.wav'
+
+    first = e.capture_ir(ir_path, dist_path, save=True, include_debug_artifacts=False)
+    e.cap['max_capture_retries'] = 1
+    second = e.capture_ir(ir_path, dist_path, save=True, include_debug_artifacts=False)
+
+    assert first['ir_linear'] is None and second['ir_linear'] is None
+    archive_dirs = list((session_dir / 'failed').glob('measurement_*'))
+    assert len(archive_dirs) == 4
+    assert len({path.name for path in archive_dirs}) == 4
+    documents = [json.loads((path / next(path.glob('*_failure.json')).name).read_text(encoding='utf-8'))
+                 for path in archive_dirs]
+    reasons = [document['reason'] for document in documents]
+    assert any('stream health rejection' in reason for reason in reasons)
+    assert any('silence gap in loopback' in reason for reason in reasons)
+    assert any('quality below threshold' in reason for reason in reasons)
+    assert sorted(document['attempt'] for document in documents) == [1, 1, 2, 3]
+    assert not ir_path.exists()
+    assert not dist_path.exists()
+
+
+@pytest.mark.parametrize(('save', 'debug_saves'), [(False, True), (True, False)])
+def test_failed_capture_flags_suppress_archives(tmp_path, monkeypatch, save, debug_saves):
+    e = make_engine()
+    e.cap.update(max_capture_retries=1, debug_saves=debug_saves)
+    session_dir = tmp_path / 'session'
+    e.set_session_directory(session_dir)
+    capture = _make_archivable_capture(e, [{'sample': 10, 'status': 'InputUnderflow'}])
+    monkeypatch.setattr(e, '_run_sweep', lambda: capture)
+
+    e.capture_ir(
+        session_dir / 'measurement_ir.wav', session_dir / 'Distortion' / 'measurement_dist.wav', save=save)
+
+    assert not (session_dir / 'failed').exists()
+
+
+def test_failed_archive_write_error_is_logged_and_retry_continues(tmp_path, monkeypatch):
+    e = make_engine()
+    e.cap['max_capture_retries'] = 2
+    session_dir = tmp_path / 'session'
+    e.set_session_directory(session_dir)
+    capture = _make_archivable_capture(e, [{'sample': 10, 'status': 'InputUnderflow'}])
+    calls = []
+
+    def run_sweep():
+        calls.append(True)
+        return capture
+
+    log = Mock()
+    monkeypatch.setattr(e, '_run_sweep', run_sweep)
+    monkeypatch.setattr(e, '_save_wav_with_metadata', Mock(side_effect=OSError('disk full')))
+    monkeypatch.setattr(audio, 'logger', log)
+
+    result = e.capture_ir(
+        session_dir / 'measurement_ir.wav', session_dir / 'Distortion' / 'measurement_dist.wav', save=True)
+
+    assert len(calls) == 2
+    assert result['ir_linear'] is None
+    assert log.exception.call_count == 2
+    assert all('continuing capture retries' in call.args[0] for call in log.exception.call_args_list)
+    assert not list((session_dir / 'failed').rglob('*_failure.json'))

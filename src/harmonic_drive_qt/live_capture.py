@@ -51,6 +51,7 @@ PANEL_LABELS = [
     "Frequency Response",
     "3D Progress",
     "Impulse Response",
+    "Raw Signals",
 ]
 DEFAULT_VISIBLE_PANELS = list(PANEL_LABELS)
 DEFAULT_PANEL_ORDER = list(PANEL_LABELS)
@@ -270,6 +271,42 @@ def _find_latest_ir_file() -> Path | None:
                 if "dist" not in path.name.lower()
             )
     return max(files, key=lambda path: path.stat().st_mtime) if files else None
+
+
+def _find_latest_capture_file() -> Path | None:
+    """Return the most recently modified raw capture wav file from debug directories."""
+    root = _project_dir()
+    dirs = [
+        root / "measurement_set" / "debug",
+        root / "single_measurements" / "debug",
+        root / "Recordings" / "debug",
+    ]
+    files: list[Path] = []
+    for directory in dirs:
+        if directory.exists():
+            files.extend(
+                path for path in directory.glob("*_capture.wav")
+            )
+    return max(files, key=lambda path: path.stat().st_mtime) if files else None
+
+
+def _load_latest_capture() -> tuple[Path | None, np.ndarray | None, np.ndarray | None, int | None]:
+    """Load the latest raw capture WAV, returning (path, loopback, mic, sample_rate)."""
+    path = _find_latest_capture_file()
+    if path is None:
+        return None, None, None, None
+    try:
+        data, fs = sf.read(path)
+        if data.ndim > 1:
+            loopback = np.asarray(data[:, 0], dtype=float)
+            mic = np.asarray(data[:, 1], dtype=float)
+        else:
+            loopback = np.asarray(data, dtype=float)
+            mic = loopback
+        return path, loopback, mic, int(fs)
+    except Exception as exc:
+        logger.error(f"Error loading capture file {path}: {exc}")
+        return path, None, None, None
 
 
 def _load_latest_ir() -> tuple[Path | None, np.ndarray | None, int | None]:
@@ -550,6 +587,7 @@ class LiveCapturePane(QWidget):
         self.config_file = config_file
         self.visible_active = True
         self.last_ir_mtime = 0.0
+        self.last_capture_mtime = 0.0
         self.grid_points: list[tuple[float, float, float]] = []
         self.grid_df: pd.DataFrame | None = None
         # Each entry: {"r": ..., "phi": ..., "z": ..., "status": "ok" | "retried" | "failed"}
@@ -685,6 +723,15 @@ class LiveCapturePane(QWidget):
         self.impulse = MatplotlibPlot("Impulse Response", "Time (ms)", "Amplitude")
         self.impulse.setMinimumHeight(286)
         i_layout.addWidget(self.impulse)
+
+        self.raw_section, raw_content = self._add_section("Raw Signals")
+        raw_layout = QVBoxLayout(raw_content)
+        self.raw_loopback = MatplotlibPlot("Raw Loopback Signal", "Time (ms)", "Amplitude")
+        self.raw_loopback.setMinimumHeight(200)
+        self.raw_mic = MatplotlibPlot("Raw Microphone Signal", "Time (ms)", "Amplitude")
+        self.raw_mic.setMinimumHeight(200)
+        raw_layout.addWidget(self.raw_loopback)
+        raw_layout.addWidget(self.raw_mic)
 
         prog_section, pr_content = self._add_section("Measurement Progress", self._reset_progress_view, config_label="3D Progress")
         pr_layout = QVBoxLayout(pr_content)
@@ -996,6 +1043,11 @@ class LiveCapturePane(QWidget):
         if ir_mtime != self.last_ir_mtime:
             self.last_ir_mtime = ir_mtime
             self.refresh_ir_plots()
+        capture_file = _find_latest_capture_file()
+        capture_mtime = capture_file.stat().st_mtime if capture_file else 0.0
+        if capture_mtime != self.last_capture_mtime:
+            self.last_capture_mtime = capture_mtime
+            self.refresh_raw_signals()
 
     def on_progress_event(self, event: dict) -> None:
         """Handle real-time measurement progress events from ControlPane."""
@@ -1030,6 +1082,7 @@ class LiveCapturePane(QWidget):
         self.refresh_progress_viewer(0)
         self.refresh_positions()
         self.refresh_ir_plots()
+        self.refresh_raw_signals()
         self.refresh_meters()
 
     def refresh_on_tab_switch(self) -> None:
@@ -1040,6 +1093,7 @@ class LiveCapturePane(QWidget):
         self.refresh_progress_viewer(measured_count)
         self.refresh_positions()
         self.refresh_ir_plots()
+        self.refresh_raw_signals()
         self.refresh_meters()
 
     def refresh_positions(self) -> None:
@@ -1225,4 +1279,32 @@ class LiveCapturePane(QWidget):
             log_x=True,
             x_range=(lower_frequency, nyquist),
             y_range=_auto_db_range(smoothed[audible]),
+        )
+
+    def refresh_raw_signals(self) -> None:
+        latest_file, loopback, mic, fs = _load_latest_capture()
+        if loopback is None or mic is None or fs is None:
+            self.raw_section.set_detail("Waiting for raw capture...")
+            self.raw_loopback.clear_data("No raw capture available", "Raw Loopback Signal")
+            self.raw_mic.clear_data("No raw capture available", "Raw Microphone Signal")
+            return
+        title_name = latest_file.name if latest_file is not None else "current capture"
+        self.raw_section.set_detail(title_name)
+
+        # Show the full signal (no zoom)
+        time_axis = np.arange(len(loopback)) / fs * 1000.0
+
+        self.raw_loopback.set_data(
+            time_axis,
+            loopback,
+            title="Raw Loopback Signal",
+            y_range=_auto_waveform_range(loopback),
+            y_axis_mode="linear",
+        )
+        self.raw_mic.set_data(
+            time_axis,
+            mic,
+            title="Raw Microphone Signal",
+            y_range=_auto_waveform_range(mic),
+            y_axis_mode="linear",
         )
