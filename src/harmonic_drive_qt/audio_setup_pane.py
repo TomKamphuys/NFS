@@ -687,6 +687,39 @@ class AudioSetupPane(QWidget):
             "Minimum PSR (Peak-to-Sidelobe Ratio) for the quality gate. "
             "A lower PSR indicates poor loopback marker alignment, often caused by a dropout."
         )
+        self.retry_thd = self._spin(_float_value(parser, "sweep", "retry_thd_threshold", 10.0), 0.1, 100, " %", 1)
+        self.retry_thd.setFixedWidth(86)
+        self.retry_thd.setToolTip(
+            "Maximum THD (Total Harmonic Distortion) percentage before retrying. "
+            "On a loopback setup, high THD indicates a transient problem such as clipping or mechanical anomaly."
+        )
+        self.retry_stream_health = QCheckBox("Check stream health")
+        self.retry_stream_health.setChecked(
+            _parse_bool(_value(parser, "sweep", "retry_check_stream_health", "True"))
+        )
+        self.retry_stream_health.setStyleSheet(toggle_style())
+        self.retry_stream_health.setToolTip(
+            "Retry if the audio driver reports buffer underflow or overflow. "
+            "Disable only if the driver falsely reports errors on valid captures."
+        )
+        self.retry_loopback_silence = QCheckBox("Check loopback silence")
+        self.retry_loopback_silence.setChecked(
+            _parse_bool(_value(parser, "sweep", "retry_check_loopback_silence", "True"))
+        )
+        self.retry_loopback_silence.setStyleSheet(toggle_style())
+        self.retry_loopback_silence.setToolTip(
+            "Retry if a silence gap is detected in the loopback recording. "
+            "Disable only if valid captures are falsely rejected."
+        )
+        self.retry_mic_silence = QCheckBox("Check mic silence")
+        self.retry_mic_silence.setChecked(
+            _parse_bool(_value(parser, "sweep", "retry_check_mic_silence", "True"))
+        )
+        self.retry_mic_silence.setStyleSheet(toggle_style())
+        self.retry_mic_silence.setToolTip(
+            "Retry if a sudden energy drop is detected in the microphone recording. "
+            "Disable only if valid captures are falsely rejected."
+        )
         self._normalize_decimal_editor(self.h2)
         self._normalize_decimal_editor(self.h3)
         self.naming.setToolTip("Choose the filename format for exported measurements.")
@@ -711,6 +744,8 @@ class AudioSetupPane(QWidget):
             ("Driver settle time", self.pre_sil), ("Post Silence", self.post_sil),
             ("H2 test dB", self.h2), ("H3 test dB", self.h3),
             ("Max retries", self.max_retries), ("Retry PSR threshold", self.retry_psr),
+            ("Retry THD threshold", self.retry_thd),
+            ("", self.retry_stream_health), ("", self.retry_loopback_silence), ("", self.retry_mic_silence),
         ]
         advanced_children = []
         for index, (label, widget) in enumerate(fields):
@@ -1104,6 +1139,10 @@ class AudioSetupPane(QWidget):
             ("sweep", "h3_test_db"): _normalize_decimal_text(self.h3.text()),
             ("sweep", "max_capture_retries"): int(self.max_retries.value()),
             ("sweep", "retry_psr_threshold"): self.retry_psr.value(),
+            ("sweep", "retry_thd_threshold"): self.retry_thd.value(),
+            ("sweep", "retry_check_stream_health"): self.retry_stream_health.isChecked(),
+            ("sweep", "retry_check_loopback_silence"): self.retry_loopback_silence.isChecked(),
+            ("sweep", "retry_check_mic_silence"): self.retry_mic_silence.isChecked(),
         }
         try:
             save_config_values(

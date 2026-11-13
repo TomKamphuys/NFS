@@ -89,7 +89,9 @@ def test_settings_rebuild_keeps_live_capture_progress_connected(monkeypatch, sec
             window.control_pane.progress_event.emit({
                 'status': 'point_complete', 'current': 1, 'total': 2, 'position': position,
             })
-            assert live._completed_positions == [position]
+            expected_position = dict(position)
+            expected_position['status'] = 'ok'
+            assert live._completed_positions == [expected_position]
             assert live.refresh_positions.call_count == (index + 1) * 2
             expected_current = window.control_pane if control_visible else other_pane
             assert window.left_stack.currentWidget() is expected_current

@@ -20,30 +20,12 @@ from nfs.nfs import NearFieldScanner
 FS = 48000
 
 
-@pytest.mark.parametrize('setting,expected', [(None, True), ('True', True), ('False', False)])
-def test_live_meter_config(tmp_path, setting, expected):
-    config = configparser.ConfigParser()
-    config.read(Path(__file__).with_name('full_system_mock_config.ini'))
-    if setting is not None:
-        config.set('audio', 'live_meter_enabled', setting)
-    path = tmp_path / 'meter.ini'
-    with path.open('w') as handle:
-        config.write(handle)
-    engine = AudioFactory.create(str(path))
-    assert engine.hw['live_meter_enabled'] is expected
-
-
-@pytest.mark.parametrize('enabled', [False, True, None])
 @pytest.mark.parametrize('operation', ['sweep', 'finite_sine', 'continuous_sine'])
-def test_live_meter_option_preserves_stream_data(monkeypatch, enabled, operation):
+def test_live_meter_always_active(monkeypatch, operation):
     engine = make_engine()
-    if enabled is not None:
-        engine.hw['live_meter_enabled'] = enabled
     monkeypatch.setattr(engine, '_get_api_name', lambda dev: 'MME')
     meter = Mock()
     factory = Mock(return_value=meter)
-    if enabled is False:
-        factory.side_effect = AssertionError('Disabled meter must not be constructed')
     monkeypatch.setattr(audio, '_AudioMeterWorker', factory)
     prepared = engine._prepare_sweep()
     mic, loop = ideal_capture(prepared)
@@ -92,13 +74,10 @@ def test_live_meter_option_preserves_stream_data(monkeypatch, enabled, operation
         for channel in range(2):
             np.testing.assert_allclose(outputs[:, channel], expected, atol=1e-7)
     assert closed == [True]
-    if enabled is False:
-        factory.assert_not_called()
-    else:
-        factory.assert_called_once_with(FS)
-        meter.start.assert_called_once()
-        meter.submit.assert_called_once()
-        meter.stop.assert_called_once()
+    factory.assert_called_once_with(FS)
+    meter.start.assert_called_once()
+    meter.submit.assert_called_once()
+    meter.stop.assert_called_once()
 
 
 # Capture sequence and exact replay
@@ -126,7 +105,11 @@ def make_engine(first=False, injected=False):
         debug_saves=True,
         naming_convention="dimitri",
         max_capture_retries=3,
+        retry_check_stream_health=True,
+        retry_check_loopback_silence=True,
+        retry_check_mic_silence=True,
         retry_psr_threshold=3.0,
+        retry_thd_threshold=10.0,
     )
     return audio.Audio(
         hw,
@@ -802,6 +785,126 @@ def test_check_silence_gaps_ignores_silence_in_pre_post_region():
         'raw_recordings': (loopback, np.ones(total, dtype=np.float32)),
     }
     assert e._check_silence_gaps(result) is False
+
+
+def test_check_mic_silence_gaps_detects_sudden_drop(monkeypatch):
+    """A sudden silence gap in an otherwise strong mic signal is detected."""
+    log = Mock()
+    monkeypatch.setattr(audio, 'logger', log)
+    e = make_engine()
+    fs = 48000
+    guard_samples = 480
+    sweep_samples = 72000
+    sweep_start = 10000
+    total = sweep_start + sweep_samples + 2000
+    loopback = np.ones(total, dtype=np.float32) * 0.5
+    mic = np.ones(total, dtype=np.float32) * 0.3
+    # Insert a silence gap inside the active sweep portion
+    gap_start = sweep_start + guard_samples + 10000
+    gap_end = gap_start + 2000  # ~40 ms of silence
+    mic[gap_start:gap_end] = 0.0
+    result = {
+        'capture_metadata': {
+            'sweep_samples': sweep_samples,
+            'guard_samples': guard_samples,
+            'aligned_repeats': [
+                {'sweep_start_sample': sweep_start},
+            ],
+        },
+        'raw_recordings': (loopback, mic),
+    }
+    assert e._check_mic_silence_gaps(result) is True
+    message = log.warning.call_args.args[0]
+    assert 'Microphone silence gap' in message
+
+
+def test_check_mic_silence_gaps_passes_low_signal():
+    """A consistently low-signal mic recording (behind the speaker) passes without false positive."""
+    e = make_engine()
+    fs = 48000
+    guard_samples = 480
+    sweep_samples = 72000
+    sweep_start = 10000
+    total = sweep_start + sweep_samples + 2000
+    loopback = np.ones(total, dtype=np.float32) * 0.5
+    # Mic signal is uniformly low — simulating a position behind the speaker
+    mic = np.ones(total, dtype=np.float32) * 0.001
+    result = {
+        'capture_metadata': {
+            'sweep_samples': sweep_samples,
+            'guard_samples': guard_samples,
+            'aligned_repeats': [
+                {'sweep_start_sample': sweep_start},
+            ],
+        },
+        'raw_recordings': (loopback, mic),
+    }
+    assert e._check_mic_silence_gaps(result) is False
+
+
+def test_check_mic_silence_gaps_passes_gradual_sweep():
+    """A sweep with gradually varying energy (no sudden drops) passes without false positive."""
+    e = make_engine()
+    fs = 48000
+    guard_samples = 480
+    sweep_samples = 72000
+    sweep_start = 10000
+    total = sweep_start + sweep_samples + 2000
+    loopback = np.ones(total, dtype=np.float32) * 0.5
+    # Create a gradual sine-modulated envelope — energy varies smoothly
+    t = np.linspace(0, 1.5, sweep_samples)
+    envelope = 0.1 + 0.2 * (0.5 + 0.5 * np.sin(2 * np.pi * 2 * t))
+    mic = np.zeros(total, dtype=np.float32)
+    check_start = sweep_start + guard_samples
+    check_end = sweep_start + sweep_samples - guard_samples
+    sweep_t = np.linspace(0, 1.5, check_end - check_start)
+    sweep_envelope = 0.1 + 0.2 * (0.5 + 0.5 * np.sin(2 * np.pi * 2 * sweep_t))
+    mic[check_start:check_end] = sweep_envelope * np.sin(2 * np.pi * 1000 * sweep_t)
+    result = {
+        'capture_metadata': {
+            'sweep_samples': sweep_samples,
+            'guard_samples': guard_samples,
+            'aligned_repeats': [
+                {'sweep_start_sample': sweep_start},
+            ],
+        },
+        'raw_recordings': (loopback, mic),
+    }
+    assert e._check_mic_silence_gaps(result) is False
+
+
+def test_retry_loop_retries_on_mic_silence_gap(tmp_path, monkeypatch):
+    """The capture retry loop catches mic silence gaps and retries."""
+    e = make_engine()
+    e.cap['max_capture_retries'] = 3
+
+    attempts = [0]
+    def run_sweep():
+        attempts[0] += 1
+        capture = _make_archivable_capture(e, [])
+        if attempts[0] < 3:
+            # First two attempts: inject a silence gap in the mic channel
+            mic = np.array(capture['raw_recordings'][1], dtype=np.float32, copy=True)
+            metadata = capture['capture_metadata']
+            sweep_start = metadata['aligned_repeats'][0]['sweep_start_sample']
+            guard = metadata['guard_samples']
+            gap_start = sweep_start + guard + 10000
+            mic[gap_start:gap_start + 2000] = 0.0
+            capture['raw_recordings'] = (capture['raw_recordings'][0], mic)
+        else:
+            # Third attempt: replace mic with a uniform signal so no gap is detected
+            mic = np.ones(len(capture['raw_recordings'][1]), dtype=np.float32) * 0.3
+            capture['raw_recordings'] = (capture['raw_recordings'][0], mic)
+        return capture
+
+    monkeypatch.setattr(e, '_run_sweep', run_sweep)
+
+    ir_path = tmp_path / 'test_ir.wav'
+    dist_path = tmp_path / 'test_dist.wav'
+    result = e.capture_ir(ir_path, dist_path, save=False)
+
+    assert attempts[0] == 3  # Retried twice, succeeded on third
+    assert result['ir_linear'] is not None
 
 
 def test_check_quality_flags_low_psr():
