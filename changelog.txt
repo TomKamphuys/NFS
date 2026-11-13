@@ -1,6 +1,8 @@
 --------
 13/11/26
 --------
+v0.4.5
+
 Moved hardware audio acquisition into a dedicated process with its own Python
 interpreter and GIL, reducing contention with GUI and plotting work. The audio
 process owns device discovery, sample-rate checks, ASIO/COM initialization,
