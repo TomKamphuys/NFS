@@ -113,6 +113,7 @@ def make_engine(first=False, injected=False):
         ch_out_spkr=1,
         ch_out_ref=0,
         fs=fs,
+        blocksize=0,
         wasapi_exclusive=False,
     )
     cap = dict(

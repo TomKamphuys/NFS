@@ -81,7 +81,7 @@ import threading
 import time
 import uuid
 from abc import ABC, abstractmethod
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from typing import Callable, Optional, Dict, Any, List, Tuple
 from nfs import registry
@@ -711,6 +711,7 @@ def resolve_device_id_by_saved_identity(
     role_label: str,
     require_input: bool = False,
     require_output: bool = False,
+    catalog: Optional[dict] = None,
 ) -> int:
     """Resolve the current PortAudio ID for the saved user-facing selection."""
     target_name = (device_name or "").strip()
@@ -723,7 +724,8 @@ def resolve_device_id_by_saved_identity(
 
     name_key = target_name.casefold()
     api_key = target_api.casefold()
-    catalog = get_devices_and_channels()
+    if catalog is None:
+        catalog = get_devices_and_channels()
     name_matches = []
     api_matches = []
     for dev_id, info in catalog.items():
@@ -1811,10 +1813,12 @@ class Audio(IAudio):
                  naming_convention: Optional[IRNamingConvention] = None,
                  debug_handler: Optional[DebugArtifactHandler] = None,
                  harmonic_injector: Optional[HarmonicInjector] = None,
-                 protection_filter: Optional[ProtectionFilter] = None):
+                 protection_filter: Optional[ProtectionFilter] = None,
+                 hardware_io=None):
 
         self.hw = hw_config
         self.cap = capture_config
+        self._hardware_io = hardware_io
         self._sine_stream = None
         self._sine_com_context = None
         self._sine_owner_thread = None
@@ -2275,9 +2279,23 @@ class Audio(IAudio):
         Executes the playback and recording of the composite signal.
         Handles stream synchronization, multiple sweep averaging, and loopback alignment.
         """
+        prepared = self._prepare_sweep()
+        if self._hardware_io is not None:
+            rec_mic, rec_loop, observed = self._hardware_io.capture(
+                self.hw, prepared['tx_speaker'], prepared['tx_loop'])
+            prepared['timing'].update(observed)
+        else:
+            rec_mic, rec_loop = self._capture_buffers(prepared)
+        return self._finish_sweep(prepared, rec_mic, rec_loop)
+
+    def _capture_buffers(self, prepared: Dict[str, Any], recordings=None):
+        """Local hardware implementation, run in the acquisition process in production.
+
+        Direct construction without hardware_io remains available for driver tests.
+        No generation, alignment, deconvolution or file access happens here.
+        """
         if self.hw['ch_out_spkr'] == self.hw['ch_out_ref'] or self.hw['ch_in_mic'] == self.hw['ch_in_loop']:
             raise ValueError("Dual-channel capture requires distinct speaker/reference outputs and mic/loop inputs")
-        prepared = self._prepare_sweep()
         tx_sweep_long = prepared['tx_speaker']
         tx_ref_long = prepared['tx_loop']
         total_len = len(tx_sweep_long)
@@ -2290,8 +2308,11 @@ class Audio(IAudio):
         out_frames[:, self.hw['ch_out_spkr']] = tx_sweep_long
         out_frames[:, self.hw['ch_out_ref']] = tx_ref_long
 
-        rec_loop = np.zeros(total_len, dtype=np.float32)
-        rec_mic = np.zeros(total_len, dtype=np.float32)
+        if recordings is None:
+            rec_loop = np.zeros(total_len, dtype=np.float32)
+            rec_mic = np.zeros(total_len, dtype=np.float32)
+        else:
+            rec_mic, rec_loop = recordings
 
         # ASIO uses channel selectors; other APIs use columns up to the
         # highest channel number. The callback below handles both layouts.
@@ -2371,16 +2392,19 @@ class Audio(IAudio):
         # ASIO needs COM on this calling thread for the stream's whole life.
         # The with blocks close the stream before releasing our COM reference.
         try:
-            with _asio_thread_context(use_asio_in or use_asio_out), sd.Stream(
-                    device=(self.hw['dev_in'], self.hw['dev_out']),
-                    samplerate=self.hw['fs'],
-                    blocksize=BLOCKSIZE,
-                    dtype="float32",
-                    channels=(in_args[0], out_args[0]),
-                    dither_off=True,
-                    extra_settings=(in_args[1], out_args[1]),
-                    callback=callback,
-                    latency='high') as stream:
+            with _asio_thread_context(use_asio_in or use_asio_out), ExitStack() as resources:
+                stream = sd.Stream(device=(self.hw['dev_in'], self.hw['dev_out']), samplerate=self.hw['fs'],
+                           blocksize=self.hw['blocksize'],
+                           dtype="float32", channels=(in_args[0], out_args[0]), dither_off=True,
+                           extra_settings=(in_args[1], out_args[1]), callback=callback,
+                           latency='high')
+                try:
+                    resources.enter_context(stream)
+                except BaseException:
+                    # Opening succeeded but __enter__/start failed. Do not
+                    # leave an allocated device in the long-lived process.
+                    stream.close()
+                    raise
                 if not done_evt.wait(total_len / self.hw['fs'] + 10):
                     raise RuntimeError("Audio capture did not finish within the expected duration")
                 # These are observed stream facts, useful when replaying or
@@ -2393,9 +2417,7 @@ class Audio(IAudio):
                 meter_worker.stop()
             reset_audio_meter_state(active=False)
 
-        # Align and average after the stream has closed; the raw arrays remain
-        # available for the optional debug archive.
-        return self._finish_sweep(prepared, rec_mic, rec_loop)
+        return rec_mic, rec_loop
 
     def _process_capture(self, result: Dict[str, Any]) -> tuple[np.ndarray, np.ndarray]:
         correction = {}
@@ -2787,6 +2809,8 @@ class Audio(IAudio):
         :param level_dbfs: Level in dBFS.
         :param duration_s: Duration in seconds. If None, plays until stop_sine() is called.
         """
+        if self._hardware_io is not None:
+            return self._hardware_io.play_sine(self.hw, frequency, level_dbfs, duration_s)
         self.stop_sine()
         self.update_sine_level(level_dbfs)
 
@@ -2861,18 +2885,25 @@ class Audio(IAudio):
                     done_evt.set()
 
             try:
-                with _asio_thread_context(use_asio_in or use_asio_out), sd.Stream(
-                    device=(in_dev, out_dev),
-                    samplerate=fs,
-                    blocksize=BLOCKSIZE,
-                    dtype='float32',
-                    channels=(in_args[0], out_ch_count),
-                    dither_off=True,
-                    extra_settings=(in_args[1], out_args_extra),
-                    callback=callback,
-                    latency='high',
-                ):
-                    done_evt.wait()
+                with _asio_thread_context(use_asio_in or use_asio_out), ExitStack() as resources:
+                    stream = sd.Stream(
+                        device=(in_dev, out_dev),
+                        samplerate=fs,
+                        blocksize=self.hw['blocksize'],
+                        dtype='float32',
+                        channels=(in_args[0], out_ch_count),
+                        dither_off=True,
+                        extra_settings=(in_args[1], out_args_extra),
+                        callback=callback,
+                        latency='high',
+                    )
+                    try:
+                        resources.enter_context(stream)
+                    except BaseException:
+                        stream.close()
+                        raise
+                    if not done_evt.wait(duration_s + 10):
+                        raise RuntimeError("Audio tone did not finish within the expected duration")
             finally:
                 if meter_worker is not None:
                     meter_worker.stop()
@@ -2944,11 +2975,16 @@ class Audio(IAudio):
 
     def update_sine_level(self, level_dbfs: float) -> None:
         """Updates the level used by active continuous sine playback."""
+        if self._hardware_io is not None:
+            return self._hardware_io.update_sine_level(level_dbfs)
         with self._sine_level_lock:
             self._sine_level_dbfs = float(level_dbfs)
 
     def stop_sine(self) -> None:
         """Stop continuous playback on the same thread that started it."""
+
+        if self._hardware_io is not None:
+            return self._hardware_io.stop_sine()
 
         if (self._sine_com_context is not None
                 and self._sine_owner_thread != threading.get_ident()):
@@ -3282,21 +3318,27 @@ class AudioFactory:
         saved_out_name = config.get(audio_section, 'out_dev_name', fallback='').strip()
         saved_out_api = config.get(audio_section, 'out_dev_hostapi', fallback='').strip()
 
+        hardware_io = None
         if mode == 'mock_interface':
             dev_in = configured_in
             dev_out = configured_out
         else:
+            from .audio_process import get_audio_process
+            hardware_io = get_audio_process()
+            catalog = hardware_io.get_devices_and_channels()
             dev_in = resolve_device_id_by_saved_identity(
                 saved_in_name,
                 saved_in_api,
                 role_label="input",
                 require_input=True,
+                catalog=catalog,
             )
             dev_out = resolve_device_id_by_saved_identity(
                 saved_out_name,
                 saved_out_api,
                 role_label="output",
                 require_output=True,
+                catalog=catalog,
             )
         if configured_in >= 0 and dev_in != configured_in:
             logger.info(
@@ -3395,7 +3437,7 @@ class AudioFactory:
                 kwargs['speaker_model'] = DiscretePistonSpeakerModel()
             return MockInterfaceAudio(**kwargs)
 
-        return Audio(**kwargs)
+        return Audio(**kwargs, hardware_io=hardware_io)
 
 
 if __name__ == "__main__":

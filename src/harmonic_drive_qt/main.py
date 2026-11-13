@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import argparse
+import multiprocessing
 import sys
 import tempfile
 from pathlib import Path
 
 from loguru import logger
+
+if __name__ == "__main__":
+    multiprocessing.freeze_support()
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))

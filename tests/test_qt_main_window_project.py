@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
@@ -9,7 +10,8 @@ pytest.importorskip("PySide6.QtWidgets")
 
 from harmonic_drive_qt import project
 from harmonic_drive_qt.main_window import MainWindow, NO_SESSION_FOLDER_TEXT
-from harmonic_drive_qt.qt_compat import QApplication, QLineEdit
+from harmonic_drive_qt.qt_compat import QApplication, QLineEdit, QStackedWidget, QWidget, Signal
+from harmonic_drive_qt.live_capture import LiveCapturePane
 
 
 def _app():
@@ -43,6 +45,60 @@ def _window_shell(config_file: Path):
     window.live_capture = Mock()
     window._rebuild_grid_pane = Mock()
     return window
+
+
+@pytest.mark.parametrize('section', ['app', 'logging'])
+@pytest.mark.parametrize('control_visible', [True, False])
+def test_settings_rebuild_keeps_live_capture_progress_connected(monkeypatch, section, control_visible):
+    _app()
+
+    class ControlSignals(QWidget):
+        measurement_saved = Signal()
+        progress_event = Signal(dict)
+
+        def __init__(self, backend=None, require_session_folder=False):
+            super().__init__()
+
+    window = MainWindow.__new__(MainWindow)
+    window.backend = Mock()
+    window.require_session_folder = False
+    window.left_stack = QStackedWidget()
+    window.control_pane = ControlSignals()
+    other_pane = QWidget()
+    window.left_stack.addWidget(window.control_pane)
+    window.left_stack.addWidget(other_pane)
+    if not control_visible:
+        window.left_stack.setCurrentWidget(other_pane)
+    live = SimpleNamespace(
+        _completed_positions=[], refresh_positions=Mock(),
+        refresh_progress_viewer=Mock(), refresh_all=Mock(),
+    )
+    live.on_progress_event = lambda event: LiveCapturePane.on_progress_event(live, event)
+    window.live_capture = live
+    window.grid_pane = Mock()
+    window._apply_menu_auto_hide = Mock()
+    window._refresh_motion_preview_visibility = Mock()
+    monkeypatch.setattr('harmonic_drive_qt.main_window.ControlPane', ControlSignals)
+
+    try:
+        # Apply settings twice to cover replacement of an already rebuilt pane.
+        for index in range(2):
+            window.on_settings_applied({section})
+            window.control_pane.progress_event.emit({'status': 'started'})
+            position = {'r': 100.0, 'phi': float(index * 30), 'z': 50.0}
+            window.control_pane.progress_event.emit({
+                'status': 'point_complete', 'current': 1, 'total': 2, 'position': position,
+            })
+            assert live._completed_positions == [position]
+            assert live.refresh_positions.call_count == (index + 1) * 2
+            expected_current = window.control_pane if control_visible else other_pane
+            assert window.left_stack.currentWidget() is expected_current
+
+        live.refresh_all.reset_mock()
+        window.control_pane.measurement_saved.emit()
+        live.refresh_all.assert_called_once_with()
+    finally:
+        window.left_stack.deleteLater()
 
 
 @pytest.mark.parametrize(

@@ -18,7 +18,7 @@ from .config_support import (
     _strip_inline_comment,
     save_config_values,
 )
-from nfs.audio import get_audio_meter_state
+from nfs.audio_process import get_audio_meter_state
 
 from .backend import BackendManager, Worker
 from .styles import primary_button, toggle_style

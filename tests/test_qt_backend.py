@@ -300,78 +300,65 @@ def test_audio_worker_balances_its_com_reference(monkeypatch, result, releases):
 
 
 @pytest.mark.parametrize("first_operation", ["devices", "rates"])
-def test_discovery_loads_backend_on_com_initialized_audio_owner(monkeypatch, first_operation):
+def test_discovery_dispatches_to_acquisition_process(monkeypatch, first_operation):
     import threading
-    from types import SimpleNamespace
-    from nfs import _audio_backend
+    from unittest.mock import Mock
 
-    events = []
-    owner = []
-
-    def initialize(*args):
-        owner.append(threading.get_ident())
-        events.append("com_init")
-        return 0
-
-    def check_owner(event):
-        assert threading.get_ident() == owner[0]
-        assert threading.get_ident() != threading.main_thread().ident
-        assert events[0] == "com_init"
-        assert "com_release" not in events
-        events.append(event)
-
-    def release():
-        check_owner("com_release")
-
-    def query_apis():
-        check_owner("devices")
-        return [{"name": "ASIO"}]
-
-    def check_settings(**kwargs):
-        check_owner("probe")
-        assert kwargs["device"] == 0
-
-    device = dict(name="Test ASIO", hostapi=0, max_input_channels=2, max_output_channels=2)
-    fake = SimpleNamespace(query_hostapis=query_apis, query_devices=lambda: [device],
-                           check_input_settings=check_settings, check_output_settings=check_settings)
-
-    def load(name):
-        assert name == "sounddevice"
-        check_owner("load")
-        return fake
-
-    monkeypatch.setattr(qt_backend.sys, "platform", "win32")
-    monkeypatch.setattr(qt_backend.ctypes, "windll", SimpleNamespace(
-        ole32=SimpleNamespace(CoInitializeEx=initialize, CoUninitialize=release)), raising=False)
-    monkeypatch.setattr(_audio_backend, "import_module", load)
+    service = Mock()
     manager = BackendManager("config.ini")
+    def devices():
+        assert threading.current_thread() is manager._audio_thread
+        return {0: {"name": "Remote ASIO", "hostapi": "ASIO"}}
+    def rates(*args):
+        assert threading.current_thread() is manager._audio_thread
+        assert args == (0, 0)
+        return [48000, 96000]
+    service.get_devices_and_channels.side_effect = devices
+    service.get_supported_sample_rates.side_effect = rates
+    monkeypatch.setattr(qt_backend, "get_audio_process", lambda: service)
+    close = Mock()
+    monkeypatch.setattr(qt_backend, "shutdown_audio_process", close)
     try:
-        # Creating a worker and doing non-hardware work must remain lazy.
-        manager._run_audio(lambda: None)
-        assert events == ["com_init"]
         if first_operation == "rates":
-            assert 48000 in manager.get_audio_sample_rates(0, 0)
-        assert manager.get_audio_devices()[0]["name"] == "Test ASIO"
+            assert 96000 in manager.get_audio_sample_rates(0, 0)
+        assert manager.get_audio_devices()[0]["name"] == "Remote ASIO"
         assert 48000 in manager.get_audio_sample_rates(0, 0)
-        # Nested calls execute directly instead of queuing onto themselves.
         assert manager._run_audio(manager.get_audio_devices)[0]["hostapi"] == "ASIO"
     finally:
         manager.shutdown()
-    assert events[-1] == "com_release"
+    close.assert_called_once_with()
     assert not manager._audio_thread.is_alive()
 
 
-def test_missing_audio_backend_does_not_break_worker_shutdown(monkeypatch):
-    from nfs import _audio_backend
-
-    def unavailable(name):
-        raise OSError("PortAudio unavailable")
-
-    monkeypatch.setattr(_audio_backend, "import_module", unavailable)
+def test_direct_reload_constructs_on_owner_and_closes_previous_audio(monkeypatch):
+    import threading
     manager = BackendManager("config.ini")
+    events = []
+    manager.scanner = object()
+    def create(*args):
+        assert threading.current_thread() is manager._audio_thread
+        events.append("create")
+        return None
+    def stop():
+        assert threading.current_thread() is manager._audio_thread
+        events.append("stop")
+    monkeypatch.setattr(qt_backend.NearFieldScannerFactory, "create", create)
+    monkeypatch.setattr(manager, "stop_sine", stop)
     try:
-        assert manager.get_audio_devices() == {}
-        assert manager.get_audio_sample_rates(0, 0) == []
+        manager.reload_nfs()
+        assert events == ["stop", "create"]
     finally:
         manager.shutdown()
-    assert not manager._audio_thread.is_alive()
+
+
+def test_reload_rejects_active_measurement_thread():
+    from unittest.mock import Mock
+    manager = BackendManager("config.ini")
+    manager._measurement_thread = Mock()
+    manager._measurement_thread.is_alive.return_value = True
+    try:
+        with pytest.raises(RuntimeError, match="during a measurement set"):
+            manager.reload_nfs()
+    finally:
+        manager._measurement_thread = None
+        manager.shutdown()

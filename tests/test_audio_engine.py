@@ -631,8 +631,9 @@ def test_find_device_id_by_name_does_not_fall_back_to_wrong_hostapi(mock_catalog
     assert find_device_id_by_name("RME Interface", "", require_input=True) == 4
 
 
-@patch("nfs.audio.get_devices_and_channels")
-def test_audio_factory_rejects_saved_pair_when_only_wrong_hostapi_exists(mock_catalog, tmp_path):
+@patch("nfs.audio_process.get_audio_process")
+def test_audio_factory_rejects_saved_pair_when_only_wrong_hostapi_exists(mock_process, tmp_path):
+    mock_catalog = mock_process.return_value.get_devices_and_channels
     mock_catalog.return_value = {
         4: {
             "name": "RME Interface",
@@ -680,8 +681,9 @@ def test_audio_factory_rejects_saved_pair_when_only_wrong_hostapi_exists(mock_ca
         AudioFactory.create(str(config_path))
 
 
-@patch("nfs.audio.get_devices_and_channels")
-def test_audio_factory_resolves_saved_identity_without_configured_ids(mock_catalog, tmp_path):
+@patch("nfs.audio_process.get_audio_process")
+def test_audio_factory_resolves_saved_identity_without_configured_ids(mock_process, tmp_path):
+    mock_catalog = mock_process.return_value.get_devices_and_channels
     mock_catalog.return_value = {
         4: {
             "name": "RME Interface",
@@ -735,6 +737,7 @@ def test_audio_factory_resolves_saved_identity_without_configured_ids(mock_catal
 
     assert audio.hw["dev_in"] == 20
     assert audio.hw["dev_out"] == 20
+    assert audio._hardware_io is mock_process.return_value
 
 
 @pytest.mark.parametrize('value,expected', [
