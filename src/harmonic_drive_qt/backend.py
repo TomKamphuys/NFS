@@ -19,9 +19,9 @@ from loguru import logger
 
 from nfs import NearFieldScannerFactory, ScannerFactory
 from nfs.audio import (
-    AudioFactory, get_audio_meter_state, get_devices_and_channels,
-    get_supported_sample_rates,
+    AudioFactory,
 )
+from nfs.audio_process import get_audio_process, shutdown_audio_process
 from nfs.logging_config import setup_logging
 
 from .qt_compat import QObject, QRunnable, Signal, Slot
@@ -182,13 +182,11 @@ class BackendManager:
         return result_holder.get("result")
 
     def get_audio_devices(self) -> dict:
-        # Discovery can trigger the first sounddevice import / Pa_Initialize.
-        # Keep it on the persistent COM-initialized stream owner, not the GUI.
-        return self._run_audio(get_devices_and_channels)
+        return self._run_audio(get_audio_process().get_devices_and_channels)
 
     def get_audio_sample_rates(self, input_device_id, output_device_id) -> list[int]:
         return self._run_audio(
-            get_supported_sample_rates, input_device_id, output_device_id)
+            get_audio_process().get_supported_sample_rates, input_device_id, output_device_id)
 
     def load(self, status: Callable[[str], None] | None = None) -> None:
         # Keep object creation, stream use and cleanup on one owning thread.
@@ -219,8 +217,13 @@ class BackendManager:
 
     def reload_nfs(self) -> None:
         """(Re)instantiate NearFieldScanner using the current scanner and config_file."""
+        if self._measurement_thread is not None and self._measurement_thread.is_alive():
+            raise RuntimeError("Cannot replace the audio backend during a measurement set")
+        if threading.current_thread() is not self._audio_thread:
+            return self._run_audio(self.reload_nfs)
         if self.scanner is None:
             return
+        self.stop_sine()
         try:
             self.nfs = NearFieldScannerFactory.create(self.scanner, self.config_file)
             if self.project_dir is not None and hasattr(self.nfs, "set_project_directory"):
@@ -328,6 +331,10 @@ class BackendManager:
         progress_callback: Callable[[dict[str, Any]], None],
         overwrite: bool = False,
     ) -> None:
+        if self.is_measurement_set_running() or (
+            self._measurement_thread is not None and self._measurement_thread.is_alive()
+        ):
+            return
         self.reload_nfs()
         if self.nfs is None:
             raise RuntimeError(self.load_warning or "NFS backend is not loaded")
@@ -345,7 +352,6 @@ class BackendManager:
 
     def _run_measurement_set(self, name: str, overwrite: bool) -> None:
         try:
-            self.reload_nfs()
             if self.nfs is None:
                 raise RuntimeError(self.load_warning or "NFS backend is not loaded")
             self._run_audio(
@@ -407,7 +413,7 @@ class BackendManager:
         return self.nfs.get_measurement_progress()
 
     def get_audio_meter_state(self) -> dict[str, Any]:
-        return get_audio_meter_state()
+        return get_audio_process().get_audio_meter_state()
 
     def play_sine(self, frequency: float, level: float, duration: Optional[float]) -> None:
         # Keep object creation, stream use and cleanup on one owning thread.
@@ -454,6 +460,7 @@ class BackendManager:
                 self._run_audio(self.nfs.shutdown)
         finally:
             # Stop/close and COM release complete before the worker exits.
+            shutdown_audio_process()
             self._audio_queue.put(None)
             if threading.current_thread() is not self._audio_thread:
                 self._audio_thread.join(timeout=5.0)

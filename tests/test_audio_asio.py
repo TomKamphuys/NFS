@@ -245,3 +245,29 @@ def test_device_lookup_never_restarts_portaudio(monkeypatch, sounddevice):
         assert audio.get_devices_and_channels()[0]['name'] == 'Test ASIO'
         assert audio.resolve_device_id_by_saved_identity(
             'Test ASIO', 'ASIO', role_label='input', require_input=True) == 0
+
+
+@pytest.mark.parametrize('operation', ['capture', 'sine'])
+def test_failed_stream_start_closes_allocation_before_com_release(monkeypatch, sounddevice, ole32, operation):
+    engine = make_engine()
+    monkeypatch.setattr(engine, '_get_api_name', lambda dev: 'ASIO')
+    monkeypatch.setattr(audio, '_AudioMeterWorker', lambda *args: Mock())
+    closed = []
+    class BrokenStream:
+        def __init__(self, **kwargs):
+            pass
+        def __enter__(self):
+            raise RuntimeError('start failed')
+        def __exit__(self, *args):
+            pytest.fail('A failed enter must not call exit')
+        def close(self):
+            ole32.CoUninitialize.assert_not_called()
+            closed.append(True)
+    monkeypatch.setattr(sounddevice, 'Stream', BrokenStream)
+    with pytest.raises(RuntimeError, match='start failed'):
+        if operation == 'capture':
+            engine._run_sweep()
+        else:
+            engine.play_sine(440, -20, .01)
+    assert closed == [True]
+    ole32.CoUninitialize.assert_called_once_with()

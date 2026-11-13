@@ -1,8 +1,8 @@
 """Deferred hardware access; importing this module never loads PortAudio.
 
 First attribute access imports sounddevice and initializes PortAudio on the
-calling thread. The Qt application routes discovery, rate probes and stream
-operations through BackendManager's persistent COM-initialized audio worker.
+calling thread. Production discovery, rate probes and stream operations run
+on the command-owning thread of the isolated audio acquisition process.
 This adapter does not dispatch calls: standalone callers must arrange their own
 thread/COM lifetime before hardware access.
 """

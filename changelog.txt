@@ -1,4 +1,30 @@
 --------
+13/11/26
+--------
+Moved hardware audio acquisition into a dedicated process with its own Python
+interpreter and GIL, reducing contention with GUI and plotting work. The audio
+process owns device discovery, sample-rate checks, ASIO/COM initialization,
+stream operations, sweep and sine playback, recording and metering.
+
+Playback and recording buffers use shared memory. Scanner control, sweep
+generation, alignment, deconvolution and file saving run in the main application.
+Meter snapshots can be read while acquisition is running. Added process failure
+and timeout handling, shared-memory cleanup, orderly shutdown and frozen-app
+startup support.
+
+Enforced audio backend reload ownership, stopped existing playback before
+replacement and removed duplicate backend construction at measurement startup.
+Added synthetic process tests covering sample transfer, stream ownership,
+playback, metering, failures and shutdown. Dropout reduction still needs
+validation on the affected audio interfaces.
+
+Fixed Live Capture measurement-position and 3D progress updates stopping after
+applying app, scanner or logging settings. Rebuilding Machine Control now
+reconnects its progress events to Live Capture.
+
+Added regression coverage for progress updates after repeated settings changes.
+
+--------
 10/11/26
 --------
 v0.4.4

@@ -171,8 +171,7 @@ class MainWindow(QMainWindow):
         self.right_stack.setMinimumWidth(420)
         self.right_stack.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.live_capture = LiveCapturePane(self.backend, self.config_file)
-        self.control_pane.measurement_saved.connect(self.live_capture.refresh_all)
-        self.control_pane.progress_event.connect(self.live_capture.on_progress_event)
+        self._connect_control_pane_signals()
         self.grid_pane = GridGeneratorPane(
             self.backend,
             self.config_file,
@@ -372,13 +371,17 @@ class MainWindow(QMainWindow):
         self.grid_pane.refresh_from_config()
         self.live_capture.refresh_all()
 
+    def _connect_control_pane_signals(self) -> None:
+        self.control_pane.measurement_saved.connect(self.live_capture.refresh_all)
+        self.control_pane.progress_event.connect(self.live_capture.on_progress_event)
+
     def _rebuild_control_pane(self) -> None:
         was_current = self.left_stack.currentWidget() is self.control_pane
         old_pane = self.control_pane
         self.left_stack.removeWidget(old_pane)
         old_pane.deleteLater()
         self.control_pane = ControlPane(self.backend, require_session_folder=self.require_session_folder)
-        self.control_pane.measurement_saved.connect(self.live_capture.refresh_all)
+        self._connect_control_pane_signals()
         self.left_stack.insertWidget(0, self.control_pane)
         if was_current:
             self.left_stack.setCurrentWidget(self.control_pane)
