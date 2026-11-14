@@ -1,4 +1,6 @@
 import os
+import configparser
+from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
@@ -11,10 +13,69 @@ from harmonic_drive_qt import project
 from harmonic_drive_qt.qt_compat import QApplication, QLabel, QMessageBox, QGroupBox, QSizePolicy, QLocale, QDoubleSpinBox, QAbstractSpinBox
 from harmonic_drive_qt.styles import app_stylesheet
 from harmonic_drive_qt.styles import toggle_style
+from nfs.audio import AudioFactory
+from nfs.capture_detection import DEFAULT_DETECTORS
 
 
 def _app():
     return QApplication.instance() or QApplication([])
+
+
+def test_detector_gui_auto_applies_and_reloads_saved_selection(tmp_path, monkeypatch):
+    _app()
+    config = configparser.ConfigParser()
+    config.read(Path(__file__).resolve().parents[1] / 'config_default.ini')
+    config['audio'].update(mode='mock_interface', in_dev='1', out_dev='2',
+                           in_dev_name='', out_dev_name='',
+                           in_dev_hostapi='ASIO', out_dev_hostapi='ASIO')
+    for detector in DEFAULT_DETECTORS:
+        config.remove_option('sweep', detector.enabled_key)
+    config_file = tmp_path / 'config.ini'
+    with config_file.open('w') as handle:
+        config.write(handle)
+    backend = Mock()
+    backend.get_audio_devices.return_value = {
+        1: {'name': 'Input', 'hostapi': 'ASIO', 'input_channels': [0, 1], 'output_channels': []},
+        2: {'name': 'Output', 'hostapi': 'ASIO', 'input_channels': [], 'output_channels': [0, 1]},
+    }
+    backend.get_audio_sample_rates.return_value = [48000]
+    loaded = []
+    backend.load.side_effect = lambda: loaded.append(AudioFactory.create(str(config_file)))
+    monkeypatch.setattr(project, 'update_audio_setup', Mock())
+    pane = AudioSetupPane(backend, str(config_file))
+    try:
+        backend.load.reset_mock()
+        for detector in DEFAULT_DETECTORS:
+            control = pane.detector_controls[detector.enabled_key]
+            assert control.isChecked()  # Existing configs default to all enabled.
+            before = backend.load.call_count
+            control.setChecked(False)
+            assert backend.load.call_count == before + 1
+            assert loaded[-1].cap[detector.enabled_key] is False
+        for spin, key in [(pane.retry_psr, 'retry_psr_threshold'),
+                          (pane.retry_thd, 'retry_thd_threshold')]:
+            before = backend.load.call_count
+            spin.setValue(7.5)
+            assert backend.load.call_count == before
+            spin.editingFinished.emit()
+            assert backend.load.call_count == before + 1
+            assert loaded[-1].cap[key] == 7.5
+        pane.max_retries.setValue(6)
+        pane.max_retries.editingFinished.emit()
+        assert loaded[-1].cap['max_capture_retries'] == 6
+    finally:
+        pane.auto_apply_timer.stop()
+        pane.cal_timer.stop()
+        pane.deleteLater()
+    reopened = AudioSetupPane(backend, str(config_file))
+    try:
+        assert all(not control.isChecked() for control in reopened.detector_controls.values())
+        assert reopened.retry_psr.value() == reopened.retry_thd.value() == 7.5
+        assert reopened.max_retries.value() == 6
+    finally:
+        reopened.auto_apply_timer.stop()
+        reopened.cal_timer.stop()
+        reopened.deleteLater()
 
 
 def test_pyside_double_spin_box_accepts_dot_and_comma_regardless_locale():

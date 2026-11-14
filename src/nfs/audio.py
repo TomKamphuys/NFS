@@ -85,6 +85,8 @@ from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from typing import Callable, Optional, Dict, Any, List, Tuple
 from nfs import registry
+from nfs.capture_detection import (CaptureContext, CaptureDetector, DEFAULT_DETECTORS,
+                                   find_issue)
 
 import numpy as np
 import scipy.signal
@@ -1814,11 +1816,13 @@ class Audio(IAudio):
                  debug_handler: Optional[DebugArtifactHandler] = None,
                  harmonic_injector: Optional[HarmonicInjector] = None,
                  protection_filter: Optional[ProtectionFilter] = None,
-                 hardware_io=None):
+                 hardware_io=None,
+                 detectors: tuple[CaptureDetector, ...] | None = None):
 
         self.hw = hw_config
         self.cap = capture_config
         self._hardware_io = hardware_io
+        self.detectors = tuple(DEFAULT_DETECTORS if detectors is None else detectors)
         self._sine_stream = None
         self._sine_com_context = None
         self._sine_owner_thread = None
@@ -2448,245 +2452,8 @@ class Audio(IAudio):
         }
 
     # ─────────────────────────────────────────────────────────────────────────────
-    #  Dropout detection helpers (layered defense)
+    #  Capture orchestration and retries
     # ─────────────────────────────────────────────────────────────────────────────
-
-    def _check_stream_health(self, result: Dict[str, Any]) -> bool:
-        """Inspect stream_status for underflow/overflow flags indicating dropout.
-
-        Returns True if the capture is unhealthy (needs retry), False if clean.
-        """
-        stream_status = result['capture_metadata'].get('stream_status', [])
-        for entry in stream_status:
-            status_str = entry.get('status', '')
-            if 'Underflow' in status_str or 'Overflow' in status_str:
-                logger.warning(
-                    f"Audio stream reported {status_str} at sample {entry.get('sample', 'unknown')}; "
-                    f"stream entry={entry}")
-                return True
-        return False
-
-    def _check_silence_gaps(self, result: Dict[str, Any]) -> bool:
-        """Scan the raw loopback recording for silence gaps indicating dropout.
-
-        The loopback channel always has strong signal — a silence gap is always
-        a dropout, never a legitimate low-signal condition.
-
-        Uses the detected alignment positions from the first repeat to find
-        the sweep region, so hardware latency is handled correctly.
-
-        Skips the sweep's guard samples (silence at start/end of the sweep
-        signal) to avoid false positives.
-
-        Returns True if a silence gap is found (needs retry), False if clean.
-        """
-        raw_recordings = result.get('raw_recordings')
-        if raw_recordings is None or len(raw_recordings) < 1:
-            return False
-
-        rec_loop = raw_recordings[0]  # electrical loopback channel
-        fs = self.hw['fs']
-
-        # Use the detected alignment positions to find the actual sweep region.
-        # This handles hardware latency correctly — the signal may be shifted
-        # relative to the planned positions.
-        aligned_repeats = result['capture_metadata'].get('aligned_repeats', [])
-        if not aligned_repeats:
-            return False  # No alignment data — skip this check
-
-        first = aligned_repeats[0]
-        sweep_start = first.get('sweep_start_sample', 0)
-        sweep_samples = result['capture_metadata'].get('sweep_samples', 0)
-        guard_samples = result['capture_metadata'].get('guard_samples', 0)
-        sweep_end = sweep_start + sweep_samples
-        if sweep_end > len(rec_loop):
-            sweep_end = len(rec_loop)
-        if sweep_end <= sweep_start:
-            return False
-
-        # Skip guard samples at the start and end of the sweep signal.
-        # The sweep signal has silent guards to keep endpoint artifacts away.
-        check_start = sweep_start + guard_samples
-        check_end = sweep_end - guard_samples
-        if check_end <= check_start:
-            return False  # Sweep is too short to check
-
-        # Sliding window RMS energy detection (10 ms windows)
-        window_size = max(1, int(0.010 * fs))  # 10 ms window
-        step_size = window_size // 2  # 50% overlap
-
-        sweep_region = rec_loop[check_start:check_end]
-        if len(sweep_region) == 0:
-            return False
-
-        peak_energy = np.max(np.abs(sweep_region))
-        if peak_energy < 1e-12:
-            rms = float(np.sqrt(np.mean(np.square(sweep_region, dtype=np.float64))))
-            logger.warning(
-                f"Loopback sweep is effectively silent: sample_range=[{check_start}, {check_end}), "
-                f"peak={peak_energy:.6g}, rms={rms:.6g}; silence-gap check cannot identify a window")
-            return False  # Entire sweep is silence — something else is wrong
-
-        # Threshold: -60 dB relative to peak
-        threshold = peak_energy * (10 ** (-60.0 / 20.0))
-
-        # Slide across the sweep region checking for silence gaps
-        for i in range(0, len(sweep_region) - window_size + 1, step_size):
-            window = sweep_region[i:i + window_size]
-            rms = np.sqrt(np.mean(window ** 2))
-            if rms < threshold:
-                logger.warning(
-                    f"Loopback silence gap: window_start_sample={check_start + i}, "
-                    f"rms={rms:.6g}, threshold={threshold:.6g}, peak={peak_energy:.6g}, "
-                    f"sweep_check_range=[{check_start}, {check_end}), window_samples={window_size}")
-                return True  # Silence gap detected
-
-        return False
-
-    def _check_mic_silence_gaps(self, result: Dict[str, Any]) -> bool:
-        """Scan the raw microphone recording for sudden energy drops (dropouts).
-
-        Unlike the loopback channel, the mic can have legitimately low signal
-        (e.g., behind the speaker). Instead of an absolute threshold, this method
-        compares each small window's energy against a local envelope computed from
-        wider neighboring windows. A sudden drop of more than 20 dB below the
-        local envelope is flagged as a silence gap.
-
-        Returns True if a silence gap is found (needs retry), False if clean.
-        """
-        raw_recordings = result.get('raw_recordings')
-        if raw_recordings is None or len(raw_recordings) < 2:
-            return False
-
-        rec_mic = raw_recordings[1]  # microphone channel
-        fs = self.hw['fs']
-
-        # Use the detected alignment positions to find the actual sweep region.
-        aligned_repeats = result['capture_metadata'].get('aligned_repeats', [])
-        if not aligned_repeats:
-            return False  # No alignment data — skip this check
-
-        first = aligned_repeats[0]
-        sweep_start = first.get('sweep_start_sample', 0)
-        sweep_samples = result['capture_metadata'].get('sweep_samples', 0)
-        guard_samples = result['capture_metadata'].get('guard_samples', 0)
-        sweep_end = sweep_start + sweep_samples
-        if sweep_end > len(rec_mic):
-            sweep_end = len(rec_mic)
-        if sweep_end <= sweep_start:
-            return False
-
-        # Skip guard samples at the start and end of the sweep signal.
-        check_start = sweep_start + guard_samples
-        check_end = sweep_end - guard_samples
-        if check_end <= check_start:
-            return False  # Sweep is too short to check
-
-        sweep_region = rec_mic[check_start:check_end]
-        if len(sweep_region) == 0:
-            return False
-
-        # Check for overall silence — if the entire mic region is silent,
-        # something else is wrong (not a local dropout).
-        peak_energy = np.max(np.abs(sweep_region))
-        if peak_energy < 1e-12:
-            rms = float(np.sqrt(np.mean(np.square(sweep_region, dtype=np.float64))))
-            logger.warning(
-                f"Microphone sweep is effectively silent: sample_range=[{check_start}, {check_end}), "
-                f"peak={peak_energy:.6g}, rms={rms:.6g}; mic silence-gap check skipped")
-            return False
-
-        # Compute RMS for every 10 ms window with 50% overlap. Then compare each
-        # window's RMS against the median of its neighboring windows (excluding
-        # itself). A sudden dropout will have a much lower RMS than its neighbors,
-        # while a gradual energy rise (exponential sweep) will show the same trend
-        # in all neighboring windows, so no drop is detected.
-        check_window = max(1, int(0.010 * fs))  # 10 ms
-        check_step = check_window // 2  # 50% overlap
-
-        # Pre-compute RMS for all windows
-        num_windows = (len(sweep_region) - check_window) // check_step + 1
-        rms_values = np.zeros(num_windows, dtype=np.float64)
-        for idx in range(num_windows):
-            i = idx * check_step
-            window = sweep_region[i:i + check_window]
-            rms_values[idx] = np.sqrt(np.mean(window ** 2, dtype=np.float64))
-
-        # Number of neighboring windows to include on each side for the median
-        # comparison. A dropout should be obvious within a few adjacent windows.
-        neighbor_radius = 5  # ~250 ms total neighborhood
-
-        for idx in range(num_windows):
-            rms = rms_values[idx]
-
-            # Collect neighboring RMS values (exclude the window itself)
-            left_start = max(0, idx - neighbor_radius)
-            left_end = idx
-            right_start = idx + 1
-            right_end = min(num_windows, idx + neighbor_radius)
-
-            neighbors = []
-            if left_start < left_end:
-                neighbors.append(rms_values[left_start:left_end])
-            if right_start < right_end:
-                neighbors.append(rms_values[right_start:right_end])
-
-            if not neighbors:
-                continue  # No neighbors — skip
-
-            neighbor_arr = np.concatenate(neighbors)
-            median_neighbor = float(np.median(neighbor_arr))
-
-            if median_neighbor < 1e-15:
-                continue  # No signal in neighbors — skip
-
-            # A zero-RMS window with non-zero neighbors is an infinite drop — always a gap
-            if rms < 1e-15:
-                i = idx * check_step
-                position_ms = (check_start + i) / fs * 1000.0
-                logger.warning(
-                    f"Microphone silence gap: position={position_ms:.1f}ms, "
-                    f"rms={rms:.6g}, neighbor_median={median_neighbor:.6g}, "
-                    f"drop=infinite, sweep_check_range=[{check_start}, {check_end})")
-                return True  # Silence gap detected
-
-            # Check if RMS drops more than 20 dB below the median of neighbors
-            drop_db = 20.0 * np.log10(rms / median_neighbor)
-            if drop_db < -20.0:
-                i = idx * check_step
-                position_ms = (check_start + i) / fs * 1000.0
-                logger.warning(
-                    f"Microphone silence gap: position={position_ms:.1f}ms, "
-                    f"rms={rms:.6g}, neighbor_median={median_neighbor:.6g}, "
-                    f"drop={drop_db:.1f}dB, sweep_check_range=[{check_start}, {check_end})")
-                return True  # Silence gap detected
-
-        return False
-
-    def _check_quality(self, metrics: Dict[str, float]) -> bool:
-        """Check post-deconvolution PSR against the quality threshold.
-
-        PSR reflects loopback marker alignment quality — a dropout corrupts
-        the marker alignment, lowering PSR. SNR is intentionally excluded
-        because the mic can legitimately have low SNR at certain positions.
-
-        Returns True if quality is below threshold (needs retry), False if good.
-        """
-        psr_threshold = self.cap.get('retry_psr_threshold', 3.0)
-        psr = metrics.get('psr', 0.0)
-        return psr < psr_threshold
-
-    def _check_thd(self, metrics: Dict[str, float]) -> bool:
-        """Check post-deconvolution THD against the distortion threshold.
-
-        On a loopback setup, high THD indicates a transient problem (clipping,
-        mechanical anomaly, etc.) rather than a property of the DUT.
-
-        Returns True if THD exceeds threshold (needs retry), False if good.
-        """
-        thd_threshold = self.cap.get('retry_thd_threshold', 10.0)
-        thd = metrics.get('thd_pct', 0.0)
-        return thd > thd_threshold
 
     def capture_ir(self, ir_path: Path, dist_path: Path, save: bool = True,
                    include_debug_artifacts: bool = True) -> dict[str, Any]:
@@ -2698,8 +2465,8 @@ class Audio(IAudio):
 
         Uses a retry loop with layered dropout detection:
         - Layer 1: Stream health check (underflow/overflow flags)
-        - Layer 2: Silence gap detection in loopback recording
-        - Layer 3: PSR quality gate after deconvolution
+        - Layer 2: Silence gap detection in loopback and microphone recordings
+        - Layer 3: PSR and THD quality gates after deconvolution
         """
         if save:
             ir_path.parent.mkdir(parents=True, exist_ok=True)
@@ -2732,31 +2499,11 @@ class Audio(IAudio):
                     f"exception will be propagated")
                 raise
 
-            # Layer 1: Immediate stream health check (cheap, no deconvolution)
-            if self.cap.get('retry_check_stream_health', True) and self._check_stream_health(result):
-                last_rejection_reason = "stream health rejection (underflow/overflow)"
+            issue = find_issue(self.detectors, "raw", CaptureContext(result, self.hw['fs'], self.cap))
+            if issue is not None:
+                last_rejection_reason = issue.reason
                 logger.warning(
-                    f"Capture rejected for {ir_path.name}: stream underflow/overflow, "
-                    f"retry {attempt + 1}/{max_retries}")
-                self._save_failed_capture(
-                    result, base_label, attempt + 1, max_retries, last_rejection_reason, save)
-                continue
-
-            # Layer 2: Silence gap check in loopback (cheap, no deconvolution)
-            if self.cap.get('retry_check_loopback_silence', True) and self._check_silence_gaps(result):
-                last_rejection_reason = "silence gap in loopback"
-                logger.warning(
-                    f"Capture rejected for {ir_path.name}: silence gap in loopback, "
-                    f"retry {attempt + 1}/{max_retries}")
-                self._save_failed_capture(
-                    result, base_label, attempt + 1, max_retries, last_rejection_reason, save)
-                continue
-
-            # Layer 2b: Silence gap check in microphone capture (cheap, no deconvolution)
-            if self.cap.get('retry_check_mic_silence', True) and self._check_mic_silence_gaps(result):
-                last_rejection_reason = "silence gap in microphone"
-                logger.warning(
-                    f"Capture rejected for {ir_path.name}: silence gap in microphone, "
+                    f"Capture rejected for {ir_path.name}: {issue.reason}, "
                     f"retry {attempt + 1}/{max_retries}")
                 self._save_failed_capture(
                     result, base_label, attempt + 1, max_retries, last_rejection_reason, save)
@@ -2771,30 +2518,13 @@ class Audio(IAudio):
                 linear_start_sample=result['capture_metadata']['sweep_samples'] - (_LINEAR_IR_ORIGIN_SAMPLE + 1),
             )
 
-            # Layer 3: PSR quality gate (loopback-based, not affected by mic position)
-            if self._check_quality(metrics):
-                psr_threshold = self.cap.get('retry_psr_threshold', 3.0)
-                last_rejection_reason = (
-                    f"quality below threshold (PSR={metrics['psr']:.2f}, "
-                    f"threshold={psr_threshold:.2f})")
+            issue = find_issue(
+                self.detectors, "metrics", CaptureContext(
+                    result, self.hw['fs'], self.cap, metrics, ir_full, ir_linear))
+            if issue is not None:
+                last_rejection_reason = issue.reason
                 logger.warning(
-                    f"Capture rejected for {ir_path.name}: quality below threshold "
-                    f"(PSR={metrics['psr']:.2f}, threshold={psr_threshold:.2f}), "
-                    f"retry {attempt + 1}/{max_retries}")
-                self._save_failed_capture(
-                    result, base_label, attempt + 1, max_retries, last_rejection_reason, save,
-                    metrics=metrics)
-                continue
-
-            # Layer 4: THD distortion gate (catches transient anomalies on loopback setups)
-            if self._check_thd(metrics):
-                thd_threshold = self.cap.get('retry_thd_threshold', 10.0)
-                last_rejection_reason = (
-                    f"high distortion (THD={metrics['thd_pct']:.2f}%, "
-                    f"threshold={thd_threshold:.2f}%)")
-                logger.warning(
-                    f"Capture rejected for {ir_path.name}: high distortion "
-                    f"(THD={metrics['thd_pct']:.2f}%, threshold={thd_threshold:.2f}%), "
+                    f"Capture rejected for {ir_path.name}: {issue.reason}, "
                     f"retry {attempt + 1}/{max_retries}")
                 self._save_failed_capture(
                     result, base_label, attempt + 1, max_retries, last_rejection_reason, save,
@@ -2892,24 +2622,10 @@ class Audio(IAudio):
             # 1. Capture Raw Data (Run Sweeps)
             result = self._run_sweep()
 
-            # Layer 1: Immediate stream health check (cheap, no deconvolution)
-            if self.cap.get('retry_check_stream_health', True) and self._check_stream_health(result):
+            issue = find_issue(self.detectors, "raw", CaptureContext(result, self.hw['fs'], self.cap))
+            if issue is not None:
                 logger.warning(
-                    f"Preview: Dropout detected (stream underflow/overflow), "
-                    f"retry {attempt + 1}/{max_retries}")
-                continue
-
-            # Layer 2: Silence gap check in loopback (cheap, no deconvolution)
-            if self.cap.get('retry_check_loopback_silence', True) and self._check_silence_gaps(result):
-                logger.warning(
-                    f"Preview: Dropout detected (silence gap in loopback), "
-                    f"retry {attempt + 1}/{max_retries}")
-                continue
-
-            # Layer 2b: Silence gap check in microphone capture (cheap, no deconvolution)
-            if self.cap.get('retry_check_mic_silence', True) and self._check_mic_silence_gaps(result):
-                logger.warning(
-                    f"Preview: Dropout detected (silence gap in microphone), "
+                    f"Preview: Capture rejected ({issue.reason}), "
                     f"retry {attempt + 1}/{max_retries}")
                 continue
 
@@ -2919,17 +2635,12 @@ class Audio(IAudio):
             # 3. DSP Verification
             metrics = self.verifier.calculate_metrics(ir_full, ir_linear, result.get("psr", 0.0))
 
-            # Layer 3: PSR quality gate
-            if self._check_quality(metrics):
+            issue = find_issue(
+                self.detectors, "metrics", CaptureContext(
+                    result, self.hw['fs'], self.cap, metrics, ir_full, ir_linear))
+            if issue is not None:
                 logger.warning(
-                    f"Preview: Quality below threshold (PSR={metrics['psr']:.2f}), "
-                    f"retry {attempt + 1}/{max_retries}")
-                continue
-
-            # Layer 4: THD distortion gate
-            if self._check_thd(metrics):
-                logger.warning(
-                    f"Preview: High distortion (THD={metrics['thd_pct']:.2f}%), "
+                    f"Preview: Capture rejected ({issue.reason}), "
                     f"retry {attempt + 1}/{max_retries}")
                 continue
 
@@ -3539,9 +3250,9 @@ class AudioFactory:
             'post_sil_ms': AudioFactory._get_required_config(config, sweep_section, 'post_sil_ms', float),
             'marker_gap_ms': 20.0,  # Fixed marker settling gap; adjust here if needed.
             'max_capture_retries': config.getint(sweep_section, 'max_capture_retries', fallback=3),
-            'retry_check_stream_health': config.getboolean(sweep_section, 'retry_check_stream_health', fallback=True),
-            'retry_check_loopback_silence': config.getboolean(sweep_section, 'retry_check_loopback_silence', fallback=True),
-            'retry_check_mic_silence': config.getboolean(sweep_section, 'retry_check_mic_silence', fallback=True),
+            **{detector.enabled_key: config.getboolean(
+                sweep_section, detector.enabled_key, fallback=True)
+                for detector in DEFAULT_DETECTORS},
             'retry_psr_threshold': config.getfloat(sweep_section, 'retry_psr_threshold', fallback=3.0),
             'retry_thd_threshold': config.getfloat(sweep_section, 'retry_thd_threshold', fallback=10.0),
         }

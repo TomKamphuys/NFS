@@ -1,6 +1,9 @@
 """Capture/DSP regressions using synthetic signals; no real hardware is opened."""
 
+from dataclasses import replace
+
 import configparser
+import importlib
 import json
 import shutil
 from pathlib import Path
@@ -12,6 +15,8 @@ import soundfile as sf
 from scipy import signal
 
 import nfs.audio as audio
+from nfs.capture_detection import (CaptureContext, CaptureDetector, CaptureIssue, stream_health,
+                                   loopback_gaps, microphone_gaps, psr_quality, thd_quality)
 from nfs.audio import AlignmentEngine, MarkerGenerator, SweepGenerator, DeconvolutionEngine, HarmonicInjector, DSPUtils
 from nfs.audio import AudioFactory, SINE_RMS_FROM_PEAK
 from nfs.datatypes import CylindricalPosition
@@ -65,7 +70,7 @@ def test_live_meter_always_active(monkeypatch, operation):
         np.testing.assert_array_equal(outputs[:, engine.hw['ch_out_ref']], prepared['tx_loop'])
         assert result['capture_metadata']['stream_status'] == [
             {'sample': 0, 'status': 'Input Overflow'}]
-        assert engine._check_stream_health(result)
+        assert stream_health(CaptureContext(result, engine.hw["fs"], engine.cap)) is not None
     else:
         engine.play_sine(1000, -12, None if operation == 'continuous_sine' else 0.01)
         engine.stop_sine()
@@ -623,7 +628,7 @@ def test_invalid_inverse_timing_rejected(kw):
 
 def test_check_stream_health_detects_underflow(monkeypatch):
     log = Mock()
-    monkeypatch.setattr(audio, 'logger', log)
+    monkeypatch.setattr(importlib.import_module(stream_health.__module__), 'logger', log)
     e = make_engine()
     e.cap['max_capture_retries'] = 3
     e.cap['retry_psr_threshold'] = 3.0
@@ -635,7 +640,7 @@ def test_check_stream_health_detects_underflow(monkeypatch):
         },
         'raw_recordings': (np.ones(1000), np.ones(1000)),
     }
-    assert e._check_stream_health(result) is True
+    assert stream_health(CaptureContext(result, e.hw["fs"], e.cap)) is not None
     message = log.warning.call_args.args[0]
     assert 'InputUnderflow' in message
     assert 'sample 1000' in message
@@ -653,7 +658,7 @@ def test_check_stream_health_detects_overflow():
         },
         'raw_recordings': (np.ones(1000), np.ones(1000)),
     }
-    assert e._check_stream_health(result) is True
+    assert stream_health(CaptureContext(result, e.hw["fs"], e.cap)) is not None
 
 
 def test_check_stream_health_clean_when_no_flags():
@@ -666,7 +671,7 @@ def test_check_stream_health_clean_when_no_flags():
         },
         'raw_recordings': (np.ones(1000), np.ones(1000)),
     }
-    assert e._check_stream_health(result) is False
+    assert stream_health(CaptureContext(result, e.hw["fs"], e.cap)) is None
 
 
 def test_check_stream_health_clean_when_empty_status():
@@ -677,12 +682,12 @@ def test_check_stream_health_clean_when_empty_status():
         'capture_metadata': {},
         'raw_recordings': (np.ones(1000), np.ones(1000)),
     }
-    assert e._check_stream_health(result) is False
+    assert stream_health(CaptureContext(result, e.hw["fs"], e.cap)) is None
 
 
 def test_check_silence_gaps_detects_gap_in_loopback(monkeypatch):
     log = Mock()
-    monkeypatch.setattr(audio, 'logger', log)
+    monkeypatch.setattr(importlib.import_module(loopback_gaps.__module__), 'logger', log)
     e = make_engine()
     e.cap['max_capture_retries'] = 3
     e.cap['retry_psr_threshold'] = 3.0
@@ -706,7 +711,7 @@ def test_check_silence_gaps_detects_gap_in_loopback(monkeypatch):
         },
         'raw_recordings': (loopback, np.ones(total, dtype=np.float32)),
     }
-    assert e._check_silence_gaps(result) is True
+    assert loopback_gaps(CaptureContext(result, e.hw["fs"], e.cap)) is not None
     message = log.warning.call_args.args[0]
     assert 'Loopback silence gap' in message
     assert 'window_start_sample=' in message
@@ -754,7 +759,7 @@ def test_check_silence_gaps_clean_loopback():
         },
         'raw_recordings': (loopback, np.ones(total, dtype=np.float32)),
     }
-    assert e._check_silence_gaps(result) is False
+    assert loopback_gaps(CaptureContext(result, e.hw["fs"], e.cap)) is None
 
 
 def test_check_silence_gaps_ignores_silence_in_pre_post_region():
@@ -784,13 +789,13 @@ def test_check_silence_gaps_ignores_silence_in_pre_post_region():
         },
         'raw_recordings': (loopback, np.ones(total, dtype=np.float32)),
     }
-    assert e._check_silence_gaps(result) is False
+    assert loopback_gaps(CaptureContext(result, e.hw["fs"], e.cap)) is None
 
 
 def test_check_mic_silence_gaps_detects_sudden_drop(monkeypatch):
     """A sudden silence gap in an otherwise strong mic signal is detected."""
     log = Mock()
-    monkeypatch.setattr(audio, 'logger', log)
+    monkeypatch.setattr(importlib.import_module(microphone_gaps.__module__), 'logger', log)
     e = make_engine()
     fs = 48000
     guard_samples = 480
@@ -813,7 +818,7 @@ def test_check_mic_silence_gaps_detects_sudden_drop(monkeypatch):
         },
         'raw_recordings': (loopback, mic),
     }
-    assert e._check_mic_silence_gaps(result) is True
+    assert microphone_gaps(CaptureContext(result, e.hw["fs"], e.cap)) is not None
     message = log.warning.call_args.args[0]
     assert 'Microphone silence gap' in message
 
@@ -839,7 +844,7 @@ def test_check_mic_silence_gaps_passes_low_signal():
         },
         'raw_recordings': (loopback, mic),
     }
-    assert e._check_mic_silence_gaps(result) is False
+    assert microphone_gaps(CaptureContext(result, e.hw["fs"], e.cap)) is None
 
 
 def test_check_mic_silence_gaps_passes_gradual_sweep():
@@ -870,7 +875,7 @@ def test_check_mic_silence_gaps_passes_gradual_sweep():
         },
         'raw_recordings': (loopback, mic),
     }
-    assert e._check_mic_silence_gaps(result) is False
+    assert microphone_gaps(CaptureContext(result, e.hw["fs"], e.cap)) is None
 
 
 def test_retry_loop_retries_on_mic_silence_gap(tmp_path, monkeypatch):
@@ -912,7 +917,7 @@ def test_check_quality_flags_low_psr():
     e.cap['max_capture_retries'] = 3
     e.cap['retry_psr_threshold'] = 3.0
     metrics = {'psr': 1.5, 'snr_db': 60.0}
-    assert e._check_quality(metrics) is True
+    assert psr_quality(CaptureContext({}, e.hw["fs"], e.cap, metrics)) is not None
 
 
 def test_check_quality_passes_high_psr():
@@ -920,7 +925,7 @@ def test_check_quality_passes_high_psr():
     e.cap['max_capture_retries'] = 3
     e.cap['retry_psr_threshold'] = 3.0
     metrics = {'psr': 5.0, 'snr_db': 60.0}
-    assert e._check_quality(metrics) is False
+    assert psr_quality(CaptureContext({}, e.hw["fs"], e.cap, metrics)) is None
 
 
 def test_check_quality_ignores_low_snr():
@@ -929,7 +934,7 @@ def test_check_quality_ignores_low_snr():
     e.cap['retry_psr_threshold'] = 3.0
     # Low SNR should NOT trigger retry — only PSR matters
     metrics = {'psr': 5.0, 'snr_db': 10.0}
-    assert e._check_quality(metrics) is False
+    assert psr_quality(CaptureContext({}, e.hw["fs"], e.cap, metrics)) is None
 
 
 def test_check_quality_uses_configurable_threshold():
@@ -937,9 +942,9 @@ def test_check_quality_uses_configurable_threshold():
     e.cap['max_capture_retries'] = 3
     e.cap['retry_psr_threshold'] = 5.0
     metrics = {'psr': 4.0, 'snr_db': 60.0}
-    assert e._check_quality(metrics) is True
+    assert psr_quality(CaptureContext({}, e.hw["fs"], e.cap, metrics)) is not None
     metrics = {'psr': 6.0, 'snr_db': 60.0}
-    assert e._check_quality(metrics) is False
+    assert psr_quality(CaptureContext({}, e.hw["fs"], e.cap, metrics)) is None
 
 
 def test_retry_loop_succeeds_on_clean_capture(monkeypatch):
@@ -1193,9 +1198,9 @@ def test_rejected_capture_archive_preserves_raw_channels_and_reference(tmp_path,
     monkeypatch.setattr(e, '_run_sweep', lambda: capture)
 
     if rejection == 'silence':
-        monkeypatch.setattr(e, '_check_silence_gaps', lambda result: True)
+        _replace_loopback_detector(e, lambda context: CaptureIssue('loopback_gaps', 'silence gap in loopback'))
     elif rejection == 'psr':
-        monkeypatch.setattr(e, '_check_silence_gaps', lambda result: False)
+        _replace_loopback_detector(e, lambda context: None)
         monkeypatch.setattr(e, '_process_capture', lambda result: (np.zeros(1), np.zeros(1)))
         monkeypatch.setattr(e.verifier, 'calculate_metrics', lambda *args, **kwargs: {
             'psr': 0.25,
@@ -1318,7 +1323,8 @@ def test_mixed_rejections_archive_each_attempt_and_repeated_measurement_uniquely
     captures = iter([underflow, clean_capture, clean_capture, underflow])
     monkeypatch.setattr(e, '_run_sweep', lambda: next(captures))
     silence_results = iter([True, False])
-    monkeypatch.setattr(e, '_check_silence_gaps', lambda result: next(silence_results))
+    _replace_loopback_detector(e, lambda context: (
+        CaptureIssue('loopback_gaps', 'silence gap in loopback') if next(silence_results) else None))
     monkeypatch.setattr(e, '_process_capture', lambda result: (np.zeros(1), np.zeros(1)))
     monkeypatch.setattr(e.verifier, 'calculate_metrics', lambda *args, **kwargs: {
         'psr': 0.5,
@@ -1386,3 +1392,55 @@ def test_failed_archive_write_error_is_logged_and_retry_continues(tmp_path, monk
     assert log.exception.call_count == 2
     assert all('continuing capture retries' in call.args[0] for call in log.exception.call_args_list)
     assert not list((session_dir / 'failed').rglob('*_failure.json'))
+
+
+def _replace_loopback_detector(engine, check):
+    engine.detectors = tuple(replace(detector, check=check)
+                             if detector.name == 'loopback_gaps' else detector
+                             for detector in engine.detectors)
+
+
+@pytest.mark.parametrize('operation', ['capture', 'preview'])
+@pytest.mark.parametrize('stage', ['raw', 'metrics'])
+@pytest.mark.parametrize('persistent', [False, True])
+def test_swapped_detector_uses_existing_retry_flow(monkeypatch, tmp_path, operation, stage, persistent):
+    engine, capture = setup_capture(monkeypatch, tmp_path)
+    engine.cap['max_capture_retries'] = 3
+    contexts = []
+
+    def check(context):
+        contexts.append(context)
+        assert context.capture is capture
+        assert context.capture['raw_recordings'][0] is capture['raw_recordings'][0]
+        if stage == 'metrics':
+            assert context.metrics is not None
+            assert context.ir_full is not None and context.ir_linear is not None
+        else:
+            assert context.metrics is None and context.ir_linear is None
+        if persistent or len(contexts) == 1:
+            return CaptureIssue('replacement', 'replacement detector rejected capture')
+        return None
+
+    engine.detectors = (CaptureDetector(
+        'replacement', stage, check, 'retry_check_replacement', 'Replacement', 'Test detector'),)
+    if operation == 'capture':
+        result = engine.capture_ir(tmp_path / 'ir.wav', tmp_path / 'dist.wav', save=False)
+    else:
+        result = engine.preview_ir()
+    assert len(contexts) == (3 if persistent else 2)
+    assert (result['ir_linear'] is None) == persistent
+    assert bool(result.get('error')) == persistent
+
+
+@pytest.mark.parametrize('enabled', [False, True])
+def test_factory_loads_all_detector_switches(mock_config, enabled):
+    from nfs.capture_detection import DEFAULT_DETECTORS
+
+    config = configparser.ConfigParser()
+    config.read(mock_config)
+    for detector in DEFAULT_DETECTORS:
+        config['sweep'][detector.enabled_key] = str(enabled)
+    with mock_config.open('w') as handle:
+        config.write(handle)
+    engine = AudioFactory.create(str(mock_config))
+    assert all(engine.cap[d.enabled_key] is enabled for d in DEFAULT_DETECTORS)

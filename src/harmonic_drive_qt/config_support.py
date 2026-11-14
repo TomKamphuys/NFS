@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
 from loguru import logger
+from nfs.capture_detection import DEFAULT_DETECTORS
 
 # ---------------------------------------------------------------------------
 # Schema
@@ -151,6 +152,11 @@ EDITABLE_SCHEMA: Dict[str, List[SchemaEntry]] = {
          "Request exclusive WASAPI mode. Only relevant on Windows when not using ASIO.", None),
     ],
     "sweep": [
+        ("max_capture_retries", "int", "Maximum capture attempts per measurement point.", None),
+        ("retry_psr_threshold", "float", "Minimum accepted loopback marker PSR.", None),
+        ("retry_thd_threshold", "float", "Maximum accepted total harmonic distortion (%).", None),
+        *[(detector.enabled_key, "bool", detector.description, None)
+          for detector in DEFAULT_DETECTORS],
         ("naming_convention", "choice",
          "'tom' uses (r,phi,z).wav; 'dimitri' uses <orderID>_r..ph..z.._ir.wav.",
          ["tom", "dimitri"]),

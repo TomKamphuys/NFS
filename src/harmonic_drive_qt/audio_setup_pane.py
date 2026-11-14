@@ -19,6 +19,7 @@ from .config_support import (
     save_config_values,
 )
 from nfs.audio_process import get_audio_meter_state
+from nfs.capture_detection import DEFAULT_DETECTORS
 
 from .backend import BackendManager, Worker
 from .styles import primary_button, toggle_style
@@ -693,33 +694,13 @@ class AudioSetupPane(QWidget):
             "Maximum THD (Total Harmonic Distortion) percentage before retrying. "
             "On a loopback setup, high THD indicates a transient problem such as clipping or mechanical anomaly."
         )
-        self.retry_stream_health = QCheckBox("Check stream health")
-        self.retry_stream_health.setChecked(
-            _parse_bool(_value(parser, "sweep", "retry_check_stream_health", "True"))
-        )
-        self.retry_stream_health.setStyleSheet(toggle_style())
-        self.retry_stream_health.setToolTip(
-            "Retry if the audio driver reports buffer underflow or overflow. "
-            "Disable only if the driver falsely reports errors on valid captures."
-        )
-        self.retry_loopback_silence = QCheckBox("Check loopback silence")
-        self.retry_loopback_silence.setChecked(
-            _parse_bool(_value(parser, "sweep", "retry_check_loopback_silence", "True"))
-        )
-        self.retry_loopback_silence.setStyleSheet(toggle_style())
-        self.retry_loopback_silence.setToolTip(
-            "Retry if a silence gap is detected in the loopback recording. "
-            "Disable only if valid captures are falsely rejected."
-        )
-        self.retry_mic_silence = QCheckBox("Check mic silence")
-        self.retry_mic_silence.setChecked(
-            _parse_bool(_value(parser, "sweep", "retry_check_mic_silence", "True"))
-        )
-        self.retry_mic_silence.setStyleSheet(toggle_style())
-        self.retry_mic_silence.setToolTip(
-            "Retry if a sudden energy drop is detected in the microphone recording. "
-            "Disable only if valid captures are falsely rejected."
-        )
+        self.detector_controls = {}
+        for detector in DEFAULT_DETECTORS:
+            control = QCheckBox(detector.label)
+            control.setChecked(_parse_bool(_value(parser, "sweep", detector.enabled_key, "True")))
+            control.setStyleSheet(toggle_style())
+            control.setToolTip(detector.description)
+            self.detector_controls[detector.enabled_key] = control
         self._normalize_decimal_editor(self.h2)
         self._normalize_decimal_editor(self.h3)
         self.naming.setToolTip("Choose the filename format for exported measurements.")
@@ -745,7 +726,7 @@ class AudioSetupPane(QWidget):
             ("H2 test dB", self.h2), ("H3 test dB", self.h3),
             ("Max retries", self.max_retries), ("Retry PSR threshold", self.retry_psr),
             ("Retry THD threshold", self.retry_thd),
-            ("", self.retry_stream_health), ("", self.retry_loopback_silence), ("", self.retry_mic_silence),
+            *[("", control) for control in self.detector_controls.values()],
         ]
         advanced_children = []
         for index, (label, widget) in enumerate(fields):
@@ -889,11 +870,12 @@ class AudioSetupPane(QWidget):
             self.in_mic_channel, self.in_loop_channel, self.out_speaker_channel, self.out_ref_channel,
             self.fs, self.wasapi, self.hpf_enable, self.hpf_corr, self.naming,
             self.align, self.debug, self.loopback_correction,
+            *self.detector_controls.values(),
         ]
         commit_controls = [
             self.sweep_dur, self.num_sweeps,
             self.hpf_order, self.hpf_cap, self.pre_sil, self.post_sil, self.taper,
-            self.max_retries, self.retry_psr,
+            self.max_retries, self.retry_psr, self.retry_thd,
         ]
         for control in immediate_controls:
             if isinstance(control, QComboBox):
@@ -1140,9 +1122,8 @@ class AudioSetupPane(QWidget):
             ("sweep", "max_capture_retries"): int(self.max_retries.value()),
             ("sweep", "retry_psr_threshold"): self.retry_psr.value(),
             ("sweep", "retry_thd_threshold"): self.retry_thd.value(),
-            ("sweep", "retry_check_stream_health"): self.retry_stream_health.isChecked(),
-            ("sweep", "retry_check_loopback_silence"): self.retry_loopback_silence.isChecked(),
-            ("sweep", "retry_check_mic_silence"): self.retry_mic_silence.isChecked(),
+            **{("sweep", key): control.isChecked()
+               for key, control in self.detector_controls.items()},
         }
         try:
             save_config_values(
