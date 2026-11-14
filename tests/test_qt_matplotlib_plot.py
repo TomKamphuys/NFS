@@ -201,3 +201,63 @@ def test_frequency_response_uses_file_nyquist_limit(tmp_path, monkeypatch):
     _args, kwargs = pane.frequency.set_data.call_args
     assert kwargs["x_range"] == (20.0, 24000.0)
     assert max(_args[0]) <= 24000.0
+
+
+@pytest.mark.parametrize('linear', [True, False])
+def test_test_sweep_updates_response_and_both_raw_channels_over_loaded_project(tmp_path, monkeypatch, linear):
+    saved_ir = tmp_path/'saved_ir.wav'
+    saved_ir.touch()
+    load_ir = Mock(return_value=(saved_ir, np.ones(100), 48000))
+    load_raw = Mock(return_value=(saved_ir, np.ones(100), np.ones(100), 48000))
+    monkeypatch.setattr(live_capture, '_load_latest_ir', load_ir)
+    monkeypatch.setattr(live_capture, '_load_latest_capture', load_raw)
+    monkeypatch.setattr(live_capture, '_project_frd_db_offset', lambda: None)
+    ir = np.zeros(2048)
+    ir[100] = .5
+    loopback, mic = np.arange(200)*.001, np.arange(200)*-.002
+    preview = dict(fs=96000, ir_linear=ir if linear else None, ir_full=ir,
+                   raw_recordings=(loopback, mic), preview_created_at=1.)
+    pane = SimpleNamespace(backend=SimpleNamespace(get_preview_ir=lambda: preview),
+        fr_smoothing_fraction=0, imp_section=Mock(), freq_section=Mock(),
+        impulse=Mock(), frequency=Mock(), raw_section=Mock(), raw_loopback=Mock(), raw_mic=Mock())
+    live_capture.LiveCapturePane.refresh_ir_plots(pane)
+    live_capture.LiveCapturePane.refresh_raw_signals(pane)
+    load_ir.assert_not_called()
+    load_raw.assert_not_called()
+    assert pane.frequency.set_data.call_args.kwargs['x_range'] == (20., 48000.)
+    assert 'Test Sweep Preview' in pane.imp_section.set_detail.call_args.args[0]
+    pane.raw_section.set_detail.assert_called_once_with('Test Sweep Preview')
+    np.testing.assert_array_equal(pane.raw_loopback.set_data.call_args.args[1], loopback)
+    np.testing.assert_array_equal(pane.raw_mic.set_data.call_args.args[1], mic)
+    np.testing.assert_allclose(pane.raw_loopback.set_data.call_args.args[0], np.arange(200)/96000*1000)
+
+
+def test_preview_cleared_returns_to_saved_raw_recordings(tmp_path, monkeypatch):
+    saved = tmp_path/'saved_capture.wav'
+    loopback, mic = np.arange(100), -np.arange(100)
+    monkeypatch.setattr(live_capture, '_load_latest_capture', lambda: (saved, loopback, mic, 48000))
+    pane = SimpleNamespace(backend=SimpleNamespace(get_preview_ir=lambda: None),
+        raw_section=Mock(), raw_loopback=Mock(), raw_mic=Mock())
+    live_capture.LiveCapturePane.refresh_raw_signals(pane)
+    pane.raw_section.set_detail.assert_called_once_with(saved.name)
+    np.testing.assert_array_equal(pane.raw_loopback.set_data.call_args.args[1], loopback)
+    np.testing.assert_array_equal(pane.raw_mic.set_data.call_args.args[1], mic)
+
+
+def test_memory_only_test_sweep_refreshes_without_file_changes(monkeypatch):
+    monkeypatch.setattr(live_capture, '_find_latest_ir_file', lambda: None)
+    monkeypatch.setattr(live_capture, '_find_latest_capture_file', lambda: None)
+    backend = SimpleNamespace(preview=None)
+    backend.get_preview_ir = lambda: backend.preview
+    pane = SimpleNamespace(backend=backend, visible_active=True, last_preview_token=None,
+        last_ir_mtime=0., last_capture_mtime=0., refresh_ir_plots=Mock(), refresh_raw_signals=Mock())
+    for index in range(2):
+        backend.preview = {'preview_created_at': float(index)}
+        live_capture.LiveCapturePane.refresh_if_changed(pane)
+        live_capture.LiveCapturePane.refresh_if_changed(pane)
+        assert pane.refresh_ir_plots.call_count == index+1
+        assert pane.refresh_raw_signals.call_count == index+1
+    backend.preview = None
+    live_capture.LiveCapturePane.refresh_if_changed(pane)
+    assert pane.refresh_ir_plots.call_count == 3
+    assert pane.refresh_raw_signals.call_count == 3

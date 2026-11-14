@@ -212,6 +212,7 @@ class NearFieldScanner:
         measurement_set_name: str | None = None,
         overwrite: bool = False,
         progress_callback: Optional[Callable[[dict[str, Any]], None]] = None,
+        detector_callback=None,
     ) -> None:
         """
         Take a full set of measurements.
@@ -263,9 +264,10 @@ class NearFieldScanner:
             self._audio.set_session_directory(measurement_dir)
 
         try:
+            if hasattr(self._audio, 'set_detector_observer'):
+                self._audio.set_detector_observer(detector_callback)
             self._clear_position_log()
 
-            self._measurement_motion_manager.move_to_safe_starting_radius()
             total = self._measurement_motion_manager.total_points()
             started_at = time.monotonic()
             self._emit_measurement_progress(
@@ -277,7 +279,20 @@ class NearFieldScanner:
                 eta_seconds=eta_seconds,
                 elapsed_seconds=elapsed_seconds,
             )
-            while not self._measurement_motion_manager.ready():
+            from .capture_detection import DetectorPreparationCancelled
+            if hasattr(self._audio, 'begin_measurement_set'):
+                try:
+                    self._audio.begin_measurement_set(self._wait_while_measurement_paused)
+                except DetectorPreparationCancelled:
+                    stopped_early = True
+                    logger.info('Measurement set stopped while preparing detectors.')
+            # Validate the reference before any motion, including the initial
+            # safe-radius move. A stopped preparation must not trigger parking.
+            if stopped_early or not self._wait_while_measurement_paused():
+                stopped_early = True
+                return
+            self._measurement_motion_manager.move_to_safe_starting_radius()
+            while not stopped_early and not self._measurement_motion_manager.ready():
                 if not self._wait_while_measurement_paused():
                     logger.info("Measurement set stopped before next point.")
                     stopped_early = True
@@ -313,7 +328,11 @@ class NearFieldScanner:
                     elapsed_seconds=elapsed_seconds,
                 )
 
-                result = self._audio.measure_ir(position, session_name)
+                try:
+                    result = self._audio.measure_ir(position, session_name)
+                except DetectorPreparationCancelled:
+                    stopped_early = True
+                    break
                 timestamp = time.monotonic()
                 if started_at is not None:
                     elapsed_seconds = timestamp - started_at
@@ -323,9 +342,11 @@ class NearFieldScanner:
 
                 # Check if the measurement failed (e.g., dropout retries exhausted)
                 if result.get("error"):
+                    failure_action = ('stopping scan' if result.get('stop_scan') is True
+                                      else 'skipping to next point')
                     logger.warning(
                         f"Point {current}/{total} failed: {result['error']}, "
-                        f"skipping to next point")
+                        f"{failure_action}")
                     self._emit_measurement_progress(
                         progress_callback,
                         "point_failed",
@@ -337,6 +358,10 @@ class NearFieldScanner:
                         elapsed_seconds=elapsed_seconds,
                         error=result["error"],
                     )
+                    if result.get('stop_scan') is True:
+                        stopped_early = True
+                        logger.info('Stopping scan after capture attempts were exhausted.')
+                        break
                 else:
                     retries = result.get("retries", 0)
                     if retries > 0:
@@ -363,6 +388,10 @@ class NearFieldScanner:
             raise
 
         finally:
+            if hasattr(self._audio, 'set_detector_observer'):
+                self._audio.set_detector_observer(None)
+            if hasattr(self._audio, 'end_measurement_set'):
+                self._audio.end_measurement_set()
             if failure_exc is not None:
                 self._emit_measurement_progress(
                     progress_callback,
@@ -386,6 +415,7 @@ class NearFieldScanner:
                     total,
                     eta_seconds=finished_eta,
                     elapsed_seconds=elapsed_seconds,
+                    stopped_early=stopped_early,
                 )
             self._measurement_running = False
             self._measurement_pause_requested.clear()
@@ -413,6 +443,7 @@ class NearFieldScanner:
         error: str | None = None,
         exception: Exception | None = None,
         retries: int | None = None,
+        stopped_early: bool = False,
     ) -> None:
         """
         Record and emit a measurement progress update.
@@ -449,6 +480,8 @@ class NearFieldScanner:
             event["exception"] = exception
         if retries is not None:
             event["retries"] = retries
+        if stopped_early:
+            event['stopped_early'] = True
         with self._measurement_progress_lock:
             self._measurement_progress = dict(event)
         if progress_callback is None:

@@ -897,11 +897,7 @@ def test_retry_loop_retries_on_mic_silence_gap(tmp_path, monkeypatch):
             gap_start = sweep_start + guard + 10000
             mic[gap_start:gap_start + 2000] = 0.0
             capture['raw_recordings'] = (capture['raw_recordings'][0], mic)
-        else:
-            # Third attempt: replace mic with a uniform signal so no gap is detected
-            mic = np.ones(len(capture['raw_recordings'][1]), dtype=np.float32) * 0.3
-            capture['raw_recordings'] = (capture['raw_recordings'][0], mic)
-        return capture
+        return capture  # The final attempt retains the clean microphone sweep.
 
     monkeypatch.setattr(e, '_run_sweep', run_sweep)
 
@@ -1079,6 +1075,7 @@ def test_quality_rejection_logs_configured_threshold(tmp_path, monkeypatch):
     log = Mock()
     monkeypatch.setattr(audio, 'logger', log)
     monkeypatch.setattr(e, '_run_sweep', lambda: {'capture_metadata': {'sweep_samples': 100}})
+    monkeypatch.setattr(e, '_align_capture', lambda capture: capture)
     monkeypatch.setattr(e, '_process_capture', lambda result: (np.zeros(1), np.zeros(1)))
     monkeypatch.setattr(e.verifier, 'calculate_metrics', lambda *args, **kwargs: {
         'psr': 2.5,
@@ -1401,6 +1398,15 @@ def _replace_loopback_detector(engine, check):
                              for detector in engine.detectors)
 
 
+def test_preview_returns_original_raw_channels_without_saving(monkeypatch, tmp_path):
+    engine, capture = setup_capture(monkeypatch, tmp_path)
+    result = engine.preview_ir()
+    assert result['raw_recordings'] is capture['raw_recordings']
+    assert result['ir_linear'] is not None
+    assert not result['saved']
+    assert not list(tmp_path.rglob('*.wav'))
+
+
 @pytest.mark.parametrize('operation', ['capture', 'preview'])
 @pytest.mark.parametrize('stage', ['raw', 'metrics'])
 @pytest.mark.parametrize('persistent', [False, True])
@@ -1411,7 +1417,8 @@ def test_swapped_detector_uses_existing_retry_flow(monkeypatch, tmp_path, operat
 
     def check(context):
         contexts.append(context)
-        assert context.capture is capture
+        if stage == 'raw':
+            assert context.capture is capture
         assert context.capture['raw_recordings'][0] is capture['raw_recordings'][0]
         if stage == 'metrics':
             assert context.metrics is not None
@@ -1445,3 +1452,343 @@ def test_factory_loads_all_detector_switches(mock_config, enabled):
         config.write(handle)
     engine = AudioFactory.create(str(mock_config))
     assert all(engine.cap[d.enabled_key] is enabled for d in DEFAULT_DETECTORS)
+
+
+def _single_reference_capture(engine):
+    original = engine.cap
+    try:
+        engine.cap = dict(original, num_sweeps=1)
+        plan = engine._prepare_sweep()
+        mic, loop = ideal_capture(plan)
+        return engine._raw_capture(plan, mic, loop)
+    finally:
+        engine.cap = original
+        engine._capture_component()
+
+
+def _golden_engine(monkeypatch, tmp_path):
+    from nfs.capture_detection import DEFAULT_DETECTORS
+
+    engine, capture = setup_capture(monkeypatch, tmp_path)
+    engine.detectors = tuple(d for d in DEFAULT_DETECTORS if d.name == 'loopback_reference')
+    engine.cap['retry_check_loopback_reference'] = True
+    single = _single_reference_capture(engine)
+    monkeypatch.setattr(engine, '_run_sweep', lambda: single if engine.cap['num_sweeps'] == 1 else capture)
+    return engine, capture
+
+
+def test_golden_reference_bootstrap_retries_and_session_reset(monkeypatch, tmp_path):
+    engine, capture = _golden_engine(monkeypatch, tmp_path)
+    from copy import deepcopy
+    bad = deepcopy(capture)
+    timing = bad['capture_metadata']
+    # Damage repeat 3: averaging must not hide it from the detector.
+    start = timing['aligned_repeats'][2]['sweep_start_sample'] + timing['guard_samples'] + 20000
+    bad['raw_recordings'][0][start:start + 1000] = 0
+    single = _single_reference_capture(engine)
+    run = Mock(side_effect=[single, single, single, bad, capture])
+    monkeypatch.setattr(engine, '_run_sweep', run)
+    engine.begin_measurement_set()
+    assert run.call_count == 3
+    golden = engine._detector_state['loopback_reference']
+    assert golden.reference.waveform.shape[0] == 1
+    assert engine.cap['num_sweeps'] == 3
+    assert engine.capture_engine.cap is engine.cap
+    result = engine.capture_ir(tmp_path / 'ir.wav', tmp_path / 'dist.wav', save=False)
+    assert run.call_count == 5 and result['retries'] == 1
+    assert engine._detector_state['loopback_reference'] is golden  # Fixed across retries.
+    engine.end_measurement_set()
+    assert not engine._detector_state and not engine._measurement_set_active
+    run.side_effect = [single] * 3
+    engine.begin_measurement_set()
+    assert engine._detector_state['loopback_reference'] is not golden
+    engine.set_session_directory(tmp_path / 'another-session')
+    assert not engine._detector_state and not engine._measurement_set_active
+
+
+def test_golden_reference_failed_bootstrap_does_not_publish_state(monkeypatch, tmp_path):
+    from copy import deepcopy
+
+    engine, capture = _golden_engine(monkeypatch, tmp_path)
+    capture = _single_reference_capture(engine)
+    bad = deepcopy(capture)
+    bad['raw_recordings'][0][:] *= 1.1
+    run = Mock(side_effect=[capture, bad, capture])
+    monkeypatch.setattr(engine, '_run_sweep', run)
+    with pytest.raises(ValueError, match='Golden loopback reference failed'):
+        engine.begin_measurement_set()
+    assert run.call_count == 3
+    assert not engine._detector_state and not engine._measurement_set_active
+    assert engine.cap['num_sweeps'] == 3
+    assert engine.capture_engine.cap is engine.cap
+
+
+def test_golden_reference_disabled_and_standalone_do_not_bootstrap(monkeypatch, tmp_path):
+    engine, capture = _golden_engine(monkeypatch, tmp_path)
+    run = Mock(return_value=capture)
+    monkeypatch.setattr(engine, '_run_sweep', run)
+    # Enabled but outside a set: standalone preview remains a single capture.
+    assert engine.preview_ir()['ir_linear'] is not None
+    assert run.call_count == 1
+    engine.cap['retry_check_loopback_reference'] = False
+    engine.begin_measurement_set()
+    assert run.call_count == 1
+    assert not engine._detector_state
+
+
+def test_stop_during_reference_capture_discards_state(monkeypatch, tmp_path):
+    from nfs.capture_detection import DetectorPreparationCancelled
+
+    engine, capture = _golden_engine(monkeypatch, tmp_path)
+    run = Mock(return_value=capture)
+    monkeypatch.setattr(engine, '_run_sweep', run)
+    proceed = Mock(side_effect=[True, False])
+    with pytest.raises(DetectorPreparationCancelled):
+        engine.begin_measurement_set(proceed)
+    assert run.call_count == 1
+    assert not engine._detector_state and not engine._measurement_set_active
+
+
+def test_golden_reference_shared_npz_roundtrip_and_failed_capture_link(monkeypatch, tmp_path):
+    from copy import deepcopy
+    from nfs.capture_detection.loopback_reference import load_loopback_reference, loopback_reference
+
+    engine, capture = _golden_engine(monkeypatch, tmp_path)
+    prepared = engine._prepare_sweep()
+    mic, loop = ideal_capture(prepared)
+    capture = engine._raw_capture(prepared, mic, loop)
+    single = _single_reference_capture(engine)
+    monkeypatch.setattr(engine, '_run_sweep', lambda: single if engine.cap['num_sweeps'] == 1 else capture)
+    engine.begin_measurement_set()
+    golden = engine._detector_state['loopback_reference']
+    writer = Mock(wraps=audio.np.savez_compressed)
+    monkeypatch.setattr(audio.np, 'savez_compressed', writer)
+    first = engine.capture_ir(tmp_path / 'first_ir.wav', tmp_path / 'first_dist.wav',
+                              include_debug_artifacts=False)
+    second = engine.capture_ir(tmp_path / 'second_ir.wav', tmp_path / 'second_dist.wav',
+                               include_debug_artifacts=False)
+    assert first['capture_metadata']['reference_file'] == second['capture_metadata']['reference_file']
+    archive_path = engine.debug_dir / first['capture_metadata']['reference_file']
+    with np.load(archive_path, allow_pickle=False) as saved:
+        restored = load_loopback_reference(saved)
+        np.testing.assert_array_equal(saved['inverse'], capture['digital_reference']['inverse'])
+        np.testing.assert_array_equal(restored.reference.waveform, golden.reference.waveform)
+        np.testing.assert_array_equal(restored.reference.marker_anchor, golden.reference.marker_anchor)
+        np.testing.assert_array_equal(restored.marker, golden.marker)
+        assert restored.reference.layout == golden.reference.layout
+        assert restored.reference.limits == golden.reference.limits
+        assert restored.bootstrap_pairs == golden.bootstrap_pairs
+        assert json.loads(saved['metadata_json'].item())['schema'] == 'shared_reference_v2'
+    bad = deepcopy(capture)
+    bad['raw_recordings'][0][:] *= 1.1
+    engine.cap['max_capture_retries'] = 1
+    monkeypatch.setattr(engine, '_run_sweep', lambda: bad)
+    result = engine.capture_ir(tmp_path / 'bad_ir.wav', tmp_path / 'bad_dist.wav')
+    assert result['error']
+    failure = next((engine.rec_dir / 'failed').rglob('*_failure.json'))
+    document = json.loads(failure.read_text())
+    assert document['detected_alignment_positions'] == []  # Rejected before DSP alignment.
+    link = document['artifacts']['shared_reference_path_relative_to_failure_json']
+    assert (failure.parent / link).resolve() == archive_path.resolve()
+    assert writer.call_count == 1  # All points/attempts share the existing NPZ.
+    engine.end_measurement_set()
+    # Replay with only the restored reference after the live state and file are closed.
+    context = CaptureContext(capture, engine.hw['fs'], {},
+                             detector_state={'loopback_reference': restored}, measurement_set=True)
+    assert loopback_reference(context) is None
+    assert loopback_reference(replace(context, capture=bad)) is not None
+
+
+def test_golden_reference_settings_are_part_of_shared_archive_identity(monkeypatch, tmp_path):
+    engine, capture = _golden_engine(monkeypatch, tmp_path)
+    engine.begin_measurement_set()
+    first = engine._save_shared_reference(capture['digital_reference'], capture['acquisition_metadata'])
+    original = (engine.debug_dir / first['reference_file']).read_bytes()
+    golden = engine._detector_state['loopback_reference']
+    engine._detector_state['loopback_reference'] = replace(
+        golden, reference=replace(golden.reference, limits=replace(golden.reference.limits, frequency_margin_db=7.)))
+    second = engine._save_shared_reference(capture['digital_reference'], capture['acquisition_metadata'])
+    assert second['reference_id'] != first['reference_id']
+    assert (engine.debug_dir / first['reference_file']).read_bytes() == original
+
+
+@pytest.mark.parametrize(('save', 'debug'), [(False, True), (True, False)])
+def test_golden_reference_archiving_respects_capture_save_flags(monkeypatch, tmp_path, save, debug):
+    engine, capture = _golden_engine(monkeypatch, tmp_path)
+    engine.cap['debug_saves'] = debug
+    engine.begin_measurement_set()
+    engine.capture_ir(tmp_path / 'ir.wav', tmp_path / 'dist.wav', save=save, include_debug_artifacts=False)
+    assert not list(tmp_path.rglob('*.npz'))
+
+
+@pytest.mark.parametrize('operation', ['capture', 'preview'])
+def test_raw_rejection_precedes_alignment_averaging_and_deconvolution(monkeypatch, tmp_path, operation):
+    engine = make_engine()
+    prepared = engine._prepare_sweep()
+    mic, loop = ideal_capture(prepared)
+    raw = engine._raw_capture(prepared, mic, loop)
+    monkeypatch.setattr(engine, '_run_sweep', lambda: raw)
+    order = []
+
+    def check_raw(context):
+        order.append('raw')
+        assert context.capture is raw
+        assert 'aligned_repeats' not in context.capture['capture_metadata']
+        assert 'rx_mic_conditioned' not in context.capture
+        assert context.capture['raw_recordings'][0] is loop
+        if len(order) == 1:
+            return CaptureIssue('test_raw', 'reject before DSP')
+
+    align = engine._align_capture
+    process = engine._process_capture
+
+    def align_accepted(capture):
+        order.append('align/average')
+        return align(capture)
+
+    def deconvolve(capture):
+        order.append('deconvolve')
+        return process(capture)
+
+    def check_metrics(context):
+        order.append('metrics')
+        assert context.ir_linear is not None
+
+    engine.detectors = (
+        CaptureDetector('test_raw', 'raw', check_raw, 'test_raw', 'Raw', ''),
+        CaptureDetector('test_metrics', 'metrics', check_metrics, 'test_metrics', 'Metrics', ''),
+    )
+    monkeypatch.setattr(engine, '_align_capture', align_accepted)
+    monkeypatch.setattr(engine, '_process_capture', deconvolve)
+    if operation == 'capture':
+        result = engine.capture_ir(tmp_path / 'ir.wav', tmp_path / 'dist.wav', save=False)
+    else:
+        result = engine.preview_ir()
+    assert result['ir_linear'] is not None
+    assert order == ['raw', 'raw', 'align/average', 'deconvolve', 'metrics']
+
+
+def test_golden_bootstrap_does_not_call_dsp_alignment(monkeypatch):
+    engine = make_engine()
+    prepared = engine._prepare_sweep()
+    mic, loop = ideal_capture(prepared)
+    raw = _single_reference_capture(engine)
+    monkeypatch.setattr(engine, '_run_sweep', Mock(return_value=raw))
+    align = Mock(side_effect=AssertionError('DSP must not run during bootstrap'))
+    monkeypatch.setattr(engine.alignment_engine, 'sync_and_average', align)
+    engine.cap['retry_check_loopback_reference'] = True
+    engine.begin_measurement_set()
+    assert engine._run_sweep.call_count == 3
+    align.assert_not_called()
+    assert 'loopback_reference' in engine._detector_state
+
+
+@pytest.mark.parametrize('channel,check', [(0, loopback_gaps), (1, microphone_gaps)])
+def test_gap_detectors_locate_raw_sweep_without_dsp_alignment(channel, check):
+    from nfs.capture_detection.regions import first_sweep_start
+
+    engine = make_engine()
+    prepared = engine._prepare_sweep()
+    mic, loop = ideal_capture(prepared)
+    raw = engine._raw_capture(prepared, mic, loop)
+    context = CaptureContext(raw, FS, engine.cap)
+    start = first_sweep_start(context) + raw['capture_metadata']['guard_samples'] + 10000
+    raw['raw_recordings'][channel][start:start + 2000] = 0
+    assert check(context) is not None
+    assert 'aligned_repeats' not in raw['capture_metadata']
+
+
+def test_mock_interface_can_prepare_golden_reference_from_raw_captures(mock_config):
+    engine = AudioFactory.create(str(mock_config))
+    engine.cap['retry_check_loopback_reference'] = True
+    engine.begin_measurement_set()
+    assert engine._detector_state['loopback_reference'].reference.layout.fs == engine.hw['fs']
+    engine.end_measurement_set()
+
+
+def _acknowledge_events(events):
+    def observe(event):
+        events.append(event)
+        if event.decision is not None:
+            event.decision.choose('continue')
+    return observe
+
+
+def test_reference_progress_events_and_duration(monkeypatch, tmp_path):
+    engine, _ = _golden_engine(monkeypatch, tmp_path)
+    events = []
+    engine.set_detector_observer(_acknowledge_events(events))
+    engine.begin_measurement_set()
+    assert [event.kind for event in events] == [
+        'preparing', 'preparation_progress', 'preparation_progress', 'preparation_progress',
+        'checking', 'preparation_ready']
+    assert [event.completed for event in events[1:4]] == [1, 2, 3]
+    plan = engine._prepare_sweep()
+    assert events[0].duration_s == pytest.approx(engine._capture_duration_s(num_sweeps=1))
+    assert events[-1].hold_seconds == 1
+    assert events[-1].decision.choice == 'continue'
+
+
+@pytest.mark.parametrize('choice', ['disable_for_scan', 'cancel'])
+def test_reference_failure_decision_is_scoped_to_scan(monkeypatch, tmp_path, choice):
+    from nfs.capture_detection import DetectorPreparationCancelled
+
+    engine, capture = _golden_engine(monkeypatch, tmp_path)
+    capture = _single_reference_capture(engine)
+    bad = dict(capture, raw_recordings=(capture['raw_recordings'][0] * 1.1, capture['raw_recordings'][1]))
+    run = Mock(side_effect=[capture, bad, capture])
+    monkeypatch.setattr(engine, '_run_sweep', run)
+    events = []
+
+    def observe(event):
+        events.append(event)
+        if event.decision:
+            event.decision.choose(choice)
+
+    engine.set_detector_observer(observe)
+    if choice == 'cancel':
+        with pytest.raises(DetectorPreparationCancelled):
+            engine.begin_measurement_set()
+        assert not engine._measurement_set_active
+    else:
+        engine.begin_measurement_set()
+        assert engine._measurement_set_active
+        assert 'loopback_reference' in engine._detector_context(capture).disabled_detectors
+        from nfs.capture_detection import find_issue
+        assert find_issue(engine.detectors, 'raw', engine._detector_context(capture)) is None
+    assert events[-1].kind == 'preparation_failed'
+    assert run.call_count == 3
+    assert engine.cap['retry_check_loopback_reference'] is True  # Saved selection stays intact.
+    engine.end_measurement_set()
+    assert not engine._disabled_detectors
+
+
+@pytest.mark.parametrize('stop', [False, True])
+def test_live_rejection_events_obey_attempt_limit(monkeypatch, tmp_path, stop):
+    engine, capture = setup_capture(monkeypatch, tmp_path)
+    run = Mock(return_value=capture)
+    monkeypatch.setattr(engine, '_run_sweep', run)
+    engine.detectors = (CaptureDetector('custom', 'raw', lambda context: CaptureIssue('custom', 'test fault'),
+                                       'custom', 'Custom check', ''),)
+    engine.cap.update(max_capture_retries=3, stop_on_capture_failure=stop)
+    events = []
+    engine.set_detector_observer(_acknowledge_events(events))
+    result = engine.capture_ir(tmp_path / 'ir.wav', tmp_path / 'dist.wav', save=False)
+    assert run.call_count == 3
+    assert result['stop_scan'] is stop
+    assert [(event.kind, event.attempt) for event in events] == [
+        ('attempt_rejected', 1), ('retry_started', 2), ('attempt_rejected', 2),
+        ('retry_started', 3), ('attempt_rejected', 3), ('point_failed', 3)]
+
+
+def test_live_retry_reports_acceptance(monkeypatch, tmp_path):
+    engine, capture = setup_capture(monkeypatch, tmp_path)
+    checks = iter([CaptureIssue('custom', 'test fault'), None])
+    engine.detectors = (CaptureDetector('custom', 'raw', lambda context: next(checks),
+                                       'custom', 'Custom check', ''),)
+    events = []
+    engine.set_detector_observer(_acknowledge_events(events))
+    result = engine.capture_ir(tmp_path / 'ir.wav', tmp_path / 'dist.wav', save=False)
+    assert result['retries'] == 1
+    assert [event.kind for event in events] == ['attempt_rejected', 'retry_started', 'checking', 'point_accepted']
+    assert events[-1].decision.choice == 'continue'

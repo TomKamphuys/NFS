@@ -153,6 +153,7 @@ EDITABLE_SCHEMA: Dict[str, List[SchemaEntry]] = {
     ],
     "sweep": [
         ("max_capture_retries", "int", "Maximum capture attempts per measurement point.", None),
+        ('stop_on_capture_failure', 'bool', 'Stop the scan when a point exhausts all capture attempts.', None),
         ("retry_psr_threshold", "float", "Minimum accepted loopback marker PSR.", None),
         ("retry_thd_threshold", "float", "Maximum accepted total harmonic distortion (%).", None),
         *[(detector.enabled_key, "bool", detector.description, None)

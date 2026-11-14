@@ -56,6 +56,7 @@ def _config_bool(config_file: str, section: str, key: str, fallback: bool) -> bo
 
 class ControlPane(QWidget):
     progress_event = Signal(dict)
+    detector_event = Signal(object)
     measurement_saved = Signal()
 
     def __init__(
@@ -81,6 +82,8 @@ class ControlPane(QWidget):
         self._homing_glow_phase: float = 0.0
         self._homing_glow_timer: QTimer | None = None
         self.progress_event.connect(self._apply_progress_event)
+        self._detector_dialog = None
+        self.detector_event.connect(self._show_detector_event)
         self._build_ui()
 
         self.position_timer = QTimer(self)
@@ -630,6 +633,7 @@ class ControlPane(QWidget):
                 project.sanitize_project_name(title),
                 lambda event: self.progress_event.emit(event),
                 overwrite=overwrite,
+                detector_callback=self.detector_event.emit,
             )
         self.refresh_progress()
 
@@ -815,6 +819,12 @@ class ControlPane(QWidget):
         labels["Z"].setText(value("z"))
         labels["STATE"].setText(str(state).split(".")[-1] if state is not None else "--")
 
+    def _show_detector_event(self, event):
+        if self._detector_dialog is None:
+            from .detector_dialog import DetectorDialog
+            self._detector_dialog = DetectorDialog(self.backend.stop_measurement_set, self.window())
+        self._detector_dialog.present(event)
+
     def refresh_progress(self) -> None:
         self._apply_progress_event(self.backend.get_measurement_progress())
         if self.backend.is_measurement_set_paused():
@@ -832,6 +842,8 @@ class ControlPane(QWidget):
         self.measurement_start.setIconSize(QSize(18, 18))
 
     def _apply_progress_event(self, event: dict) -> None:
+        if event.get('status') in ('finished', 'failed', 'error') and self._detector_dialog is not None:
+            self._detector_dialog.dismiss()
         current = int(event.get("current") or 0)
         total = int(event.get("total") or 0)
         status = str(event.get("status") or "ready")
@@ -841,7 +853,7 @@ class ControlPane(QWidget):
 
         if has_error:
             label_status = "Failed"
-        elif status == "finished" and total > 0 and current >= total:
+        elif status == "finished" and total > 0 and current >= total and not event.get('stopped_early'):
             label_status = "Complete"
         elif status == "finished":
             label_status = "Stopped"

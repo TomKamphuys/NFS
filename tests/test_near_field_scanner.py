@@ -89,6 +89,78 @@ def test_take_measurement_set(mocks):
     assert mocks['audio'].measure_ir.call_args_list[1].args[0] is pos2
 
 
+def test_detector_preparation_precedes_points_and_cleanup_follows(mocks, tmp_path):
+    order = []
+    mocks['audio'].begin_measurement_set.side_effect = lambda *args: order.append('prepare')
+    mocks['audio'].measure_ir.side_effect = lambda *args: order.append('point') or {'retries': 0}
+    mocks['audio'].end_measurement_set.side_effect = lambda: order.append('cleanup')
+    mocks['motion_manager'].move_to_safe_starting_radius.side_effect = lambda: order.append('safe_move')
+    mocks['motion_manager'].move_to_park_position.side_effect = lambda: order.append('park')
+    mocks['motion_manager'].ready.side_effect = [False, True]
+    mocks['motion_manager'].total_points.return_value = 1
+    mocks['scanner'].get_position.return_value = CylindricalPosition(100, 0, 0)
+    nfs = NearFieldScanner(mocks['scanner'], mocks['audio'], mocks['motion_manager'])
+    nfs.set_project_directory(tmp_path)
+    nfs.take_measurement_set()
+    assert order == ['prepare', 'safe_move', 'point', 'park', 'cleanup']
+
+
+@pytest.mark.parametrize('cancelled', [False, True])
+def test_reference_failure_or_stop_prevents_any_points(mocks, tmp_path, cancelled):
+    from nfs.capture_detection import DetectorPreparationCancelled
+
+    mocks['audio'].begin_measurement_set.side_effect = (
+        DetectorPreparationCancelled() if cancelled else ValueError('Initial loopbacks disagree'))
+    mocks['motion_manager'].total_points.return_value = 2
+    nfs = NearFieldScanner(mocks['scanner'], mocks['audio'], mocks['motion_manager'])
+    nfs.set_project_directory(tmp_path)
+    events = []
+    if cancelled:
+        nfs.take_measurement_set(progress_callback=events.append)
+        assert events[-1]['status'] == 'finished'
+        assert events[-1]['current'] == 0
+    else:
+        with pytest.raises(ValueError, match='Initial loopbacks disagree'):
+            nfs.take_measurement_set(progress_callback=events.append)
+        assert events[-1]['status'] == 'failed'
+    mocks['audio'].measure_ir.assert_not_called()
+    mocks['motion_manager'].next.assert_not_called()
+    mocks['motion_manager'].move_to_safe_starting_radius.assert_not_called()
+    mocks['motion_manager'].move_to_park_position.assert_not_called()
+    mocks['motion_manager'].reset.assert_not_called()
+    mocks['audio'].end_measurement_set.assert_called_once()
+    assert not nfs.is_measurement_set_running()
+
+
+def test_stop_after_reference_preparation_prevents_initial_move(mocks, tmp_path):
+    mocks['motion_manager'].total_points.return_value = 2
+    nfs = NearFieldScanner(mocks['scanner'], mocks['audio'], mocks['motion_manager'])
+    nfs.set_project_directory(tmp_path)
+    mocks['audio'].begin_measurement_set.side_effect = lambda *args: nfs.stop_measurement_set()
+    nfs.take_measurement_set()
+    mocks['motion_manager'].move_to_safe_starting_radius.assert_not_called()
+    mocks['motion_manager'].move_to_park_position.assert_not_called()
+    mocks['audio'].measure_ir.assert_not_called()
+    mocks['audio'].end_measurement_set.assert_called_once()
+
+
+@pytest.mark.parametrize('stop', [False, True])
+def test_exhausted_capture_uses_stop_continue_policy(mocks, tmp_path, stop):
+    mocks['motion_manager'].total_points.return_value = 2
+    mocks['motion_manager'].ready.side_effect = [False, False, True]
+    mocks['scanner'].get_position.return_value = CylindricalPosition(100, 0, 0)
+    mocks['audio'].measure_ir.side_effect = [{'error': 'attempts exhausted', 'stop_scan': stop}, {'retries': 0}]
+    nfs = NearFieldScanner(mocks['scanner'], mocks['audio'], mocks['motion_manager'])
+    nfs.set_project_directory(tmp_path)
+    callback = Mock()
+    nfs.take_measurement_set(detector_callback=callback)
+    assert mocks['audio'].measure_ir.call_count == (1 if stop else 2)
+    assert bool(nfs.get_measurement_progress().get('stopped_early')) is stop
+    mocks['motion_manager'].move_to_park_position.assert_called_once()
+    assert mocks['audio'].set_detector_observer.call_args_list[0].args == (callback,)
+    assert mocks['audio'].set_detector_observer.call_args_list[-1].args == (None,)
+
+
 def test_take_measurement_set_reports_progress(mocks):
     # 4 points: ready returns False for first 3 while-checks, True on 4th
     # Each iteration: next() then measure, then while checks ready()

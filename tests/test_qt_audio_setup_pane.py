@@ -45,9 +45,12 @@ def test_detector_gui_auto_applies_and_reloads_saved_selection(tmp_path, monkeyp
     pane = AudioSetupPane(backend, str(config_file))
     try:
         backend.load.reset_mock()
+        assert pane.detector_groups["Tom's detectors"].title() == "Tom's detectors"
+        assert 'Experimental reference detector' in pane.detector_groups
         for detector in DEFAULT_DETECTORS:
             control = pane.detector_controls[detector.enabled_key]
-            assert control.isChecked()  # Existing configs default to all enabled.
+            assert control.isChecked() == detector.default_enabled
+            control.setChecked(True)
             before = backend.load.call_count
             control.setChecked(False)
             assert backend.load.call_count == before + 1
@@ -63,6 +66,9 @@ def test_detector_gui_auto_applies_and_reloads_saved_selection(tmp_path, monkeyp
         pane.max_retries.setValue(6)
         pane.max_retries.editingFinished.emit()
         assert loaded[-1].cap['max_capture_retries'] == 6
+        assert not pane.stop_on_capture_failure.isChecked()
+        pane.stop_on_capture_failure.setChecked(True)
+        assert loaded[-1].cap['stop_on_capture_failure'] is True
     finally:
         pane.auto_apply_timer.stop()
         pane.cal_timer.stop()
@@ -72,6 +78,7 @@ def test_detector_gui_auto_applies_and_reloads_saved_selection(tmp_path, monkeyp
         assert all(not control.isChecked() for control in reopened.detector_controls.values())
         assert reopened.retry_psr.value() == reopened.retry_thd.value() == 7.5
         assert reopened.max_retries.value() == 6
+        assert reopened.stop_on_capture_failure.isChecked()
     finally:
         reopened.auto_apply_timer.stop()
         reopened.cal_timer.stop()

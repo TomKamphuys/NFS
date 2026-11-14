@@ -679,9 +679,16 @@ class AudioSetupPane(QWidget):
         self.max_retries = self._spin(_int_value(parser, "sweep", "max_capture_retries", 3), 1, 10, "", 0)
         self.max_retries.setFixedWidth(86)
         self.max_retries.setToolTip(
-            "Maximum automatic retry attempts per measurement point when a dropout is detected. "
-            "After exhausting retries, the point is skipped and logged."
+            "Maximum capture attempts per measurement point when a detector rejects a capture. "
+            "After exhausting attempts, the scan follows the stop/continue setting below."
         )
+        self.stop_on_capture_failure = QCheckBox('Stop scan when capture attempts are exhausted')
+        self.stop_on_capture_failure.setChecked(
+            _parse_bool(_value(parser, 'sweep', 'stop_on_capture_failure', 'False')))
+        self.stop_on_capture_failure.setStyleSheet(toggle_style())
+        self.stop_on_capture_failure.setToolTip(
+            'On: stop the scan after a point fails all attempts. '
+            'Off: mark that point as failed and continue to the next point.')
         self.retry_psr = self._spin(_float_value(parser, "sweep", "retry_psr_threshold", 3.0), 0.1, 100, "", 1)
         self.retry_psr.setFixedWidth(86)
         self.retry_psr.setToolTip(
@@ -697,7 +704,7 @@ class AudioSetupPane(QWidget):
         self.detector_controls = {}
         for detector in DEFAULT_DETECTORS:
             control = QCheckBox(detector.label)
-            control.setChecked(_parse_bool(_value(parser, "sweep", detector.enabled_key, "True")))
+            control.setChecked(_parse_bool(_value(parser, "sweep", detector.enabled_key, str(detector.default_enabled))))
             control.setStyleSheet(toggle_style())
             control.setToolTip(detector.description)
             self.detector_controls[detector.enabled_key] = control
@@ -724,9 +731,8 @@ class AudioSetupPane(QWidget):
             ("Naming", self.naming), ("", self.align), ("", self.debug),
             ("Driver settle time", self.pre_sil), ("Post Silence", self.post_sil),
             ("H2 test dB", self.h2), ("H3 test dB", self.h3),
-            ("Max retries", self.max_retries), ("Retry PSR threshold", self.retry_psr),
-            ("Retry THD threshold", self.retry_thd),
-            *[("", control) for control in self.detector_controls.values()],
+            ("Max attempts", self.max_retries),
+            ('', self.stop_on_capture_failure),
         ]
         advanced_children = []
         for index, (label, widget) in enumerate(fields):
@@ -741,6 +747,38 @@ class AudioSetupPane(QWidget):
             else:
                 adv.addWidget(widget, row, col, 1, 2)
                 advanced_children.append(widget)
+        self.detector_groups = {}
+        for group_name in dict.fromkeys(detector.group for detector in DEFAULT_DETECTORS):
+            frame = QGroupBox(group_name)
+            frame.setObjectName("CaptureDetectorGroup")
+            frame.setStyleSheet("QGroupBox#CaptureDetectorGroup { border: 1px solid #bfc8d4; "
+                               "border-radius: 5px; margin-top: 10px; padding-top: 12px; } "
+                               "QGroupBox#CaptureDetectorGroup::title { subcontrol-origin: margin; "
+                               "left: 8px; padding: 0 4px; }")
+            frame_layout = QVBoxLayout(frame)
+            checks = QGridLayout()
+            members = [detector for detector in DEFAULT_DETECTORS if detector.group == group_name]
+            for index, detector in enumerate(members):
+                checks.addWidget(self.detector_controls[detector.enabled_key], index // 3, index % 3)
+            frame_layout.addLayout(checks)
+            if group_name == "Tom's detectors":
+                thresholds = QHBoxLayout()
+                thresholds.addWidget(QLabel("PSR threshold"))
+                thresholds.addWidget(self.retry_psr)
+                thresholds.addWidget(QLabel("THD threshold"))
+                thresholds.addWidget(self.retry_thd)
+                thresholds.addStretch(1)
+                frame_layout.addLayout(thresholds)
+            else:
+                description = QLabel("At the start of each measurement set, capture three single-sweep "
+                                     "sequences, verify agreement, and combine "
+                                     "them into a fixed median reference. Standalone and preview captures "
+                                     "do not use this detector.")
+                description.setWordWrap(True)
+                frame_layout.addWidget(description)
+            adv.addWidget(frame, (len(fields) + 2) // 3 + len(self.detector_groups), 0, 1, 6)
+            advanced_children.append(frame)
+            self.detector_groups[group_name] = frame
         layout.addWidget(advanced)
         action_row = QHBoxLayout()
         action_row.setContentsMargins(0, 2, 0, 0)
@@ -871,6 +909,7 @@ class AudioSetupPane(QWidget):
             self.fs, self.wasapi, self.hpf_enable, self.hpf_corr, self.naming,
             self.align, self.debug, self.loopback_correction,
             *self.detector_controls.values(),
+            self.stop_on_capture_failure,
         ]
         commit_controls = [
             self.sweep_dur, self.num_sweeps,
@@ -1120,6 +1159,7 @@ class AudioSetupPane(QWidget):
             ("sweep", "h2_test_db"): _normalize_decimal_text(self.h2.text()),
             ("sweep", "h3_test_db"): _normalize_decimal_text(self.h3.text()),
             ("sweep", "max_capture_retries"): int(self.max_retries.value()),
+            ('sweep', 'stop_on_capture_failure'): self.stop_on_capture_failure.isChecked(),
             ("sweep", "retry_psr_threshold"): self.retry_psr.value(),
             ("sweep", "retry_thd_threshold"): self.retry_thd.value(),
             **{("sweep", key): control.isChecked()

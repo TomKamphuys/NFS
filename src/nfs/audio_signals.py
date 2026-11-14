@@ -86,7 +86,7 @@ def _full_inverse(q: np.ndarray, negative_samples: Optional[int] = None) -> Tupl
 class SweepGenerator:
     """
     Generates an Exponential Sine Sweep (ESS) and its CLEAN inverse filter.
-    
+
     Outputs:
       1. The fundamental sweep signal.
       2. The phase array (useful for optional harmonic injection downstream).
@@ -294,4 +294,3 @@ class ProtectionFilter:
         H_corr[0] = 0.0 + 0.0j
 
         return H_corr
-

@@ -4,6 +4,7 @@ import numpy as np
 from loguru import logger
 
 from .base import CaptureContext, CaptureIssue
+from .regions import first_sweep_start
 
 def loopback_gaps(context: CaptureContext) -> CaptureIssue | None:
     """Scan the raw loopback recording for silence gaps indicating dropout.
@@ -27,15 +28,9 @@ def loopback_gaps(context: CaptureContext) -> CaptureIssue | None:
     rec_loop = raw_recordings[0]  # electrical loopback channel
     fs = context.fs
 
-    # Use the detected alignment positions to find the actual sweep region.
-    # This handles hardware latency correctly — the signal may be shifted
-    # relative to the planned positions.
-    aligned_repeats = result['capture_metadata'].get('aligned_repeats', [])
-    if not aligned_repeats:
-        return None  # No alignment data — skip this check
-
-    first = aligned_repeats[0]
-    sweep_start = first.get('sweep_start_sample', 0)
+    sweep_start = first_sweep_start(context)
+    if sweep_start is None:
+        return None
     sweep_samples = result['capture_metadata'].get('sweep_samples', 0)
     guard_samples = result['capture_metadata'].get('guard_samples', 0)
     sweep_end = sweep_start + sweep_samples

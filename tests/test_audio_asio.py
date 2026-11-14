@@ -140,7 +140,7 @@ def test_stream_closes_before_com_release_and_uses_asio_roles(
     prepared = engine._prepare_sweep()
     capture_samples = prepared['timing']['total_samples']
     monkeypatch.setattr(engine, '_prepare_sweep', lambda: prepared)
-    monkeypatch.setattr(engine, '_finish_sweep', lambda prepared, mic, loop: {
+    monkeypatch.setattr(engine, '_raw_capture', lambda prepared, mic, loop: {
         'rx_mic_conditioned': mic, 'rx_loop_aligned': loop,
     })
     events = []

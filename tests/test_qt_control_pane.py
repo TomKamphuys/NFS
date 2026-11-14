@@ -41,6 +41,23 @@ def test_jog_buttons_enable_after_scanner_load(pane):
     assert all(not button.isEnabled() for button in pane._control_buttons)
 
 
+def test_detector_messages_cross_to_gui_thread(pane, qtbot):
+    from nfs.capture_detection.events import DetectorEvent
+    event = DetectorEvent('preparing', 'Loopback reference', 'Capturing reference', total=3, duration_s=5)
+    thread = threading.Thread(target=lambda: pane.detector_event.emit(event))
+    thread.start()
+    thread.join()
+    qtbot.waitUntil(lambda: pane._detector_dialog is not None and pane._detector_dialog.isVisible())
+    assert pane._detector_dialog.thread() == pane.thread()
+    pane._apply_progress_event({'status': 'finished', 'current': 0, 'total': 1})
+    assert not pane._detector_dialog.isVisible()
+
+
+def test_failure_on_last_point_still_displays_stopped(pane):
+    pane._apply_progress_event({'status': 'finished', 'current': 1, 'total': 1, 'stopped_early': True})
+    assert pane.progress.format().startswith('Stopped')
+
+
 @pytest.mark.parametrize("fail", [False, True])
 @pytest.mark.parametrize("loaded_at_finish", [False, True])
 def test_jog_click_busy_and_completion(pane, monkeypatch, fail, loaded_at_finish):

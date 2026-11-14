@@ -798,6 +798,64 @@ class AudioCapture:
         }
 
 
+    def _raw_capture(self, prepared, rec_mic, rec_loop) -> Dict[str, Any]:
+        """Package untouched samples and acquisition facts; do no DSP alignment."""
+        timing = dict(prepared['timing'])
+        timing.update({
+            "raw_capture_channels": ["electrical_loopback", "microphone"],
+            "loopback_role": ("marker_alignment_and_linear_response_correction"
+                              if self.cap.get('loopback_correction', True)
+                              else "record_only; marker_used_for_alignment"),
+            "inverse_reference": "clean_digital_fundamental",
+            "loop_tail_conditioning": "none",
+            "mic_tail_fade_ms": min(10.0, timing["capture_tail_samples"] * 1000.0 / self.hw["fs"]),
+            "sweep_start_hz": self.sweep_gen.f1,
+            "sweep_end_hz": self.hw['fs'] / 2,
+            "active_duration_s": self.sweep_gen.active_duration_s,
+            # L refers to the active exponential part, excluding the guards.
+            "L_s": self.sweep_gen.log_sweep_rate,
+            "guard_samples": self.sweep_gen.guard_samples,
+            "hardware_config": dict(self.hw), "capture_config": dict(self.cap),
+            "injected_harmonics_db": {
+                "H2": self.harmonic_injector.h2_db if self.harmonic_injector else None,
+                "H3": self.harmonic_injector.h3_db if self.harmonic_injector else None,
+            },
+            "speaker_protection_hpf": {
+                key: getattr(self.protection_filter, key)
+                for key in ('freq_hz', 'order', 'hpf_correction', 'hpf_corr_db_cap')
+            } if self.protection_filter else None,
+        })
+        return {
+            "acquisition_metadata": {
+                "producer": "nfs.marker_then_dual_sweep_v1",
+                "raw_capture_channels": ["electrical_loopback", "microphone"],
+                "num_sweeps": self.cap['num_sweeps'],
+                "layout": {key: value for key, value in prepared['timing'].items()
+                           if key not in ('linear_ir_samples', 'actual_sample_rate',
+                                          'stream_status')},
+                "sweep": {
+                    "start_hz": self.sweep_gen.f1, "end_hz": self.hw['fs'] / 2,
+                    "active_duration_s": self.sweep_gen.active_duration_s,
+                    "log_sweep_rate_s": self.sweep_gen.log_sweep_rate,
+                    "guard_samples": self.sweep_gen.guard_samples,
+                    "level_dbfs": self.cap['sweep_level_dbfs'],
+                },
+                "speaker_protection_hpf": {
+                    "freq_hz": self.protection_filter.freq_hz,
+                    "order": self.protection_filter.order,
+                } if self.protection_filter else None,
+                "injected_harmonics_db": timing['injected_harmonics_db'],
+            },
+            "capture_metadata": timing,
+            "raw_recordings": (rec_loop, rec_mic),
+            "digital_reference": {
+                "fundamental": prepared['fundamental'], "inverse": prepared['inverse'],
+                "speaker_sweep": prepared['speaker_sweep'],
+                "loopback_sweep": prepared['reference_sweep'], "marker": prepared['marker'],
+            },
+        }
+
+
     def _capture_buffers(self, prepared: Dict[str, Any], recordings=None):
         """Local hardware implementation, run in the acquisition process in production.
 
@@ -856,7 +914,11 @@ class AudioCapture:
         def callback(indata, outdata, frames, time_info, status):
             nonlocal idx_play, idx_rec
             if status:
-                stream_status.append({"sample": idx_rec, "status": str(status)})
+                event = {"sample": idx_rec, "status": str(status)}
+                if hasattr(status, 'input_underflow'):
+                    event.update({flag: bool(getattr(status, flag, False)) for flag in (
+                        'input_underflow', 'input_overflow', 'output_underflow', 'output_overflow')})
+                stream_status.append(event)
 
             # Copy the next playback block. The two ASIO callback columns
             # correspond to the selected speaker/reference physical channels.
@@ -1136,4 +1198,3 @@ class AudioCapture:
         # Explicit streams are already closed above. sounddevice.stop() only
         # handles play/rec convenience functions and would load an unused backend.
         reset_audio_meter_state(active=False)
-

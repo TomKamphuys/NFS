@@ -291,7 +291,7 @@ class AudioProcess:
                 return self._call('stop')
 
     def get_audio_meter_state(self):
-        from .audio import get_audio_meter_state
+        from .audio_capture import get_audio_meter_state
 
         # Meter reads do not wait for the command pipe or an ongoing capture.
         # Return the last snapshot rather than blocking the UI on a dead child.

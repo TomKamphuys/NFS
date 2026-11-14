@@ -116,6 +116,7 @@ class BackendManager:
         self._worker_lock = threading.Lock()
         self._measurement_thread: threading.Thread | None = None
         self._progress_callback: Callable[[dict[str, Any]], None] | None = None
+        self._detector_callback = None
         self._audio_queue: queue.Queue = queue.Queue()
         self._audio_thread = threading.Thread(
             target=self._audio_worker,
@@ -241,6 +242,7 @@ class BackendManager:
     def set_project_dir(self, path: str | Path) -> None:
         self.project_dir = Path(path).expanduser().resolve()
         self.project_dir.mkdir(parents=True, exist_ok=True)
+        self.clear_preview_ir()
         if self.nfs is not None and hasattr(self.nfs, "set_project_directory"):
             self.nfs.set_project_directory(self.project_dir)
 
@@ -330,6 +332,7 @@ class BackendManager:
         name: str,
         progress_callback: Callable[[dict[str, Any]], None],
         overwrite: bool = False,
+        detector_callback=None,
     ) -> None:
         if self.is_measurement_set_running() or (
             self._measurement_thread is not None and self._measurement_thread.is_alive()
@@ -342,6 +345,7 @@ class BackendManager:
             return
         self.clear_preview_ir()
         self._progress_callback = progress_callback
+        self._detector_callback = detector_callback
         self._measurement_thread = threading.Thread(
             target=self._run_measurement_set,
             args=(name, overwrite),
@@ -379,7 +383,11 @@ class BackendManager:
     def _capture_measurement_set(self, name, overwrite, progress_callback) -> None:
         # Closing a continuous tone and starting the scan are one queued task.
         self.stop_sine()
-        self.nfs.take_measurement_set(name, overwrite, progress_callback)
+        if self._detector_callback is None:
+            self.nfs.take_measurement_set(name, overwrite, progress_callback)
+        else:
+            self.nfs.take_measurement_set(name, overwrite, progress_callback,
+                                          detector_callback=self._detector_callback)
 
     def pause_measurement_set(self) -> None:
         if self.nfs is not None and hasattr(self.nfs, "pause_measurement_set"):
@@ -451,6 +459,9 @@ class BackendManager:
     def shutdown(self) -> None:
         if not self._audio_thread.is_alive():
             return
+        # Release any preparation/result decision wait before queueing work on
+        # the audio thread that is currently waiting for that decision.
+        self.stop_measurement_set()
         try:
             self.stop_sine()
         except Exception:

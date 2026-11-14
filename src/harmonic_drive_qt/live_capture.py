@@ -588,6 +588,7 @@ class LiveCapturePane(QWidget):
         self.visible_active = True
         self.last_ir_mtime = 0.0
         self.last_capture_mtime = 0.0
+        self.last_preview_token = None
         self.grid_points: list[tuple[float, float, float]] = []
         self.grid_df: pd.DataFrame | None = None
         # Each entry: {"r": ..., "phi": ..., "z": ..., "status": "ok" | "retried" | "failed"}
@@ -1038,14 +1039,18 @@ class LiveCapturePane(QWidget):
     def refresh_if_changed(self) -> None:
         if not self.visible_active:
             return
+        preview = self.backend.get_preview_ir()
+        preview_token = (id(preview), preview.get('preview_created_at')) if isinstance(preview, dict) else None
+        preview_changed = preview_token != self.last_preview_token
+        self.last_preview_token = preview_token
         ir_file = _find_latest_ir_file()
         ir_mtime = ir_file.stat().st_mtime if ir_file else 0.0
-        if ir_mtime != self.last_ir_mtime:
+        if preview_changed or ir_mtime != self.last_ir_mtime:
             self.last_ir_mtime = ir_mtime
             self.refresh_ir_plots()
         capture_file = _find_latest_capture_file()
         capture_mtime = capture_file.stat().st_mtime if capture_file else 0.0
-        if capture_mtime != self.last_capture_mtime:
+        if preview_changed or capture_mtime != self.last_capture_mtime:
             self.last_capture_mtime = capture_mtime
             self.refresh_raw_signals()
 
@@ -1211,22 +1216,22 @@ class LiveCapturePane(QWidget):
         )
 
     def refresh_ir_plots(self) -> None:
-        latest_file, ir, fs = _load_latest_ir()
-        title_name = latest_file.name if latest_file is not None else None
-        # Fall back to the test-sweep preview only when no IR files exist on disk.
-        # Do not use the preview merely because it is newer; a preview run before
-        # measurements would otherwise always replace the actual captured IR.
+        ir = fs = title_name = None
+        # A completed test sweep is the current live result even when this
+        # project has saved measurements. The backend clears the preview when
+        # changing project context or starting a saved measurement/scan.
+        preview = self.backend.get_preview_ir()
+        if isinstance(preview, dict):
+            preview_ir = preview.get("ir_linear")
+            if preview_ir is None:
+                preview_ir = preview.get("ir_full")
+            if preview_ir is not None and preview.get("fs") is not None:
+                candidate = np.asarray(preview_ir, dtype=float)
+                if candidate.ndim == 1 and candidate.size:
+                    ir, fs, title_name = candidate, int(preview['fs']), 'Test Sweep Preview'
         if ir is None:
-            preview = self.backend.get_preview_ir()
-            if isinstance(preview, dict):
-                preview_ir = preview.get("ir_linear")
-                if preview_ir is None:
-                    preview_ir = preview.get("ir_full")
-                preview_fs = preview.get("fs")
-                if preview_ir is not None and preview_fs is not None:
-                    ir = np.asarray(preview_ir, dtype=float)
-                    fs = int(preview_fs)
-                    title_name = "Test Sweep Preview"
+            latest_file, ir, fs = _load_latest_ir()
+            title_name = latest_file.name if latest_file is not None else None
         if ir is None or fs is None:
             self.imp_section.set_detail("Waiting for impulse response...")
             self.freq_section.set_detail("Waiting for frequency response...")
@@ -1282,13 +1287,22 @@ class LiveCapturePane(QWidget):
         )
 
     def refresh_raw_signals(self) -> None:
-        latest_file, loopback, mic, fs = _load_latest_capture()
+        preview = self.backend.get_preview_ir()
+        title_name = 'Test Sweep Preview'
+        loopback = mic = fs = None
+        if isinstance(preview, dict):
+            recordings = preview.get('raw_recordings')
+            if recordings is not None and len(recordings) == 2 and preview.get('fs') is not None:
+                loopback, mic = (np.asarray(channel, dtype=float) for channel in recordings)
+                fs = int(preview['fs'])
+        else:
+            latest_file, loopback, mic, fs = _load_latest_capture()
+            title_name = latest_file.name if latest_file is not None else 'current capture'
         if loopback is None or mic is None or fs is None:
             self.raw_section.set_detail("Waiting for raw capture...")
             self.raw_loopback.clear_data("No raw capture available", "Raw Loopback Signal")
             self.raw_mic.clear_data("No raw capture available", "Raw Microphone Signal")
             return
-        title_name = latest_file.name if latest_file is not None else "current capture"
         self.raw_section.set_detail(title_name)
 
         # Show the full signal (no zoom)

@@ -17,13 +17,16 @@ import sys
 import threading
 import time
 import uuid
+from dataclasses import replace
 from abc import ABC, abstractmethod
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from typing import Callable, Optional, Dict, Any, List, Tuple
 from nfs import registry
 from nfs.capture_detection import (CaptureContext, CaptureDetector, DEFAULT_DETECTORS,
-                                   find_issue)
+                                   DetectorSession, DetectorPreparationCancelled,
+                                   find_issue, prepare_detectors, archive_detector_state)
+from nfs.capture_detection import DetectorEvent, DetectorDecision
 
 import numpy as np
 import scipy.signal
@@ -72,6 +75,12 @@ from .audio_capture import (_set_realtime_priority,
 
 
 class IAudio(ABC):
+    def begin_measurement_set(self, should_continue=None) -> None:
+        """Prepare any detector state before the first measurement point."""
+
+    def end_measurement_set(self) -> None:
+        """Release detector state after a set finishes, fails or is stopped."""
+
     @abstractmethod
     def capture_ir(self, ir_path: Path, dist_path: Path) -> dict[str, Any]:
         """Capture, process, and save IR to the given paths."""
@@ -136,6 +145,11 @@ class Audio(IAudio):
         self.cap = capture_config
         self._hardware_io = hardware_io
         self.detectors = tuple(DEFAULT_DETECTORS if detectors is None else detectors)
+        self._detector_state = {}
+        self._measurement_set_active = False
+        self._detector_observer = None
+        self._detector_should_continue = None
+        self._disabled_detectors = set()
         self.sweep_gen = sweep_gen
         self.marker_gen = marker_gen
         self.alignment_engine = alignment_engine
@@ -192,6 +206,7 @@ class Audio(IAudio):
         when two acquisitions use the same directory. Pausing a scan does not
         call this method, so its references remain shared after resuming.
         """
+        self.end_measurement_set()
         self._reference_session_id = uuid.uuid4().hex
         self.rec_dir = Path(session_path)
         self.dist_dir = self.rec_dir / "Distortion"
@@ -199,9 +214,76 @@ class Audio(IAudio):
         self._ensure_directories()
         logger.debug(f"Audio session directory updated to: {session_path}")
 
+    def begin_measurement_set(self, should_continue=None) -> None:
+        self.end_measurement_set()
+        self._detector_should_continue = should_continue
+
+        def acquire(num_sweeps=None):
+            if should_continue is not None and not should_continue():
+                raise DetectorPreparationCancelled()
+            original = self.cap
+            try:
+                if num_sweeps is not None:
+                    self.cap = dict(original, num_sweeps=num_sweeps)
+                result = self._run_sweep()
+            finally:
+                self.cap = original
+                self._capture_component()  # Restore the shared capture settings, even on error.
+            if should_continue is not None and not should_continue():
+                raise DetectorPreparationCancelled()
+            return result
+
+        # Prepare into a temporary dictionary: an incomplete reference is never
+        # made available to measurements if acquisition or validation fails.
+        state = prepare_detectors(self.detectors, DetectorSession(
+            self.hw['fs'], self.cap, acquire, self._notify_detector,
+            self._detector_observer is not None, self._capture_duration_s(), self._disabled_detectors,
+            single_capture_duration_s=self._capture_duration_s(num_sweeps=1)))
+        self._detector_state = state
+        self._measurement_set_active = True
+
+    def end_measurement_set(self) -> None:
+        self._detector_state = {}
+        self._measurement_set_active = False
+        self._disabled_detectors = set()
+        self._detector_should_continue = None
+
+    def set_detector_observer(self, observer) -> None:
+        self._detector_observer = observer
+
+    def _capture_duration_s(self, num_sweeps=None):
+        repeats = self.cap.get('num_sweeps', 1) if num_sweeps is None else num_sweeps
+        return (self.cap.get('pre_sil_ms', 0) / 1000
+                + repeats * (getattr(self.marker_gen, 'dur_ms', 100) / 1000
+                             + self.cap.get('marker_gap_ms', 20) / 1000
+                             + self.cap.get('sweep_dur_s', 0)
+                             + self.cap.get('post_sil_ms', 0) / 1000)
+                + self.cap.get('post_sil_ms', 0) / 1000)
+
+    def _notify_detector(self, event):
+        if self._detector_observer is None:
+            return
+        if event.hold_seconds and event.decision is None:
+            event = replace(event, decision=DetectorDecision())
+        self._detector_observer(event)
+        if event.decision is not None:
+            choice = event.decision.wait(self._detector_should_continue)
+            if choice == 'cancel' and event.kind not in ('preparation_failed', 'point_accepted', 'point_failed'):
+                raise DetectorPreparationCancelled()
+
+    def _notify_rejection(self, reason, attempt, limit, point, detector='alignment'):
+        self._notify_detector(DetectorEvent(
+            'attempt_rejected', 'Capture fault detection', f'Attempt {attempt} of {limit} rejected.',
+            detector=detector, details=reason, point=point, attempt=attempt, max_attempts=limit))
+
+    def _detector_context(self, result, metrics=None, ir_full=None, ir_linear=None):
+        return CaptureContext(result, self.hw['fs'], self.cap, metrics, ir_full, ir_linear,
+                              self._detector_state, self._measurement_set_active,
+                              disabled_detectors=frozenset(self._disabled_detectors))
+
     def _save_shared_reference(self, arrays: Dict[str, np.ndarray],
                                acquisition: Optional[Dict[str, Any]] = None) -> Dict[str, str]:
-        """Save exact digital references once per session and return their link.
+        """Save digital references and prepared detector state in the shared NPZ.
 
         Hash the samples, their names/shapes/dtypes and acquisition metadata. This means
         changed playback or inverse data cannot silently reuse an older file,
@@ -212,6 +294,10 @@ class Audio(IAudio):
         metadata = dict(acquisition or {})
         metadata.update(schema="shared_reference_v2", sample_rate=self.hw['fs'])
         payload = dict(arrays)
+        detector_arrays = archive_detector_state(self.detectors, self._detector_state)
+        if payload.keys() & detector_arrays.keys():
+            raise ValueError('Detector archive fields cannot replace digital reference fields')
+        payload.update(detector_arrays)
         payload['metadata_json'] = np.array(json.dumps(
             metadata, sort_keys=True, separators=(',', ':'), allow_nan=False))
         digest = hashlib.sha256()
@@ -398,14 +484,25 @@ class Audio(IAudio):
     def _prepare_sweep(self) -> Dict[str, Any]:
         return self._capture_component()._prepare_sweep()
 
-    def _finish_sweep(self, prepared: Dict[str, Any], rec_mic: np.ndarray,
-                      rec_loop: np.ndarray) -> Dict[str, Any]:
-        return self._ir_component()._finish_sweep(prepared, rec_mic, rec_loop)
+    def _raw_capture(self, prepared, rec_mic, rec_loop) -> Dict[str, Any]:
+        capture = self._capture_component()._raw_capture(prepared, rec_mic, rec_loop)
+        if self._disabled_detectors:
+            disabled = sorted(self._disabled_detectors)
+            capture['capture_metadata']['disabled_detectors_for_scan'] = disabled
+            capture['acquisition_metadata']['disabled_detectors_for_scan'] = disabled
+        return capture
+
+    def _align_capture(self, capture: Dict[str, Any]) -> Dict[str, Any]:
+        return self._ir_component()._align_capture(capture)
+
+    def _finish_sweep(self, prepared, rec_mic, rec_loop) -> Dict[str, Any]:
+        """Prepare captured buffers for DSP (offline replay convenience)."""
+        return self._align_capture(self._raw_capture(prepared, rec_mic, rec_loop))
 
     def _run_sweep(self) -> Dict[str, Any]:
         """
         Executes the playback and recording of the composite signal.
-        Handles stream synchronization, multiple sweep averaging, and loopback alignment.
+        Returns untouched raw recordings; detectors run before DSP alignment/averaging.
         """
         prepared = self._prepare_sweep()
         if self._hardware_io is not None:
@@ -414,7 +511,7 @@ class Audio(IAudio):
             prepared['timing'].update(observed)
         else:
             rec_mic, rec_loop = self._capture_buffers(prepared)
-        return self._finish_sweep(prepared, rec_mic, rec_loop)
+        return self._raw_capture(prepared, rec_mic, rec_loop)
 
     def _capture_buffers(self, prepared: Dict[str, Any], recordings=None):
         return self._capture_component()._capture_buffers(prepared, recordings)
@@ -454,11 +551,36 @@ class Audio(IAudio):
         last_rejection_reason = None
 
         for attempt in range(max_retries):
+            if attempt:
+                if self._detector_should_continue is not None and not self._detector_should_continue():
+                    raise DetectorPreparationCancelled()
+                self._notify_detector(DetectorEvent(
+                    'retry_started', 'Repeating suspect capture', 'Capturing a replacement sweep sequence…',
+                    details=last_rejection_reason or '', point=base_label,
+                    attempt=attempt + 1, max_attempts=max_retries, duration_s=self._capture_duration_s()))
             # 1. Capture Raw Data (Run Sweeps)
             try:
                 result = self._run_sweep()
+                issue = find_issue(self.detectors, "raw", self._detector_context(result))
+                if issue is not None:
+                    last_rejection_reason = issue.reason
+                    self._notify_rejection(issue.reason, attempt + 1, max_retries, base_label, issue.detector)
+                    logger.warning(
+                        f"Capture rejected for {ir_path.name}: {issue.reason}, "
+                        f"retry {attempt + 1}/{max_retries}")
+                    self._save_failed_capture(
+                        result, base_label, attempt + 1, max_retries, last_rejection_reason, save)
+                    continue
+
+                if attempt:
+                    self._notify_detector(DetectorEvent(
+                        'checking', 'Checking replacement capture', 'Checking alignment and capture quality…',
+                        point=base_label, attempt=attempt + 1, max_attempts=max_retries))
+                result = self._align_capture(result)
+
             except CaptureAlignmentError as exc:
                 last_rejection_reason = f"alignment failure: {exc}"
+                self._notify_rejection(last_rejection_reason, attempt + 1, max_retries, base_label)
                 logger.warning(
                     f"Capture rejected for {ir_path.name}: {last_rejection_reason}, "
                     f"retry {attempt + 1}/{max_retries}")
@@ -473,16 +595,6 @@ class Audio(IAudio):
                     f"exception will be propagated")
                 raise
 
-            issue = find_issue(self.detectors, "raw", CaptureContext(result, self.hw['fs'], self.cap))
-            if issue is not None:
-                last_rejection_reason = issue.reason
-                logger.warning(
-                    f"Capture rejected for {ir_path.name}: {issue.reason}, "
-                    f"retry {attempt + 1}/{max_retries}")
-                self._save_failed_capture(
-                    result, base_label, attempt + 1, max_retries, last_rejection_reason, save)
-                continue
-
             # Deconvolution + quality gate
             ir_full, ir_linear = self._process_capture(result)
 
@@ -493,10 +605,10 @@ class Audio(IAudio):
             )
 
             issue = find_issue(
-                self.detectors, "metrics", CaptureContext(
-                    result, self.hw['fs'], self.cap, metrics, ir_full, ir_linear))
+                self.detectors, "metrics", self._detector_context(result, metrics, ir_full, ir_linear))
             if issue is not None:
                 last_rejection_reason = issue.reason
+                self._notify_rejection(issue.reason, attempt + 1, max_retries, base_label, issue.detector)
                 logger.warning(
                     f"Capture rejected for {ir_path.name}: {issue.reason}, "
                     f"retry {attempt + 1}/{max_retries}")
@@ -506,6 +618,10 @@ class Audio(IAudio):
                 continue
 
             # Success: proceed to save and return
+            if attempt:
+                self._notify_detector(DetectorEvent(
+                    'point_accepted', 'Capture accepted', f'Replacement accepted on attempt {attempt + 1} of {max_retries}.',
+                    point=base_label, attempt=attempt + 1, max_attempts=max_retries, hold_seconds=1.0))
             logger.info(
                 f"DSP Metrics: SNR={metrics['snr_db']:.1f}dB, THD={metrics['thd_pct']:.2f}%, "
                 f"marker clarity={metrics['psr_db']:.1f}dB / "
@@ -563,6 +679,11 @@ class Audio(IAudio):
 
         # All attempts exhausted — return a failure result without saving files
         failure_reason = last_rejection_reason or "no capture attempts were configured"
+        stop_scan = self.cap.get('stop_on_capture_failure', False)
+        self._notify_detector(DetectorEvent(
+            'point_failed', 'Capture rejected', f'All {max_retries} capture attempts were rejected.',
+            details=f"{failure_reason}\n\n" + ('Stopping the scan.' if stop_scan else 'Skipping this point and continuing the scan.'),
+            point=base_label, attempt=max_retries, max_attempts=max_retries, hold_seconds=1.0))
         logger.error(
             f"Measurement failed after {max_retries} attempts: {failure_reason}, "
             f"skipping {ir_path.name}")
@@ -576,6 +697,7 @@ class Audio(IAudio):
             "name": ir_path.name,
             "saved": False,
             "error": f"Measurement failed after {max_retries} attempts: {failure_reason}",
+            "stop_scan": stop_scan,
         }
 
     def measure_ir(self, position: CylindricalPosition, prefix: str | None = None,
@@ -594,13 +716,19 @@ class Audio(IAudio):
 
         for attempt in range(max_retries):
             # 1. Capture Raw Data (Run Sweeps)
-            result = self._run_sweep()
+            try:
+                result = self._run_sweep()
 
-            issue = find_issue(self.detectors, "raw", CaptureContext(result, self.hw['fs'], self.cap))
-            if issue is not None:
-                logger.warning(
-                    f"Preview: Capture rejected ({issue.reason}), "
-                    f"retry {attempt + 1}/{max_retries}")
+                issue = find_issue(self.detectors, "raw", self._detector_context(result))
+                if issue is not None:
+                    logger.warning(
+                        f"Preview: Capture rejected ({issue.reason}), "
+                        f"retry {attempt + 1}/{max_retries}")
+                    continue
+
+                result = self._align_capture(result)
+            except CaptureAlignmentError as exc:
+                logger.warning(f"Preview: Alignment failed ({exc}), retry {attempt + 1}/{max_retries}")
                 continue
 
             # Deconvolution + quality gate
@@ -610,8 +738,7 @@ class Audio(IAudio):
             metrics = self.verifier.calculate_metrics(ir_full, ir_linear, result.get("psr", 0.0))
 
             issue = find_issue(
-                self.detectors, "metrics", CaptureContext(
-                    result, self.hw['fs'], self.cap, metrics, ir_full, ir_linear))
+                self.detectors, "metrics", self._detector_context(result, metrics, ir_full, ir_linear))
             if issue is not None:
                 logger.warning(
                     f"Preview: Capture rejected ({issue.reason}), "
@@ -633,6 +760,7 @@ class Audio(IAudio):
                 "sweep_metadata": self._sweep_metadata(result),
                 "metrics": metrics,
                 "capture_metadata": result['capture_metadata'],
+                "raw_recordings": result['raw_recordings'],
                 "saved": False,
             }
 
@@ -705,7 +833,7 @@ class MockInterfaceAudio(Audio):
     def _inject_dropout_if_needed(self, result: Dict[str, Any]) -> Dict[str, Any]:
         """Inject stream underflow into the result to simulate a mid-sweep dropout.
 
-        Called after _finish_sweep in each _run_sweep to determine if this capture
+        Called after raw acquisition in each _run_sweep to determine if this capture
         should fail.  Every 10th capture triggers a one-time retry; every 20th
         capture fails permanently (all retries will be exhausted).
         """
@@ -817,8 +945,9 @@ class MockInterfaceAudio(Audio):
         capture_margin = int(0.020 * fs) + (len(fir_taps) - 1) // 2
         rec_mic = np.pad(rec_mic, (0, capture_margin))
         rec_loop = np.pad(rec_loop, (0, capture_margin))
+        prepared['timing']['total_samples'] = len(rec_loop)
 
-        result = self._finish_sweep(prepared, rec_mic, rec_loop)
+        result = self._raw_capture(prepared, rec_mic, rec_loop)
 
         # Simulate mid-sweep dropouts for testing the retry system.
         # Every 10th capture: transient dropout (retry succeeds).
@@ -1024,8 +1153,9 @@ class AudioFactory:
             'post_sil_ms': AudioFactory._get_required_config(config, sweep_section, 'post_sil_ms', float),
             'marker_gap_ms': 20.0,  # Fixed marker settling gap; adjust here if needed.
             'max_capture_retries': config.getint(sweep_section, 'max_capture_retries', fallback=3),
+            'stop_on_capture_failure': config.getboolean(sweep_section, 'stop_on_capture_failure', fallback=False),
             **{detector.enabled_key: config.getboolean(
-                sweep_section, detector.enabled_key, fallback=True)
+                sweep_section, detector.enabled_key, fallback=detector.default_enabled)
                 for detector in DEFAULT_DETECTORS},
             'retry_psr_threshold': config.getfloat(sweep_section, 'retry_psr_threshold', fallback=3.0),
             'retry_thd_threshold': config.getfloat(sweep_section, 'retry_thd_threshold', fallback=10.0),

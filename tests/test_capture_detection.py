@@ -14,7 +14,7 @@ def test_each_detector_can_be_disabled_without_running_it(detector):
     issue = CaptureIssue(detector.name, 'test rejection')
     check = Mock(return_value=issue)
     detectors = (replace(detector, check=check),)
-    context = CaptureContext({}, 48000, {}, metrics={})
+    context = CaptureContext({}, 48000, {detector.enabled_key: True}, metrics={})
     assert find_issue(detectors, detector.stage, context) is issue
     check.assert_called_once_with(context)
     check.reset_mock()

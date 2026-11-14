@@ -33,7 +33,7 @@ def test_ir_component_reprocesses_arrays_without_device_or_coordinator():
     plan = acquisition._prepare_sweep()
     processor = SweepToIR(hw, cap, sweep, AlignmentEngine(48000, 2, False, 10, 100),
                           DeconvolutionEngine(48000))
-    accepted = processor._finish_sweep(plan, plan['tx_speaker'], plan['tx_loop'])
+    accepted = processor._align_capture(acquisition._raw_capture(plan, plan['tx_speaker'], plan['tx_loop']))
     first = processor._process_capture(accepted)
     second = processor._process_capture(accepted)
     for before, after in zip(first, second):

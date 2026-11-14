@@ -149,6 +149,28 @@ def test_test_sweep_uses_audio_backend_when_scanner_backend_is_missing(monkeypat
     assert "preview_created_at" in manager.preview_ir
 
 
+def test_project_context_clears_previous_test_sweep(tmp_path):
+    manager = BackendManager('config.ini')
+    try:
+        manager.preview_ir = {'fs': 48000, 'ir_linear': [1.]}
+        manager.set_project_dir(tmp_path/'loaded_project')
+        assert manager.get_preview_ir() is None
+    finally:
+        manager.shutdown()
+
+
+def test_saved_measurement_clears_test_sweep_preview():
+    from types import SimpleNamespace
+    manager = BackendManager('config.ini')
+    try:
+        manager.nfs = SimpleNamespace(take_single_measurement=lambda: None)
+        manager.preview_ir = {'fs': 48000, 'ir_linear': [1.]}
+        manager.take_single_measurement()
+        assert manager.get_preview_ir() is None
+    finally:
+        manager.shutdown()
+
+
 def test_backend_updates_sine_level_on_active_audio_target(monkeypatch):
     audio = FakeAudio()
     monkeypatch.setattr(qt_backend.AudioFactory, "create", lambda _config_file: audio)
@@ -362,3 +384,36 @@ def test_reload_rejects_active_measurement_thread():
     finally:
         manager._measurement_thread = None
         manager.shutdown()
+
+
+def test_shutdown_releases_a_worker_waiting_for_detector_decision():
+    import threading
+    from types import SimpleNamespace
+    from nfs.capture_detection.events import DetectorDecision
+
+    manager = BackendManager('config.ini')
+    stopped = threading.Event()
+    waiting = threading.Event()
+    choices = []
+    manager.nfs = SimpleNamespace(stop_measurement_set=stopped.set, stop_sine=lambda: None,
+                                  shutdown=lambda: None)
+
+    def pending():
+        waiting.set()
+        choices.append(DetectorDecision().wait(lambda: not stopped.is_set()))
+
+    task = threading.Thread(target=lambda: manager._run_audio(pending))
+    task.start()
+    assert waiting.wait(2)
+    shutdown = threading.Thread(target=manager.shutdown)
+    shutdown.start()
+    try:
+        shutdown.join(2)
+        assert not shutdown.is_alive()
+        assert choices == ['cancel']
+    finally:
+        stopped.set()
+        task.join(2)
+        shutdown.join(2)
+        if manager._audio_thread.is_alive():
+            manager.shutdown()

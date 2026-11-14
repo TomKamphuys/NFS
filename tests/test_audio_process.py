@@ -259,7 +259,7 @@ def test_meters_do_not_wait_for_ongoing_capture(client):
     assert not errors
 
 
-def test_audio_keeps_preparation_and_finishing_in_parent(client, monkeypatch):
+def test_audio_keeps_preparation_and_raw_packaging_in_parent(client, monkeypatch):
     from test_audio_asio import make_engine
     engine = make_engine()
     engine._hardware_io = client
@@ -277,7 +277,7 @@ def test_audio_keeps_preparation_and_finishing_in_parent(client, monkeypatch):
         np.testing.assert_array_equal(loop, reference * 0.25)
         return 'processed in parent'
     monkeypatch.setattr(engine, '_prepare_sweep', prepare)
-    monkeypatch.setattr(engine, '_finish_sweep', finish)
+    monkeypatch.setattr(engine, '_raw_capture', finish)
     assert engine._run_sweep() == 'processed in parent'
 
 

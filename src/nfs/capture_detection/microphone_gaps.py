@@ -4,6 +4,7 @@ import numpy as np
 from loguru import logger
 
 from .base import CaptureContext, CaptureIssue
+from .regions import first_sweep_start
 
 def microphone_gaps(context: CaptureContext) -> CaptureIssue | None:
     """Scan the raw microphone recording for sudden energy drops (dropouts).
@@ -24,13 +25,9 @@ def microphone_gaps(context: CaptureContext) -> CaptureIssue | None:
     rec_mic = raw_recordings[1]  # microphone channel
     fs = context.fs
 
-    # Use the detected alignment positions to find the actual sweep region.
-    aligned_repeats = result['capture_metadata'].get('aligned_repeats', [])
-    if not aligned_repeats:
-        return None  # No alignment data — skip this check
-
-    first = aligned_repeats[0]
-    sweep_start = first.get('sweep_start_sample', 0)
+    sweep_start = first_sweep_start(context)
+    if sweep_start is None:
+        return None
     sweep_samples = result['capture_metadata'].get('sweep_samples', 0)
     guard_samples = result['capture_metadata'].get('guard_samples', 0)
     sweep_end = sweep_start + sweep_samples

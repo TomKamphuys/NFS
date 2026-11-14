@@ -30,7 +30,7 @@ class DSPVerificationTool:
                           linear_start_sample: Optional[int] = None) -> Dict[str, float]:
         """
         Calculates a suite of DSP quality metrics.
-        
+
         :param h_full: Full IR including distortion products at negative time.
         :param h_linear: Cropped linear IR.
         :param psr: Peak-to-Sidelobe Ratio from the alignment engine.
@@ -615,7 +615,7 @@ class DeconvolutionEngine:
         the default export length and
         fade duration independently of inverse support. Omitted timing uses
         the legacy origin len(inverse)-1 and a sweep length of origin+1.
-        
+
         Processing order:
           1. Resolve timing and allocate enough FFT space for linear convolution.
           2. Apply the digital sweep inverse and optional driver compensation.
@@ -637,7 +637,7 @@ class DeconvolutionEngine:
         nfft = int(2 ** np.ceil(np.log2(n_conv)))
 
         # 1. Transform both complete arrays onto the same padded frequency grid.
-        # rfft (real FFT) is used since our time-domain signals are purely real, 
+        # rfft (real FFT) is used since our time-domain signals are purely real,
         # which is faster and saves memory compared to a full complex FFT.
         mic_spectrum = np.fft.rfft(mic_data, n=nfft)
         inverse_spectrum = np.fft.rfft(inv_data, n=nfft)
@@ -731,116 +731,42 @@ class SweepToIR:
         self.alignment_engine, self.deconv_engine = alignment_engine, deconv_engine
         self.harmonic_injector, self.protection_filter = harmonic_injector, protection_filter
 
-    def _finish_sweep(self, prepared: Dict[str, Any], rec_mic: np.ndarray,
-                      rec_loop: np.ndarray) -> Dict[str, Any]:
-        """Align/average a completed capture and retain enough context for exact replay.
-
-        The raw arrays remain untouched. Derived arrays contain the sweep and
-        recorded decay, with only the microphone recording boundary faded.
-        Hardware and mock acquisition both call this same processing stage.
-        """
-        # The recorded marker supplies timing. It does not replace the clean
-        # digital sweep used to calculate the inverse filter.
-        timing = dict(prepared['timing'])
-        failure_context = {
-            "capture_metadata": dict(timing),
-            "raw_recordings": (rec_loop, rec_mic),
-            "digital_reference": {
-                "fundamental": prepared['fundamental'],
-                "inverse": prepared['inverse'],
-                "speaker_sweep": prepared['speaker_sweep'],
-                "loopback_sweep": prepared['reference_sweep'],
-                "marker": prepared['marker'],
-                "transmitted_speaker": prepared['tx_speaker'],
-                "transmitted_loopback": prepared['tx_loop'],
-            },
-        }
+    def _align_capture(self, capture: Dict[str, Any]) -> Dict[str, Any]:
+        """Align and average an accepted raw capture for deconvolution."""
+        timing = dict(capture['capture_metadata'])
+        references = capture['digital_reference']
+        rec_loop, rec_mic = capture['raw_recordings']
         try:
             avg_mic, avg_loop, mic_slices, psr = self.alignment_engine.sync_and_average(
-                rec_mic, rec_loop, prepared['marker'], timing['pre_samples'],
+                rec_mic, rec_loop, references['marker'], timing['pre_samples'],
                 timing['slot_samples'], timing['sweep_samples'],
                 sweep_offset_samples=timing['sweep_offset_samples'],
                 capture_tail_samples=timing['capture_tail_samples'],
             )
         except CaptureAlignmentError as exc:
-            failure_metadata = failure_context["capture_metadata"]
+            failure_metadata = dict(timing)
             failure_metadata.update({
                 "aligned_repeats": [dict(row) for row in self.alignment_engine.last_alignment],
                 "raw_capture_channels": ["electrical_loopback", "microphone"],
                 "hardware_config": dict(self.hw),
                 "capture_config": dict(self.cap),
             })
-            exc.capture_context = failure_context
+            exc.capture_context = dict(capture, capture_metadata=failure_metadata)
             raise
-        # Store both planned and detected sample positions. They allow exact
-        # offline replay, including any interface latency or repeat jitter.
-        timing.update({
-            "aligned_repeats": self.alignment_engine.last_alignment,
-            "raw_capture_channels": ["electrical_loopback", "microphone"],
-            "loopback_role": ("marker_alignment_and_linear_response_correction"
-                              if self.cap.get('loopback_correction', True)
-                              else "record_only; marker_used_for_alignment"),
-            "inverse_reference": "clean_digital_fundamental",
-            "loop_tail_conditioning": "none",
-            "mic_tail_fade_ms": min(10.0, timing["capture_tail_samples"] * 1000.0 / self.hw["fs"]),
-            "sweep_start_hz": self.sweep_gen.f1,
-            "sweep_end_hz": self.hw['fs'] / 2,
-            "active_duration_s": self.sweep_gen.active_duration_s,
-            # L refers to the active exponential part, excluding the guards.
-            "L_s": self.sweep_gen.log_sweep_rate,
-            "guard_samples": self.sweep_gen.guard_samples,
-            "hardware_config": dict(self.hw), "capture_config": dict(self.cap),
-            "injected_harmonics_db": {
-                "H2": self.harmonic_injector.h2_db if self.harmonic_injector else None,
-                "H3": self.harmonic_injector.h3_db if self.harmonic_injector else None,
-            },
-            "speaker_protection_hpf": {
-                key: getattr(self.protection_filter, key)
-                for key in ('freq_hz', 'order', 'hpf_correction', 'hpf_corr_db_cap')
-            } if self.protection_filter else None,
-        })
+        timing['aligned_repeats'] = self.alignment_engine.last_alignment
         # A following marker must not contaminate the reference used for correction.
         # Use the earliest safe boundary across repeats, with a 2 ms marker margin.
         positions = timing['aligned_repeats']
         timing['loop_valid_samples'] = max(timing['sweep_samples'], min(
             [len(avg_loop)] + [b['marker_start_sample'] - a['sweep_start_sample'] - round(.002*self.hw['fs'])
                               for a, b in zip(positions, positions[1:])]))
-        # Keep raw channels untouched, aligned averages separately, and the
-        # original digital references at their actual array precision.
-        return {
-            "inv_sweep": prepared['inverse'],
-            "tx_ref_signal": np.pad(prepared['reference_sweep'], (0, timing['capture_tail_samples'])),
-            "rx_mic_conditioned": avg_mic, "rx_loop_aligned": avg_loop,
-            "debug_mic_slices": mic_slices, "psr": psr,
-            "psr_reference": self.alignment_engine.last_psr_reference,
-            "acquisition_metadata": {
-                "producer": "nfs.marker_then_dual_sweep_v1",
-                "raw_capture_channels": ["electrical_loopback", "microphone"],
-                "num_sweeps": self.cap['num_sweeps'],
-                "layout": {key: value for key, value in prepared['timing'].items()
-                           if key not in ('linear_ir_samples', 'actual_sample_rate',
-                                          'stream_status')},
-                "sweep": {
-                    "start_hz": self.sweep_gen.f1, "end_hz": self.hw['fs'] / 2,
-                    "active_duration_s": self.sweep_gen.active_duration_s,
-                    "log_sweep_rate_s": self.sweep_gen.log_sweep_rate,
-                    "guard_samples": self.sweep_gen.guard_samples,
-                    "level_dbfs": self.cap['sweep_level_dbfs'],
-                },
-                "speaker_protection_hpf": {
-                    "freq_hz": self.protection_filter.freq_hz,
-                    "order": self.protection_filter.order,
-                } if self.protection_filter else None,
-                "injected_harmonics_db": timing['injected_harmonics_db'],
-            },
-            "capture_metadata": timing,
-            "raw_recordings": (rec_loop, rec_mic),
-            "digital_reference": {
-                "fundamental": prepared['fundamental'], "inverse": prepared['inverse'],
-                "speaker_sweep": prepared['speaker_sweep'],
-                "loopback_sweep": prepared['reference_sweep'], "marker": prepared['marker'],
-            },
-        }
+        return dict(
+            capture, capture_metadata=timing, inv_sweep=references['inverse'],
+            tx_ref_signal=np.pad(references['loopback_sweep'], (0, timing['capture_tail_samples'])),
+            rx_mic_conditioned=avg_mic, rx_loop_aligned=avg_loop,
+            debug_mic_slices=mic_slices, psr=psr,
+            psr_reference=self.alignment_engine.last_psr_reference,
+        )
 
 
     def _process_capture(self, result: Dict[str, Any]) -> tuple[np.ndarray, np.ndarray]:
@@ -875,4 +801,3 @@ class SweepToIR:
             "guard_samples": self.sweep_gen.guard_samples,
             "active_duration_s": self.sweep_gen.active_duration_s,
         }
-

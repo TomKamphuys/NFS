@@ -40,7 +40,7 @@ def test_non_asio_stream_preserves_physical_channel_columns(monkeypatch, soundde
     monkeypatch.setattr(capture_io, '_AudioMeterWorker', lambda *args: Mock())
     prepared = engine._prepare_sweep()
     monkeypatch.setattr(engine, '_prepare_sweep', lambda: prepared)
-    monkeypatch.setattr(engine, '_finish_sweep', lambda p, mic, loop: (mic, loop))
+    monkeypatch.setattr(engine, '_raw_capture', lambda p, mic, loop: (mic, loop))
 
     class Stream:
         samplerate = engine.hw['fs']
