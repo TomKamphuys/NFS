@@ -26,21 +26,18 @@ class _HardwareSession:
     """Reuse the local stream implementation without constructing any DSP pipeline."""
 
     def __init__(self, hardware):
-        from .audio import Audio
+        from .audio_capture import AudioCapture
 
-        self.engine = Audio(
-            hardware, dict(num_sweeps=1, sweep_dur_s=0, debug_saves=False),
-            None, None, None, None,
-        )
+        self.engine = AudioCapture(hardware, dict(num_sweeps=1, sweep_dur_s=0, debug_saves=False))
 
     @staticmethod
     def get_devices_and_channels():
-        from .audio import get_devices_and_channels
+        from .audio_capture import get_devices_and_channels
         return get_devices_and_channels()
 
     @staticmethod
     def get_supported_sample_rates(*args):
-        from .audio import get_supported_sample_rates
+        from .audio_capture import get_supported_sample_rates
         return get_supported_sample_rates(*args)
 
     def capture(self, buffers):
@@ -70,7 +67,7 @@ def _publish_meter(shared, state):
 
 def _serve(connection, meter, device_factory):
     """Spawn entry point. All backend access and stream lifetime stay here."""
-    from . import audio
+    from . import audio_capture as audio
     from loguru import logger
 
     # The child must not write unassociated warnings to the parent's console.

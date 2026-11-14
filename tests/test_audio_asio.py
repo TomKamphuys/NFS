@@ -1,3 +1,4 @@
+import nfs.audio_capture as capture_io
 """ASIO routing and Windows COM lifetime tests; no audio device is opened."""
 
 import sys
@@ -44,7 +45,7 @@ def sounddevice(monkeypatch):
     monkeypatch.setitem(sys.modules, "sounddevice", module)
     # Isolate this fixture from attributes patched onto the lazy adapter by
     # other tests; every stream in this module must use the fake backend.
-    monkeypatch.setattr(audio, "sd", module)
+    monkeypatch.setattr(capture_io, "sd", module)
     return module
 
 
@@ -60,7 +61,7 @@ def test_stopping_unused_audio_does_not_load_backend(monkeypatch):
     def forbidden(name):
         pytest.fail("Stopping unused audio must not import sounddevice")
 
-    monkeypatch.setattr(audio.sd, "import_module", forbidden)
+    monkeypatch.setattr(capture_io.sd, "import_module", forbidden)
     engine = make_engine()
     engine.stop_sine()
     engine.stop_sine()
@@ -132,9 +133,9 @@ def test_stream_closes_before_com_release_and_uses_asio_roles(
         NamingConventionFactory.create('dimitri'),
         DebugArtifactFactory.create(False, hw),
     )
-    monkeypatch.setattr(engine, "_get_api_name", lambda dev: "ASIO")
+    monkeypatch.setattr(engine.capture_engine, "_get_api_name", lambda dev: "ASIO")
     meter = Mock()
-    monkeypatch.setattr(audio, "_AudioMeterWorker", lambda *args: meter)
+    monkeypatch.setattr(capture_io, "_AudioMeterWorker", lambda *args: meter)
     # Exercise the new capture sequence while isolating channel routing from DSP.
     prepared = engine._prepare_sweep()
     capture_samples = prepared['timing']['total_samples']
@@ -192,9 +193,9 @@ def test_stream_closes_before_com_release_and_uses_asio_roles(
 @pytest.mark.parametrize('failure', [None, 'open', 'start', 'stop'])
 def test_continuous_sine_owns_com_until_close(monkeypatch, ole32, sounddevice, failure):
     engine = make_engine()
-    monkeypatch.setattr(engine, '_get_api_name', lambda dev: 'ASIO')
+    monkeypatch.setattr(engine.capture_engine, '_get_api_name', lambda dev: 'ASIO')
     meter = Mock()
-    monkeypatch.setattr(audio, '_AudioMeterWorker', lambda *args: meter)
+    monkeypatch.setattr(capture_io, '_AudioMeterWorker', lambda *args: meter)
     events = []
     ole32.CoUninitialize.side_effect = lambda: events.append('release')
 
@@ -226,7 +227,7 @@ def test_continuous_sine_owns_com_until_close(monkeypatch, ole32, sounddevice, f
         ole32.CoUninitialize.assert_not_called()
         engine.stop_sine()
     assert events == (['release'] if failure == 'open' else ['close', 'release'])
-    assert engine._sine_stream is None and engine._sine_com_context is None
+    assert engine.capture_engine._sine_stream is None and engine.capture_engine._sine_com_context is None
     engine.stop_sine()
     ole32.CoUninitialize.assert_called_once_with()
 
@@ -250,8 +251,8 @@ def test_device_lookup_never_restarts_portaudio(monkeypatch, sounddevice):
 @pytest.mark.parametrize('operation', ['capture', 'sine'])
 def test_failed_stream_start_closes_allocation_before_com_release(monkeypatch, sounddevice, ole32, operation):
     engine = make_engine()
-    monkeypatch.setattr(engine, '_get_api_name', lambda dev: 'ASIO')
-    monkeypatch.setattr(audio, '_AudioMeterWorker', lambda *args: Mock())
+    monkeypatch.setattr(engine.capture_engine, '_get_api_name', lambda dev: 'ASIO')
+    monkeypatch.setattr(capture_io, '_AudioMeterWorker', lambda *args: Mock())
     closed = []
     class BrokenStream:
         def __init__(self, **kwargs):

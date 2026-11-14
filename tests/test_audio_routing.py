@@ -1,3 +1,4 @@
+import nfs.audio_capture as capture_io
 """Physical channel mapping and sweep-only protection regressions."""
 import sys
 from types import ModuleType
@@ -21,7 +22,7 @@ def sounddevice(monkeypatch):
     module.query_hostapis = None
     module.query_devices = None
     monkeypatch.setitem(sys.modules, "sounddevice", module)
-    monkeypatch.setattr(audio, "sd", module)
+    monkeypatch.setattr(capture_io, "sd", module)
     return module
 
 
@@ -33,10 +34,10 @@ def test_non_asio_stream_preserves_physical_channel_columns(monkeypatch, soundde
     engine = make_engine()
     engine.hw.update(ch_in_loop=3, ch_in_mic=1, ch_out_spkr=2, ch_out_ref=0,
                      wasapi_exclusive=True)
-    monkeypatch.setattr(engine, '_get_api_name', lambda dev: api)
+    monkeypatch.setattr(engine.capture_engine, '_get_api_name', lambda dev: api)
     monkeypatch.setattr(sounddevice, 'WasapiSettings', lambda **kw: kw)
     monkeypatch.setattr(sounddevice, 'stop', lambda: None)
-    monkeypatch.setattr(audio, '_AudioMeterWorker', lambda *args: Mock())
+    monkeypatch.setattr(capture_io, '_AudioMeterWorker', lambda *args: Mock())
     prepared = engine._prepare_sweep()
     monkeypatch.setattr(engine, '_prepare_sweep', lambda: prepared)
     monkeypatch.setattr(engine, '_finish_sweep', lambda p, mic, loop: (mic, loop))
@@ -83,11 +84,11 @@ def test_sine_bypasses_sweep_protection_in_both_modes(monkeypatch, sounddevice, 
     engine = make_engine()
     fs = engine.hw['fs']
     engine.protection_filter = audio.ProtectionFilter(fs, 10000, 4)
-    monkeypatch.setattr(engine, '_get_api_name', lambda dev: 'ASIO')
-    monkeypatch.setattr(audio, '_asio_thread_context', lambda enabled: nullcontext())
+    monkeypatch.setattr(engine.capture_engine, '_get_api_name', lambda dev: 'ASIO')
+    monkeypatch.setattr(capture_io, '_asio_thread_context', lambda enabled: nullcontext())
     monkeypatch.setattr(sounddevice, 'AsioSettings', lambda **kw: kw)
     monkeypatch.setattr(sounddevice, 'stop', lambda: None)
-    monkeypatch.setattr(audio, '_AudioMeterWorker', lambda *args: Mock())
+    monkeypatch.setattr(capture_io, '_AudioMeterWorker', lambda *args: Mock())
     blocks = []
     count = round(.01 * fs)
 

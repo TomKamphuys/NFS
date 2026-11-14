@@ -1,3 +1,4 @@
+import nfs.audio_capture as capture_io
 import pytest
 import numpy as np
 import scipy.signal
@@ -35,7 +36,7 @@ def test_audio_meter_worker_routes_channels_and_publishes_weighted_levels(monkey
         published.append((outputs.copy(), inputs.copy(), kwargs))
         updated.set()
 
-    monkeypatch.setattr(audio_module, "update_audio_meter_state", capture_update)
+    monkeypatch.setattr(capture_io, "update_audio_meter_state", capture_update)
     worker = _AudioMeterWorker(fs)
     worker.start()
     outputs = np.zeros((512, 4), dtype=np.float32)
@@ -87,7 +88,7 @@ def test_audio_meter_worker_defers_callback_status_logging(monkeypatch, fs):
 def test_audio_meter_worker_skips_backlog_and_processes_latest_100ms(monkeypatch, fs):
     published = []
     monkeypatch.setattr(
-        audio_module,
+        capture_io,
         "update_audio_meter_state",
         lambda outputs, inputs, **kwargs: published.append((outputs.copy(), inputs.copy())),
     )
@@ -587,7 +588,7 @@ def test_audio_factory_accepts_comma_decimal_config_values(tmp_path):
     assert audio.protection_filter.hpf_corr_db_cap == 12.0
 
 
-@patch("nfs.audio.get_devices_and_channels")
+@patch("nfs.audio_capture.get_devices_and_channels")
 def test_find_device_id_by_name_handles_changed_id(mock_catalog):
     mock_catalog.return_value = {
         11: {
@@ -609,7 +610,7 @@ def test_find_device_id_by_name_handles_changed_id(mock_catalog):
     assert find_device_id_by_name("Missing", "ASIO") is None
 
 
-@patch("nfs.audio.get_devices_and_channels")
+@patch("nfs.audio_capture.get_devices_and_channels")
 def test_find_device_id_by_name_does_not_fall_back_to_wrong_hostapi(mock_catalog):
     mock_catalog.return_value = {
         4: {

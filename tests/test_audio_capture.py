@@ -1,3 +1,4 @@
+import nfs.audio_capture as capture_io
 """Capture/DSP regressions using synthetic signals; no real hardware is opened."""
 
 from dataclasses import replace
@@ -28,10 +29,10 @@ FS = 48000
 @pytest.mark.parametrize('operation', ['sweep', 'finite_sine', 'continuous_sine'])
 def test_live_meter_always_active(monkeypatch, operation):
     engine = make_engine()
-    monkeypatch.setattr(engine, '_get_api_name', lambda dev: 'MME')
+    monkeypatch.setattr(engine.capture_engine, '_get_api_name', lambda dev: 'MME')
     meter = Mock()
     factory = Mock(return_value=meter)
-    monkeypatch.setattr(audio, '_AudioMeterWorker', factory)
+    monkeypatch.setattr(capture_io, '_AudioMeterWorker', factory)
     prepared = engine._prepare_sweep()
     mic, loop = ideal_capture(prepared)
     count = len(mic) if operation == 'sweep' else 480
@@ -61,7 +62,7 @@ def test_live_meter_always_active(monkeypatch, operation):
         def __exit__(self, *args):
             self.close()
 
-    monkeypatch.setattr(audio.sd, 'Stream', Stream)
+    monkeypatch.setattr(capture_io.sd, 'Stream', Stream)
     if operation == 'sweep':
         result = engine._run_sweep()
         np.testing.assert_array_equal(result['raw_recordings'][0], loop)
@@ -721,7 +722,7 @@ def test_check_silence_gaps_detects_gap_in_loopback(monkeypatch):
 
 def test_unreliable_marker_logs_search_and_loopback_levels(monkeypatch):
     log = Mock()
-    monkeypatch.setattr(audio, 'logger', log)
+    monkeypatch.setattr(importlib.import_module(AlignmentEngine.__module__), 'logger', log)
     e = make_engine()
     marker = np.ones(16, dtype=np.float32)
 

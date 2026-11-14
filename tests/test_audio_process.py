@@ -7,7 +7,7 @@ import time
 import numpy as np
 import pytest
 
-import nfs.audio as audio
+import nfs.audio_capture as audio
 import nfs.audio_process as remote
 
 
