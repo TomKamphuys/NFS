@@ -664,13 +664,6 @@ class AudioSetupPane(QWidget):
         self.align = QCheckBox("Align to first marker")
         self.align.setChecked(_parse_bool(_value(parser, "sweep", "align_to_first_marker", "False")))
         self.align.setStyleSheet(toggle_style())
-        self.debug = QCheckBox("Save raw capture for reprocessing")
-        self.debug.setToolTip(
-            "Save raw stereo input and a capture log per position, plus shared "
-            "digital references once per session. Intermediate WAVs are not saved."
-        )
-        self.debug.setChecked(_parse_bool(_value(parser, "sweep", "debug_saves", "False")))
-        self.debug.setStyleSheet(toggle_style())
         self.pre_sil = self._spin(_float_value(parser, "sweep", "pre_sil_ms", 500.0), 0, 60000, " ms", 1)
         self.post_sil = self._spin(_float_value(parser, "sweep", "post_sil_ms", 500.0), 0, 60000, " ms", 1)
         self.taper = self._spin(_float_value(parser, "sweep", "mic_tail_taper_ms", 20.0), 0, 60000, " ms", 1)
@@ -722,13 +715,13 @@ class AudioSetupPane(QWidget):
         )
         self.post_sil.setToolTip(
             "Record room decay after each sweep for this duration. The same silent "
-            "interval separates repeats; no second wait is added. Choose enough time "
-            "for the room to decay before the next marker. After the final repeat, "
-            "an extra interval of this duration allows for interface latency, "
-            "giving twice this silence at the end of the capture."
+            "interval separates repeats; no extra latency interval is added. "
+            "Interface latency uses part of this interval, leaving less recorded room decay. "
+            "Increase Post Silence if a high-latency driver truncates the sweep or "
+            "leaves too little decay/noise-analysis time."
         )
         fields = [
-            ("Naming", self.naming), ("", self.align), ("", self.debug),
+            ("Naming", self.naming), ("", self.align),
             ("Driver settle time", self.pre_sil), ("Post Silence", self.post_sil),
             ("H2 test dB", self.h2), ("H3 test dB", self.h3),
             ("Max attempts", self.max_retries),
@@ -907,7 +900,7 @@ class AudioSetupPane(QWidget):
         immediate_controls = [
             self.in_mic_channel, self.in_loop_channel, self.out_speaker_channel, self.out_ref_channel,
             self.fs, self.wasapi, self.hpf_enable, self.hpf_corr, self.naming,
-            self.align, self.debug, self.loopback_correction,
+            self.align, self.loopback_correction,
             *self.detector_controls.values(),
             self.stop_on_capture_failure,
         ]
@@ -1155,7 +1148,7 @@ class AudioSetupPane(QWidget):
             ("sweep", "pre_sil_ms"): self.pre_sil.value(),
             ("sweep", "post_sil_ms"): self.post_sil.value(),
             ("sweep", "mic_tail_taper_ms"): self.taper.value(),
-            ("sweep", "debug_saves"): self.debug.isChecked(),
+            ("sweep", "debug_saves"): True,
             ("sweep", "h2_test_db"): _normalize_decimal_text(self.h2.text()),
             ("sweep", "h3_test_db"): _normalize_decimal_text(self.h3.text()),
             ("sweep", "max_capture_retries"): int(self.max_retries.value()),

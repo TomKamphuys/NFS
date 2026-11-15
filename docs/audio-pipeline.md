@@ -73,3 +73,27 @@ even when the open project already contains saved measurements. The watcher
 tracks preview changes as well as file modification times. Changing project
 context or starting a saved measurement/scan clears the preview so saved results
 can be displayed again.
+
+## Post-scan measurement review
+
+Post Silence is applied once after each sweep, including the final one. New
+captures do not append a second post-silence interval for interface latency.
+Transport latency uses part of the configured silence: a 500 ms setting and
+86 ms transport delay leave about 414 ms of recorded decay after the sweep.
+Increase Post Silence if a driver leaves too little room decay/noise-analysis
+time or truncates the sweep. The capture still rejects incomplete sweeps and
+recordings shorter than their acquisition plan.
+
+Alignment retains the available tail common to all repeats, without padding
+unrecorded samples, and archives both requested and retained tail lengths.
+The live electrical reference compares through the sweep when there is no
+latency flush, so changing tail availability does not create false mismatches.
+Older archives retain their original tail-comparison layout during replay.
+
+Saved measurements always retain raw captures and shared references, with a
+per-capture JSON sidecar recording timing and the reference association. Legacy
+`debug_saves=False` settings no longer disable retention. Measurement Review
+performs microphone noise and 12-neighbour LF consistency checks after acquisition;
+it does not repeat the live electrical residual analysis. Its explicit cleanup
+action can remove analysis data after review while retaining linear IRs and the
+review report. See [Measurement Review](measurement-review.md).

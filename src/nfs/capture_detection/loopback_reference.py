@@ -39,11 +39,13 @@ class Layout:
     guard_samples: int
     log_sweep_rate: float
     start_hz: float = 1.0
+    comparison_tail_samples: int | None = None
 
     @property
     def repeat_samples(self) -> int:
         # Leave room for fractional interpolation before the following marker.
-        return self.sweep_offset + self.sweep_samples + self.tail_samples - 16
+        tail = self.tail_samples if self.comparison_tail_samples is None else self.comparison_tail_samples
+        return self.sweep_offset + self.sweep_samples + tail - 16
 
     def with_repeats(self, count: int) -> Layout:
         """Describe the same playback format with a different known repeat count."""
@@ -314,7 +316,7 @@ def check_capture(capture: Capture, reference: Reference, marker: np.ndarray,
             compatible = layout == reference.layout
         else:
             compatible = all(getattr(layout, key) == getattr(reference.layout, key) for key in (
-                'fs', 'marker_samples', 'sweep_offset', 'sweep_samples', 'tail_samples',
+                'fs', 'marker_samples', 'sweep_offset', 'sweep_samples', 'tail_samples', 'comparison_tail_samples',
                 'guard_samples', 'log_sweep_rate', 'start_hz'))
         if not compatible:
             raise ValueError('Capture settings differ from golden loopback reference')
@@ -395,8 +397,11 @@ def capture_input(result: dict, fs: int) -> tuple[Capture, Layout, np.ndarray]:
     layout = Layout(
         fs, timing['total_samples'], list(timing['playback_marker_starts']),
         timing['marker_samples'], timing['sweep_offset_samples'], timing['sweep_samples'],
-        timing['capture_tail_samples'], timing['guard_samples'], timing['L_s'],
-        timing['sweep_start_hz'])
+        timing.get('requested_tail_samples', timing['capture_tail_samples']), timing['guard_samples'], timing['L_s'],
+        timing['sweep_start_hz'],
+        # New recordings have no extra latency flush. Compare through the sweep;
+        # room-decay tail availability can vary with transport latency.
+        comparison_tail_samples=0 if timing.get('flush_samples') == 0 else None)
     if (not layout.marker_starts or marker.shape != (layout.marker_samples,)
             or not np.isfinite(marker).all() or rms(marker) < 1e-10):
         raise ValueError('Invalid reference marker or repeat layout')

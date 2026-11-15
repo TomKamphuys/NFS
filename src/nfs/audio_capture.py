@@ -755,9 +755,9 @@ class AudioCapture:
         # repeats. It is retained for processing, not followed by another wait.
         post = milliseconds('post_sil_ms')
         tail = post
-        # Continue recording after the final slot so interface transport latency
-        # does not truncate the final sweep. Alignment checks complete captures.
-        flush = post
+        # Post silence includes the driver's transport latency. Do not append a
+        # second copy; increase post_sil_ms when more recorded decay is needed.
+        flush = 0
         # One slot is marker + gap + sweep + spacing after the sweep.
         offset = len(marker) + gap
         slot = offset + len(s_play) + post

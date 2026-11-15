@@ -44,6 +44,10 @@ class WheelGuard(QObject):
     """Event filter that blocks wheel events on scroll-stealing widgets."""
 
     def _is_focus_guarded(self, obj) -> bool:
+        # Measurement Review explicitly provides hover-to-zoom plots and has no
+        # enclosing scrolling page. Other canvases retain the focus guard.
+        if hasattr(obj, 'property') and obj.property('hoverWheelZoom') is True:
+            return False
         if isinstance(obj, _FOCUS_GUARDED_TYPES):
             return True
         name = type(obj).__name__

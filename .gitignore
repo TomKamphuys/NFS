@@ -46,3 +46,6 @@ docs/_build/
 /measurements/
 /config.old
 /tests/Recordings/
+
+# Measurement review verification outputs
+/.pytest-review-*/

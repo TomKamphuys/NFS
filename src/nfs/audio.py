@@ -142,7 +142,7 @@ class Audio(IAudio):
                  detectors: tuple[CaptureDetector, ...] | None = None):
 
         self.hw = hw_config
-        self.cap = capture_config
+        self.cap = dict(capture_config, debug_saves=True)
         self._hardware_io = hardware_io
         self.detectors = tuple(DEFAULT_DETECTORS if detectors is None else detectors)
         self._detector_state = {}
@@ -257,8 +257,7 @@ class Audio(IAudio):
                 + repeats * (getattr(self.marker_gen, 'dur_ms', 100) / 1000
                              + self.cap.get('marker_gap_ms', 20) / 1000
                              + self.cap.get('sweep_dur_s', 0)
-                             + self.cap.get('post_sil_ms', 0) / 1000)
-                + self.cap.get('post_sil_ms', 0) / 1000)
+                             + self.cap.get('post_sil_ms', 0) / 1000))
 
     def _notify_detector(self, event):
         if self._detector_observer is None:
@@ -655,6 +654,15 @@ class Audio(IAudio):
                     self.debug_dir / filename, np.column_stack(result['raw_recordings']),
                     filename, subtype='FLOAT',
                 )
+                sidecar = self.debug_dir / f"{base_label}_capture.json"
+                temporary = sidecar.with_suffix(f'.{uuid.uuid4().hex}.tmp')
+                try:
+                    temporary.write_text(json.dumps(result['capture_metadata'], indent=2,
+                                                    allow_nan=False), encoding='utf-8')
+                    temporary.replace(sidecar)
+                finally:
+                    temporary.unlink(missing_ok=True)
+
 
             if save:
                 self._save_wav_with_metadata(ir_path, ir_linear, ir_path.name, subtype='FLOAT')
@@ -1139,7 +1147,7 @@ class AudioFactory:
         naming_convention_str = config.get(sweep_section, 'naming_convention', fallback='dimitri').strip()
         naming_convention: IRNamingConvention = NamingConventionFactory.create(naming_convention_str)
 
-        debug_saves = AudioFactory._get_required_config(config, sweep_section, 'debug_saves', bool)
+        debug_saves = True  # Measurement review requires retained raw captures and references.
         debug_handler: DebugArtifactHandler = DebugArtifactFactory.create(debug_saves, hw_config)
 
         cap_config = {

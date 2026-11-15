@@ -13,6 +13,7 @@ from .backend import BackendManager
 from .control_pane import ControlPane
 from .grid_pane import GridGeneratorPane
 from .live_capture import LiveCapturePane
+from .measurement_review import MeasurementReviewPane
 from .settings_dialog import SettingsDialog
 from .styles import danger_button, primary_button
 from .widgets import LocallyPaintedSplitter
@@ -141,14 +142,18 @@ class MainWindow(QMainWindow):
 
         # Main content area below header
         content_area = QWidget()
-        content_layout = QVBoxLayout(content_area)
+        content_layout = QHBoxLayout(content_area)
         content_layout.setContentsMargins(0, 12, 0, 0)
         
         splitter = LocallyPaintedSplitter(Qt.Orientation.Horizontal)
         splitter.setChildrenCollapsible(False)
         splitter.setHandleWidth(8)
         self.splitter = splitter
-        content_layout.addWidget(splitter, 1)
+        self.menu = self._build_menu()
+        content_layout.addWidget(self.menu)
+        self.workspace = QStackedWidget()
+        self.workspace.addWidget(splitter)
+        content_layout.addWidget(self.workspace, 1)
         root_layout.addWidget(content_area, 1)
 
         left_region = QWidget()
@@ -156,7 +161,6 @@ class MainWindow(QMainWindow):
         left_region.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         left_layout = QHBoxLayout(left_region)
         left_layout.setContentsMargins(0, 0, 0, 0)
-        self.menu = self._build_menu()
         self.left_stack = QStackedWidget()
         self.left_stack.setMinimumWidth(220)
         self.control_pane = ControlPane(self.backend, require_session_folder=self.require_session_folder)
@@ -164,7 +168,6 @@ class MainWindow(QMainWindow):
         self.audio_pane.saved.connect(lambda: self.live_capture.refresh_all())
         self.left_stack.addWidget(self.control_pane)
         self.left_stack.addWidget(self.audio_pane)
-        left_layout.addWidget(self.menu)
         left_layout.addWidget(self.left_stack, 1)
 
         self.right_stack = QStackedWidget()
@@ -181,6 +184,9 @@ class MainWindow(QMainWindow):
         self.right_stack.addWidget(self.live_capture)
         self.right_stack.addWidget(self.grid_pane)
 
+        self.review_pane = MeasurementReviewPane(self.backend)
+        self.workspace.addWidget(self.review_pane)
+        self.control_pane.measurement_saved.connect(self.review_pane.mark_stale)
         splitter.addWidget(left_region)
         splitter.addWidget(self.right_stack)
         splitter.setStretchFactor(0, 1)
@@ -193,7 +199,7 @@ class MainWindow(QMainWindow):
 
     def set_default_splitter_sizes(self) -> None:
         available = max(1, self.splitter.width())
-        left_width = min(820, max(1, available - 1))
+        left_width = min(620, max(1, available - 1))
         self.splitter.setSizes([left_width, available - left_width])
 
     def toggle_menu(self) -> None:
@@ -213,6 +219,7 @@ class MainWindow(QMainWindow):
         self.grid_button = self._menu_button("Grid Generator", self.show_grid)
         self.machine_button = self._menu_button("Machine Control", self.show_machine)
         self.live_button = self._menu_button("Live Capture", self.show_live_capture)
+        self.review_button = self._menu_button("Measurement Review", self.show_review)
         self.settings_button = self._menu_button("Settings", self.show_settings)
         self.shutdown_button = self._menu_button("Shutdown Program", self.close, danger=True)
         buttons = [
@@ -220,6 +227,7 @@ class MainWindow(QMainWindow):
             self.grid_button,
             self.machine_button,
             self.live_button,
+            self.review_button,
         ]
         self.motion_preview_button = self._menu_button(
             "Motion Preview", self.show_motion_preview)
@@ -270,6 +278,7 @@ class MainWindow(QMainWindow):
             self.grid_button,
             self.machine_button,
             self.live_button,
+            self.review_button,
             self.settings_button,
         ):
             if button in active_buttons:
@@ -284,15 +293,21 @@ class MainWindow(QMainWindow):
                 )
 
     def show_machine(self) -> None:
+        if hasattr(self, "workspace"):
+            self.workspace.setCurrentWidget(self.splitter)
         self.left_stack.setCurrentWidget(self.control_pane)
         self._mark_active(self.machine_button, self.live_button if self.right_stack.currentWidget() is self.live_capture else self.grid_button)
 
     def show_audio(self) -> None:
+        if hasattr(self, "workspace"):
+            self.workspace.setCurrentWidget(self.splitter)
         self.left_stack.setCurrentWidget(self.audio_pane)
         self.show_live_capture()
         self._mark_active(self.audio_button, self.live_button)
 
     def show_live_capture(self) -> None:
+        if hasattr(self, "workspace"):
+            self.workspace.setCurrentWidget(self.splitter)
         self.right_stack.setCurrentWidget(self.live_capture)
         self.live_capture.set_active(True)
         self._mark_active(
@@ -301,10 +316,19 @@ class MainWindow(QMainWindow):
         )
 
     def show_grid(self) -> None:
+        if hasattr(self, "workspace"):
+            self.workspace.setCurrentWidget(self.splitter)
         self.right_stack.setCurrentWidget(self.grid_pane)
         self.live_capture.set_active(False)
         self.left_stack.setCurrentWidget(self.control_pane)
         self._mark_active(self.machine_button, self.grid_button)
+
+    def show_review(self) -> None:
+        self.review_pane.refresh_context()
+        self.review_pane.start_pool()
+        self.workspace.setCurrentWidget(self.review_pane)
+        self.live_capture.set_active(False)
+        self._mark_active(self.review_button)
 
     def show_motion_preview(self) -> None:
         from .config_support import validate_dut_volume
@@ -344,6 +368,9 @@ class MainWindow(QMainWindow):
             dialog.select_section(initial_section)
         dialog.exec()
         # Restore active mark based on current view
+        if self.workspace.currentWidget() is self.review_pane:
+            self._mark_active(self.review_button)
+            return
         if self.left_stack.currentWidget() is self.control_pane:
             if self.right_stack.currentWidget() is self.live_capture:
                 self._mark_active(self.machine_button, self.live_button)
@@ -373,6 +400,8 @@ class MainWindow(QMainWindow):
 
     def _connect_control_pane_signals(self) -> None:
         self.control_pane.measurement_saved.connect(self.live_capture.refresh_all)
+        if hasattr(self, 'review_pane'):
+            self.control_pane.measurement_saved.connect(self.review_pane.mark_stale)
         self.control_pane.progress_event.connect(self.live_capture.on_progress_event)
 
     def _rebuild_control_pane(self) -> None:
@@ -492,6 +521,8 @@ class MainWindow(QMainWindow):
         self._rebuild_audio_pane()
         self._rebuild_grid_pane()
         self.live_capture.refresh_all()
+        if hasattr(self, "review_pane"):
+            self.review_pane.refresh_context()
 
     def save_project_context(self) -> None:
         self._flush_audio_pane_changes()
@@ -530,7 +561,7 @@ class MainWindow(QMainWindow):
             )
 
     def closeEvent(self, event) -> None:  # noqa: N802
-        for pane in (getattr(self, "live_capture", None), getattr(self, "grid_pane", None)):
+        for pane in (getattr(self, "live_capture", None), getattr(self, "grid_pane", None), getattr(self, "review_pane", None)):
             if pane is not None and hasattr(pane, "shutdown"):
                 try:
                     pane.shutdown()

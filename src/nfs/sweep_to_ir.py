@@ -255,7 +255,8 @@ class AlignmentEngine:
     def sync_and_average(self, rec_mic: np.ndarray, rec_loop: np.ndarray, marker_single: np.ndarray,
                          pre_samps_settle: int, slot_len: int, sweep_len: int,
                          sweep_offset_samples: int = 0,
-                         capture_tail_samples: Optional[int] = None) -> Tuple[np.ndarray, np.ndarray, List[np.ndarray], float]:
+                         capture_tail_samples: Optional[int] = None,
+                         allow_short_tail: bool = False) -> Tuple[np.ndarray, np.ndarray, List[np.ndarray], float]:
         """
         Align multiple sweeps and average them to increase SNR.
 
@@ -318,6 +319,8 @@ class AlignmentEngine:
             # Applying the same index preserves the microphone's real delay.
             start_idx = marker_idx + sweep_offset_samples
             end_idx = start_idx + capture_len
+            if allow_short_tail and start_idx + sweep_len <= min(len(rec_mic), len(rec_loop)):
+                end_idx = min(end_idx, len(rec_mic), len(rec_loop))
             # Copy each complete window for averaging and offline inspection.
             if end_idx <= min(len(rec_mic), len(rec_loop)) and start_idx >= 0:
                 mic_slices.append(rec_mic[start_idx: end_idx].copy())
@@ -329,10 +332,21 @@ class AlignmentEngine:
                 })
             else:
                 raise CaptureAlignmentError(
-                    f"Capture ended before sweep {i + 1} and its tail were fully recorded")
+                    f"Capture ended before sweep {i + 1} and its tail were fully recorded. "
+                    "Increase Post Silence to accommodate interface latency.")
 
         if not mic_slices:
             raise CaptureAlignmentError("No valid sweeps captured (Alignment failed).")
+
+        # Without a second latency interval, the final recorded tail is shorter.
+        # Average only real samples common to all repeats; never pad a missing tail.
+        retained = min(map(len, mic_slices))
+        mic_slices = [part[:retained] for part in mic_slices]
+        loop_slices = [part[:retained] for part in loop_slices]
+        tail_samples = retained - sweep_len
+        self.last_retained_tail_samples = tail_samples
+        for row in self.last_alignment:
+            row['capture_end_sample'] = row['sweep_start_sample'] + retained
 
         # One ambiguous repeat can spoil an average. Report the weakest
         # assessed repeat rather than silently reporting only the first.
@@ -736,12 +750,17 @@ class SweepToIR:
         timing = dict(capture['capture_metadata'])
         references = capture['digital_reference']
         rec_loop, rec_mic = capture['raw_recordings']
+        requested_tail = timing.get('requested_tail_samples', timing['capture_tail_samples'])
+        self.alignment_engine.last_alignment = []
         try:
+            if len(rec_mic) != timing['total_samples'] or len(rec_loop) != timing['total_samples']:
+                raise CaptureAlignmentError('Capture length differs from the acquisition plan')
             avg_mic, avg_loop, mic_slices, psr = self.alignment_engine.sync_and_average(
                 rec_mic, rec_loop, references['marker'], timing['pre_samples'],
                 timing['slot_samples'], timing['sweep_samples'],
                 sweep_offset_samples=timing['sweep_offset_samples'],
-                capture_tail_samples=timing['capture_tail_samples'],
+                capture_tail_samples=requested_tail,
+                allow_short_tail=timing.get('flush_samples') == 0,
             )
         except CaptureAlignmentError as exc:
             failure_metadata = dict(timing)
@@ -754,6 +773,9 @@ class SweepToIR:
             exc.capture_context = dict(capture, capture_metadata=failure_metadata)
             raise
         timing['aligned_repeats'] = self.alignment_engine.last_alignment
+        timing['requested_tail_samples'] = requested_tail
+        timing['capture_tail_samples'] = self.alignment_engine.last_retained_tail_samples
+        timing['mic_tail_fade_ms'] = min(10.0, timing['capture_tail_samples'] * 1000.0 / self.hw['fs'])
         # A following marker must not contaminate the reference used for correction.
         # Use the earliest safe boundary across repeats, with a 2 ms marker margin.
         positions = timing['aligned_repeats']

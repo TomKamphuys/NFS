@@ -68,6 +68,7 @@ The application opens and all configuration is done from within the GUI — cont
 - **High-quality impulse responses** — exponential sine-sweep engine with loopback-marker alignment,
   multi-sweep averaging, and FFT deconvolution.
 - **Live quality metrics** — real-time SNR, THD, and alignment (PSR) monitoring.
+- **[Measurement Review](docs/measurement-review.md)** — inspect microphone noise and LF spatial consistency, exclude recordings, and reclaim analysis storage after review.
 - **GRBLHAL motion control** over serial (BTT skr ez 3).
 - **Mock mode** — rehearse a full measurement run without any hardware connected.
 

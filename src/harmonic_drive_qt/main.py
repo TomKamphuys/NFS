@@ -4,9 +4,16 @@ from __future__ import annotations
 
 import argparse
 import multiprocessing
+import os
 import sys
 import tempfile
 from pathlib import Path
+
+# Spawned review processes can re-import this entry point before their initializer.
+# Keep numerical imports single-threaded from the outset, including in children.
+for _thread_key in ('OPENBLAS_NUM_THREADS', 'OMP_NUM_THREADS', 'MKL_NUM_THREADS',
+                    'BLIS_NUM_THREADS', 'VECLIB_MAXIMUM_THREADS', 'NUMEXPR_NUM_THREADS'):
+    os.environ[_thread_key] = '1'
 
 from loguru import logger
 

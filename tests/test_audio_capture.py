@@ -133,9 +133,11 @@ def ideal_capture(prepared, delays=(80, 83, 79), acoustic_delay=23):
     loop = np.zeros_like(mic)
     for start, delay in zip(timing["playback_marker_starts"], delays):
         count = timing["slot_samples"]
-        loop[start + delay : start + delay + count] = prepared["tx_loop"][start : start + count]
+        count_loop = min(count, len(loop) - start - delay)
+        loop[start + delay : start + delay + count_loop] = prepared["tx_loop"][start : start + count_loop]
         a = start + delay + acoustic_delay
-        mic[a : a + count] = prepared["tx_speaker"][start : start + count]
+        count_mic = min(count, len(mic) - a)
+        mic[a : a + count_mic] = prepared["tx_speaker"][start : start + count_mic]
     return (mic, loop)
 
 def test_speaker_silent_during_markers_and_common_sweep_timing():
@@ -167,13 +169,11 @@ def test_alignment_handles_marker_offset_and_preserves_acoustic_delay(first, del
     for row, start, delay in zip(positions, p["timing"]["playback_marker_starts"], delays):
         assert row["marker_start_sample"] == start + delay
         assert row["sweep_start_sample"] == start + delay + p["timing"]["sweep_offset_samples"]
-    expected = np.pad(p["speaker_sweep"], (23, p["timing"]["capture_tail_samples"] - 23))
+    expected = np.pad(p["speaker_sweep"], (23, r["capture_metadata"]["capture_tail_samples"] - 23))
     np.testing.assert_allclose(r["rx_mic_conditioned"], expected, atol=3e-08, rtol=0)
-    expected_loop = np.pad(p["reference_sweep"], (0, p["timing"]["capture_tail_samples"]))
-    if delays == (80, 83, 79):
-        # The third marker arrives four samples early relative to repeat 2.
-        # The full un-faded reference tail faithfully retains those samples.
-        expected_loop[-4:] = p["marker"][:4] / 3
+    expected_loop = np.pad(p["reference_sweep"], (0, r["capture_metadata"]["capture_tail_samples"]))
+    # The shorter common tail now ends before the next repeat's marker, even
+    # when marker timing drifts by a few samples between repeats.
     np.testing.assert_allclose(r["rx_loop_aligned"], expected_loop, atol=3e-08, rtol=0)
     _, ir = e.deconv_engine.process_ir(r["rx_mic_conditioned"], r["inv_sweep"], inverse_origin_sample=r["capture_metadata"]["inverse_origin_sample"], sweep_samples=r["capture_metadata"]["sweep_samples"])
     assert np.argmax(abs(ir)) == audio._LINEAR_IR_ORIGIN_SAMPLE + 23
@@ -214,6 +214,9 @@ def test_debug_archive_reconstructs_exact_ir(monkeypatch, tmp_path):
     np.testing.assert_array_equal(stored, np.column_stack((loop, mic)))
     assert not list(debug.glob('*_capture_log.json'))
     meta = exported['capture_metadata']
+    sidecar = json.loads((debug / f"{base}_capture.json").read_text(encoding='utf-8'))
+    assert sidecar['reference_file'] == meta['reference_file']
+    assert sidecar['aligned_repeats'] == meta['aligned_repeats']
     assert meta["raw_capture_channels"] == ["electrical_loopback", "microphone"]
     reference = np.load(debug / meta["reference_file"])
     np.testing.assert_array_equal(reference["inverse"], result["inv_sweep"])
@@ -261,7 +264,8 @@ def test_reference_archive_supports_fresh_marker_alignment(monkeypatch, tmp_path
             data[:, 1], data[:, 0], saved['marker'], layout['pre_samples'],
             layout['slot_samples'], layout['sweep_samples'],
             sweep_offset_samples=layout['sweep_offset_samples'],
-            capture_tail_samples=layout['capture_tail_samples'])
+            capture_tail_samples=layout['capture_tail_samples'],
+            allow_short_tail=layout.get('flush_samples') == 0)
         _, regenerated = DeconvolutionEngine(fs).process_ir(
             averaged, saved['inverse'],
             inverse_origin_sample=layout['inverse_origin_sample'],
@@ -399,8 +403,9 @@ def test_post_interval_is_retained_once_without_an_extra_wait(post_ms):
     p = e._prepare_sweep()
     t = p['timing']
     post = round(post_ms * 48)
-    assert t['capture_tail_samples'] == t['post_samples'] == t['flush_samples'] == post
-    assert t['total_samples'] == t['pre_samples'] + e.cap['num_sweeps'] * t['slot_samples'] + post
+    assert t['capture_tail_samples'] == t['post_samples'] == post
+    assert t['flush_samples'] == 0
+    assert t['total_samples'] == t['pre_samples'] + e.cap['num_sweeps'] * t['slot_samples']
     assert t['slot_samples'] == t['sweep_offset_samples'] + t['sweep_samples'] + post
     for a in t['playback_marker_starts']:
         end = a + t['sweep_offset_samples'] + t['sweep_samples']
@@ -413,6 +418,34 @@ def test_post_interval_is_retained_once_without_an_extra_wait(post_ms):
         expected = DSPUtils.hann_fade(expected, min(10,post_ms),48000,side='out')
     np.testing.assert_allclose(result['rx_mic_conditioned'],expected,atol=3e-8,rtol=0)
     assert len(result['rx_mic_conditioned']) == t['sweep_samples'] + post
+
+
+def test_single_sweep_duration_and_tail_include_latency_once():
+    engine = make_engine()
+    engine.cap.update(num_sweeps=1, pre_sil_ms=200, post_sil_ms=500)
+    engine.alignment_engine.num_sweeps = 1
+    plan = engine._prepare_sweep()
+    timing = plan['timing']
+    assert timing['total_samples'] / engine.hw['fs'] == pytest.approx(2.32)
+    assert engine._capture_duration_s() == pytest.approx(2.32)
+    latency = round(.086 * engine.hw['fs'])
+    mic, loop = ideal_capture(plan, delays=(latency,), acoustic_delay=23)
+    capture = engine._finish_sweep(plan, mic, loop)
+    metadata = capture['capture_metadata']
+    assert metadata['requested_tail_samples'] == round(.5 * engine.hw['fs'])
+    assert metadata['capture_tail_samples'] == round(.414 * engine.hw['fs'])
+    assert len(capture['rx_mic_conditioned']) == timing['sweep_samples'] + metadata['capture_tail_samples']
+    assert metadata['aligned_repeats'][0]['sweep_start_sample'] == timing['pre_samples'] + latency + timing['sweep_offset_samples']
+
+
+def test_latency_exceeding_post_silence_rejects_incomplete_sweep():
+    engine = make_engine()
+    engine.cap.update(num_sweeps=1, post_sil_ms=5)
+    engine.alignment_engine.num_sweeps = 1
+    plan = engine._prepare_sweep()
+    mic, loop = ideal_capture(plan, delays=(round(.02 * engine.hw['fs']),))
+    with pytest.raises(audio.CaptureAlignmentError, match='fully recorded'):
+        engine._finish_sweep(plan, mic, loop)
 
 @pytest.mark.parametrize('post_ms,last_echo', [(500,.45), (2000,1.8)])
 def test_room_echoes_survive_capture_deconvolution_and_export(post_ms,last_echo,monkeypatch):
@@ -448,7 +481,7 @@ def test_missing_final_decay_samples_are_rejected(channel):
     p = e._prepare_sweep()
     mic,loop = ideal_capture(p,delays=(80,80,80))
     t = p['timing']
-    end = t['playback_marker_starts'][-1]+80+t['sweep_offset_samples']+t['sweep_samples']+t['post_samples']
+    end = t['total_samples']
     if channel == 'mic':
         mic = mic[:end-1]
     else:
@@ -1452,6 +1485,18 @@ def test_factory_loads_all_detector_switches(mock_config, enabled):
         config.write(handle)
     engine = AudioFactory.create(str(mock_config))
     assert all(engine.cap[d.enabled_key] is enabled for d in DEFAULT_DETECTORS)
+
+
+def test_legacy_debug_toggle_cannot_disable_measurement_retention(mock_config):
+    config = configparser.ConfigParser()
+    config.read(mock_config)
+    config['sweep']['debug_saves'] = 'False'
+    with mock_config.open('w') as handle:
+        config.write(handle)
+    engine = AudioFactory.create(str(mock_config))
+    assert engine.cap['debug_saves'] is True
+    from nfs.debug_artifacts import FileDebugArtifactHandler
+    assert isinstance(engine.debug_handler, FileDebugArtifactHandler)
 
 
 def _single_reference_capture(engine):
