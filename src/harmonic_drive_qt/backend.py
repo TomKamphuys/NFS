@@ -117,6 +117,7 @@ class BackendManager:
         self._measurement_thread: threading.Thread | None = None
         self._progress_callback: Callable[[dict[str, Any]], None] | None = None
         self._detector_callback = None
+        self._recapture_points = None
         self._audio_queue: queue.Queue = queue.Queue()
         self._audio_thread = threading.Thread(
             target=self._audio_worker,
@@ -240,7 +241,10 @@ class BackendManager:
         self.sine_audio = None
 
     def set_project_dir(self, path: str | Path) -> None:
-        self.project_dir = Path(path).expanduser().resolve()
+        resolved = Path(path).expanduser().resolve()
+        if resolved != self.project_dir:
+            self._recapture_points = None
+        self.project_dir = resolved
         self.project_dir.mkdir(parents=True, exist_ok=True)
         self.clear_preview_ir()
         if self.nfs is not None and hasattr(self.nfs, "set_project_directory"):
@@ -338,6 +342,7 @@ class BackendManager:
             self._measurement_thread is not None and self._measurement_thread.is_alive()
         ):
             return
+        self._recapture_points = None
         self.reload_nfs()
         if self.nfs is None:
             raise RuntimeError(self.load_warning or "NFS backend is not loaded")
@@ -389,6 +394,62 @@ class BackendManager:
             self.nfs.take_measurement_set(name, overwrite, progress_callback,
                                           detector_callback=self._detector_callback)
 
+    def start_recapture(self, folder, rows, progress_callback, detector_callback=None):
+        """Queue selected points using the live scanner and its normal safety manager."""
+        if self.is_measurement_set_running() or (self._measurement_thread and self._measurement_thread.is_alive()):
+            raise RuntimeError('A measurement is already running')
+        if self.nfs is None:
+            self.reload_nfs()
+        if self.nfs is None:
+            raise RuntimeError(self.load_warning or 'NFS backend is not loaded')
+        folder = Path(folder).resolve()
+        if folder != (self.nfs._project_dir/'measurement_set').resolve():
+            raise ValueError('Review dataset is not the active scanner project')
+        import configparser
+        from nfs.datatypes import CylindricalPosition
+        from nfs.measurement_points import SelectedMeasurementPoints
+        from nfs.measurement_review import coordinates
+        from nfs.motion_manager import MotionManagerFactory
+        from nfs.review_attempts import reserve_attempts, validate_recapture_settings, load_state, complete_attempt
+        config = configparser.ConfigParser(inline_comment_prefixes='#')
+        config.read(self.config_file)
+        points = SelectedMeasurementPoints([CylindricalPosition(*coordinates(r['filename'].removesuffix('.blacklisted'))[1]) for r in rows])
+        manager = MotionManagerFactory.create(self.config_file, config.get('nfs', 'motion_manager'),
+                                              self.nfs._scanner, points=points)
+        validate_recapture_settings(folder, rows, self.nfs._audio)
+        jobs = reserve_attempts(folder, rows)
+        if not jobs:
+            raise ValueError('No points selected')
+        self._recapture_points = [dict(zip(('r', 'phi', 'z'), job['position'])) for job in jobs]
+        def progress(event):
+            progress_callback(dict(event, recapture=True, points=self._recapture_points))
+        def capture():
+            self.stop_sine()
+            self.nfs.take_measurement_set(progress_callback=progress,
+                detector_callback=detector_callback, recapture_jobs=jobs, motion_manager=manager)
+        def run():
+            failure = None
+            try:
+                self._run_audio(capture)
+            except Exception as error:
+                failure = str(error)
+                progress_callback(dict(status='failed', error=str(error), current=0, total=len(jobs)))
+            finally:
+                try:
+                    state = load_state(folder)
+                    for job in jobs:
+                        attempt = next(a for a in state['points'][job['filename']]['attempts']
+                                       if a['number'] == job['number'])
+                        if not attempt.get('finished_utc'):
+                            complete_attempt(folder, job, error=failure or 'Not captured: re-capture batch stopped')
+                except Exception as error:
+                    logger.exception('Could not finalise re-capture history')
+                    progress_callback(dict(status='failed', error=str(error), current=0, total=len(jobs)))
+                finally:
+                    progress_callback(dict(status='recapture_done', current=0, total=len(jobs)))
+        self._measurement_thread = threading.Thread(target=run, daemon=True, name='qt-recapture')
+        self._measurement_thread.start()
+
     def pause_measurement_set(self) -> None:
         if self.nfs is not None and hasattr(self.nfs, "pause_measurement_set"):
             self.nfs.pause_measurement_set()
@@ -418,7 +479,10 @@ class BackendManager:
     def get_measurement_progress(self) -> dict[str, Any]:
         if self.nfs is None or not hasattr(self.nfs, "get_measurement_progress"):
             return {"status": "ready", "current": 0, "total": 0, "eta_seconds": None, "elapsed_seconds": 0.0}
-        return self.nfs.get_measurement_progress()
+        event = self.nfs.get_measurement_progress()
+        if self._recapture_points is not None:
+            event = dict(event, recapture=True, points=self._recapture_points)
+        return event
 
     def get_audio_meter_state(self) -> dict[str, Any]:
         return get_audio_process().get_audio_meter_state()

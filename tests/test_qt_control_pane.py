@@ -96,3 +96,21 @@ def test_jog_without_scanner_does_not_start(pane):
     pane._run_jog("move_up", 1)
     pane.backend.jog.assert_not_called()
     assert not pane._jog_in_progress
+
+
+def test_active_recapture_readout_survives_progress_timer(pane, monkeypatch):
+    original = [dict(r=900., p=0., z=0.), dict(r=901., p=5., z=0.)]
+    def reload():
+        pane.grid_readout_points = list(original)
+    monkeypatch.setattr(pane, '_reload_grid_readout_points', reload)
+    points = [dict(r=410., phi=15., z=110.), dict(r=420., phi=30., z=120.)]
+    pane.set_recapture_points(points)
+    pane._apply_progress_event(dict(status='point_started', current=2, total=2, recapture=True, points=points))
+    assert pane.grid_readout_points == [dict(r=410., p=15., z=110.), dict(r=420., p=30., z=120.)]
+    assert '901.0' not in pane.coord_readout.text()
+    assert '420.0' in pane.coord_readout.text()
+    # Backend polling carries the active queue too, rather than reverting to the CSV.
+    pane._apply_progress_event(dict(status='finished', current=2, total=2, recapture=True, points=points))
+    assert pane.grid_readout_points[0]['r'] == 410.
+    pane._apply_progress_event(dict(status='started', current=0, total=2))
+    assert pane.grid_readout_points == original

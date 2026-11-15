@@ -2,20 +2,23 @@
 import queue
 import threading
 
-from PySide6.QtWidgets import QAbstractItemView, QHeaderView, QTableWidgetItem
+from PySide6.QtWidgets import QAbstractItemView, QHeaderView, QTableWidgetItem, QButtonGroup, QScrollArea
+from PySide6.QtGui import QColor
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
 
-from nfs.measurement_review import scan_directory, rename_reviewed
+from nfs.review_attempts import (scan_review_directory as scan_directory, load_state, save_state,
+    ensure_point, point_name, attempt_row, attempt_quality, accept_capture_list, recover_publication)
 from nfs.review_pool import ReviewProcessPool
 from nfs.review_storage import (write_review_report, load_review_results, dataset_identity, analysis_deletion_plan,
                                 delete_analysis_data)
 from . import project
 from .qt_compat import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QComboBox,
-                        QProgressBar, QTimer, QMessageBox, Qt)
+                        QProgressBar, QTimer, QMessageBox, Qt, Signal)
 from .review_plots import draw_inspection
 from .review_interaction import ReviewPlotInteraction
-from .review_selection import ReviewTable, SelectHeader
+from .review_selection import ReviewTable, CAPTURE_COUNT_ROLE
+from .styles import header_combo
 
 
 def short_issue_description(row):
@@ -26,6 +29,7 @@ def short_issue_description(row):
         'clipping': 'Microphone clipping',
         'silent_channel': 'Silent microphone',
         'invalid_ir': 'Invalid IR',
+        'missing_capture': 'Missing capture',
     }
     codes = [issue['code'] for issue in row.get('issues', [])]
     if not codes and row.get('primary_issue'):
@@ -38,9 +42,17 @@ def short_issue_description(row):
 
 
 class MeasurementReviewPane(QWidget):
+    recapture_started = Signal(object)
+    recapture_finished = Signal()
+
     def __init__(self, backend, parent=None):
         super().__init__(parent)
         self.backend = backend
+        self.capture_state = {'points': {}}
+        self.recapture_pending = False
+        self.detector_callback = None
+        self.capture_progress = None
+        self._return_filename = None
         self.rows = []
         self.folder = None
         self.identity = None
@@ -58,21 +70,27 @@ class MeasurementReviewPane(QWidget):
         title = QLabel('Measurement Review')
         title.setStyleSheet('font-size: 20px; font-weight: 700;')
         layout.addWidget(title)
-        self.path_label = QLabel()
-        layout.addWidget(self.path_label)
         tools = QHBoxLayout()
         layout.addLayout(tools)
-        self._button(tools, 'Scan', self.scan)
+        scan_button = self._button(tools, 'Scan', self.scan)
         self.filter = QComboBox()
+        header_combo(self.filter)
+        scan_button.ensurePolished()
+        self.filter.setFixedHeight(scan_button.sizeHint().height())
+        self.filter.setStyleSheet(self.filter.styleSheet() +
+            'QComboBox { border-radius: 4px; font-size: 10pt; }'
+            'QComboBox::drop-down { background: transparent; border: none; margin: 1px; }')
         self.filter.addItems(['Needs review', 'All recordings', 'Excluded'])
         self.filter.currentTextChanged.connect(self.populate)
         tools.addWidget(self.filter)
-        self.recapture_button = self._button(tools, 'Re-capture (0)', lambda: None)
-        self.recapture_button.setToolTip('Re-capture is not available yet.')
-        self.exclude_button = self._button(tools, 'Exclude (0)', self.exclude)
-        self.restore_button = self._button(tools, 'Restore selected', self.restore)
+        self.recapture_button = self._button(tools, 'Re-capture (0)', self.recapture)
+        self.pause_button = self._button(tools, 'Pause', self.pause_recapture)
+        self.stop_button = self._button(tools, 'Stop', self.backend.stop_measurement_set if hasattr(self.backend, 'stop_measurement_set') else lambda: None)
+        self.pause_button.hide()
+        self.stop_button.hide()
+        self.exclude_button = self._button(tools, 'Exclude (0)', self._exclude_or_restore)
+        self.accept_button = self._button(tools, 'Accept capture list', self.accept_list)
         self._button(tools, 'Delete analysis data', self.cleanup)
-        self._button(tools, 'How checks work', self.help)
         tools.addStretch(1)
         self.saved_notice = QLabel()
         self.saved_notice.setWordWrap(True)
@@ -85,18 +103,30 @@ class MeasurementReviewPane(QWidget):
         self.list_panel.setMinimumWidth(260)
         list_layout = QVBoxLayout(self.list_panel)
         list_layout.setContentsMargins(0, 0, 0, 0)
+        badge_legend = QHBoxLayout()
+        badge_legend.setSpacing(6)
+        badge_example = QLabel('2')
+        badge_example.setFixedSize(18, 18)
+        badge_example.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        badge_example.setStyleSheet('background: #2563eb; color: white; border-radius: 9px; '
+                                   'font-size: 10px; font-weight: 700;')
+        badge_example.setAccessibleName('Example badge: two captures available')
+        badge_legend.addWidget(badge_example)
+        badge_description = QLabel('Number of captures available to choose from.')
+        badge_description.setWordWrap(True)
+        badge_description.setStyleSheet('font-size: 11px; color: #64748b;')
+        badge_legend.addWidget(badge_description, 1)
+        list_layout.addLayout(badge_legend)
         self.plot_panel = QWidget()
         self.plot_panel.setMinimumWidth(320)
         plot_layout = QVBoxLayout(self.plot_panel)
         plot_layout.setContentsMargins(0, 0, 0, 0)
         body.addWidget(self.list_panel)
         body.addWidget(self.plot_panel, 1)
-        self.table = ReviewTable(0, 4)
-        self.select_header = SelectHeader(self.table)
-        self.table.setHorizontalHeader(self.select_header)
-        self.select_header.toggle_all.connect(self._check_all_visible)
+        self.table = ReviewTable(0, 5)
+        self.select_header = self.table.horizontalHeader()
         self.table.toggle_rows.connect(self._set_checked_rows)
-        self.table.setHorizontalHeaderLabels(['Select', 'Filename', 'Issue description', 'LF band (Hz)'])
+        self.table.setHorizontalHeaderLabels(['Select', 'Filename', 'Issue description', 'LF band (Hz)', 'Chosen capture'])
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -111,6 +141,25 @@ class MeasurementReviewPane(QWidget):
         self.details.setWordWrap(True)
         self.details.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         list_layout.addWidget(self.details)
+        attempt_row = QHBoxLayout()
+        plot_layout.addLayout(attempt_row)
+        self.attempt_bar = QHBoxLayout()
+        self.attempt_bar.setContentsMargins(0, 0, 0, 0)
+        attempt_widget = QWidget()
+        attempt_widget.setLayout(self.attempt_bar)
+        attempt_scroll = self.attempt_scroll = QScrollArea()
+        attempt_scroll.setWidgetResizable(True)
+        attempt_scroll.setWidget(attempt_widget)
+        attempt_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        attempt_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        attempt_scroll.setFixedHeight(54)
+        attempt_row.addWidget(attempt_scroll, 1)
+        self.attempt_group = QButtonGroup(self)
+        self.attempt_group.setExclusive(True)
+        self.choose_button = QPushButton('Choose this capture')
+        self.choose_button.clicked.connect(self.choose_capture)
+        attempt_row.addWidget(self.choose_button, 0, Qt.AlignmentFlag.AlignVCenter)
+        self.choose_button.setEnabled(False)
         self.figure = Figure(figsize=(7, 10), layout='constrained')
         self.canvas = FigureCanvasQTAgg(self.figure)
         self.canvas.setProperty('hoverWheelZoom', True)
@@ -179,6 +228,7 @@ class MeasurementReviewPane(QWidget):
             self._set_busy(False)
             self.folder = folder
             self.rows = []
+            self.capture_state = {'points': {}}
             self.identity = None
             self.stale = False
             self.saved_results = False
@@ -189,6 +239,8 @@ class MeasurementReviewPane(QWidget):
             self.canvas.draw_idle()
             self.status.setText('Session changed. Scan to review this measurement set.')
             try:
+                recover_publication(folder)
+                self.capture_state = load_state(folder)
                 saved = load_review_results(folder)
                 if saved is not None:
                     self.rows, self.identity = saved['rows'], saved['identity']
@@ -210,7 +262,6 @@ class MeasurementReviewPane(QWidget):
                 self.saved_notice.setText('Saved measurement review could not be loaded. Re-scan to refresh.')
                 self.saved_notice.show()
                 self.status.setText(f'Saved review unavailable: {error}')
-        self.path_label.setText(str(folder))
         if self.identity is not None and not self.busy and dataset_identity(folder) != self.identity:
             self.mark_stale()
 
@@ -232,6 +283,9 @@ class MeasurementReviewPane(QWidget):
             button.setEnabled(not busy)
         self._update_selection_state()
         self.table.setEnabled(not busy)
+        self.attempt_scroll.setEnabled(not busy)
+        if busy:
+            self.choose_button.setEnabled(False)
 
     def scan(self):
         if self.busy:
@@ -252,6 +306,7 @@ class MeasurementReviewPane(QWidget):
 
         def work():
             try:
+                recover_publication(folder)
                 before = dataset_identity(folder)
                 rows = scan_directory(folder, lambda *args: self.events.put((generation, 'progress', args)),
                                       cancel.is_set, pool=pool)
@@ -288,12 +343,21 @@ class MeasurementReviewPane(QWidget):
             if generation != self.generation:
                 # A session switch cancels the old scan; never publish its results.
                 continue
-            if kind == 'progress':
+            if kind == 'capture':
+                if self.capture_progress and payload.get('status') != 'recapture_done':
+                    self.capture_progress(payload)
+                self.status.setText(f"Re-capture: {payload.get('status')} {payload.get('current', 0)}/{payload.get('total', 0)}" +
+                                    (f" — {payload['error']}" if payload.get('error') else ''))
+                self.progress.setValue(round(100*payload.get('current', 0)/max(1, payload.get('total', 1))))
+                if payload.get('status') == 'recapture_done':
+                    self.recapture_pending = True
+            elif kind == 'progress':
                 phase, done, total = payload
                 self.status.setText(f'{phase}: {done}/{total}')
                 self.progress.setValue(round(100*done/max(total, 1)))
             elif kind == 'done':
                 self.rows, self.identity = payload
+                self.capture_state = load_state(self.folder)
                 self.stale = False
                 self.saved_results = False
                 self.saved_notice.hide()
@@ -308,36 +372,63 @@ class MeasurementReviewPane(QWidget):
             elif kind == 'finished':
                 self._set_busy(False)
                 if self.table.rowCount():
-                    self.table.selectRow(0)
+                    target = next((n for n in range(self.table.rowCount())
+                                   if self.table.item(n, 1).text() == self._return_filename), 0)
+                    self.table.selectRow(target)
+                    self.table.scrollToItem(self.table.item(target, 1))
+                self._return_filename = None
+
+        if self.recapture_pending and not self._capturing():
+            self.recapture_pending = False
+            self.pause_button.hide()
+            self.stop_button.hide()
+            self._set_busy(False)
+            self.recapture_finished.emit()
+            self.scan()
 
     def populate(self):
         self.table.blockSignals(True)
         self.table.setRowCount(0)
         mode = self.filter.currentText()
         for index, row in enumerate(self.rows):
-            if mode == 'Needs review' and row['status'] in ('pass', 'excluded'):
+            point = self.capture_state['points'].get(point_name(row), {})
+            excluded = point.get('excluded', row['status'] == 'excluded')
+            chosen_attempt = next((a for a in point.get('attempts', []) if a['number'] == point.get('chosen')), None)
+            shown = attempt_row(point_name(row), chosen_attempt) if chosen_attempt and chosen_attempt.get('analysis') else row
+            if mode == 'Needs review' and row['status'] in ('pass', 'excluded') and not point.get('needs_decision'):
                 continue
-            if mode == 'Excluded' and row['status'] != 'excluded':
+            if mode == 'Excluded' and not excluded:
                 continue
             number = self.table.rowCount()
             self.table.insertRow(number)
             mark = QTableWidgetItem()
             mark.setData(Qt.ItemDataRole.UserRole, index)
-            mark.setFlags(mark.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            mark.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsUserCheckable)
             mark.setCheckState(Qt.CheckState.Checked if row['marked'] else Qt.CheckState.Unchecked)
             self.table.setItem(number, 0, mark)
-            band = f"{row['band_low_hz']:.0f}–{row['band_high_hz']:.0f}" if row.get('bands') else ''
-            for column, value in enumerate((row['filename'], short_issue_description(row), band), 1):
+            band = f"{shown['band_low_hz']:.0f}–{shown['band_high_hz']:.0f}" if shown.get('bands') else ''
+            chosen = 'Excluded' if excluded else f"Capture {point.get('chosen', 1) or '—'}"
+            available = sum(bool(attempt.get('complete')) for attempt in point.get('attempts', []))
+            for column, value in enumerate((point_name(row), short_issue_description(shown), band, chosen), 1):
                 item = QTableWidgetItem(value)
-                item.setToolTip((row.get('reason') or row.get('coverage') or value) if column == 2 else value)
+                item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+                if excluded:
+                    item.setForeground(QColor('#94a3b8'))
+                item.setToolTip((shown.get('reason') or shown.get('coverage') or value) if column == 2 else value)
+                if column == 4 and available > 1:
+                    item.setData(CAPTURE_COUNT_ROLE, available)
+                    item.setToolTip(f'{available} captures available. Select this row to compare them above the plots.')
+                    item.setData(Qt.ItemDataRole.AccessibleDescriptionRole, f'{available} captures available')
                 self.table.setItem(number, column, item)
         self.table.blockSignals(False)
         self.table.resizeColumnsToContents()
-        # The custom Select header also includes a checkbox beside its text.
-        self.table.setColumnWidth(0, max(self.table.columnWidth(0),
-                                        self.table.fontMetrics().horizontalAdvance('Select')+35))
         QTimer.singleShot(0, self._size_list_panel)
         self._update_selection_state()
+        if not self.table.rowCount():
+            self._show_attempts(dict(filename='No capture'))
+            self.plot_interaction.clear()
+            self.figure.clear()
+            self.canvas.draw_idle()
 
     def selected(self):
         return [self.rows[self.table.item(index.row(), 0).data(Qt.ItemDataRole.UserRole)]
@@ -366,24 +457,26 @@ class MeasurementReviewPane(QWidget):
 
     def _update_selection_state(self):
         checked = [row for row in self.rows if row['marked']]
-        active = [row for row in checked if row['status'] != 'excluded']
-        self.exclude_button.setText(f'Exclude ({len(active)})')
-        self.exclude_button.setEnabled(bool(active) and not self.busy)
+        active = [row for row in checked if not self.capture_state['points'].get(point_name(row), {}).get('excluded', row['status'] == 'excluded')]
+        restoring = self.filter.currentText() == 'Excluded'
+        count = len(checked)-len(active) if restoring else len(active)
+        self.exclude_button.setText(f'{"Restore" if restoring else "Exclude"} ({count})')
+        self.exclude_button.setEnabled(bool(count) and not self.busy)
         self.recapture_button.setText(f'Re-capture ({len(checked)})')
-        self.recapture_button.setEnabled(False)
-        self.restore_button.setEnabled(any(row['status'] == 'excluded' for row in checked) and not self.busy)
-        visible = [self.table.item(number, 0).checkState() == Qt.CheckState.Checked
-                   for number in range(self.table.rowCount())]
-        self.select_header.has_rows = bool(visible)
-        self.select_header.check_state = (Qt.CheckState.Checked if visible and all(visible) else
-                                          Qt.CheckState.PartiallyChecked if any(visible) else Qt.CheckState.Unchecked)
-        self.select_header.viewport().update()
+        self.recapture_button.setEnabled(bool(checked) and not self.busy)
 
     def inspect(self):
         selected = self.selected()
         if not selected or self.busy:
             return
         row = selected[0]
+        self._show_attempts(row)
+        point = self.capture_state['points'].get(point_name(row), {})
+        attempt = next((a for a in point.get('attempts', []) if a['number'] == point.get('viewed')), None)
+        plot_folder = self.folder
+        if attempt:
+            row = attempt_row(point_name(row), attempt)
+            plot_folder = self.folder/attempt['folder']
         details = f"{row['filename']} — {row.get('reason', '')}  Coverage: {row.get('coverage', 'Excluded')}."
         for key, label in (('pre', 'Pre-sweep'), ('tail', 'Late')):
             metrics = row.get('metrics', {})
@@ -396,7 +489,7 @@ class MeasurementReviewPane(QWidget):
         self.details.setText(details)
         try:
             self.plot_interaction.clear()
-            axes = draw_inspection(self.figure, self.folder, row, self.rows)
+            axes = draw_inspection(self.figure, plot_folder, row, self.rows)
             self.plot_interaction.set_axes(axes)
             self.canvas.draw_idle()
         except (OSError, ValueError, KeyError) as error:
@@ -412,32 +505,154 @@ class MeasurementReviewPane(QWidget):
             return False
         return True
 
+    def _save_choices(self):
+        save_state(self.folder, self.capture_state)
+        self.identity = dataset_identity(self.folder)
+        write_review_report(self.folder, self.rows, identity=self.identity)
+
+    def _show_attempts(self, row):
+        while self.attempt_bar.count():
+            item = self.attempt_bar.takeAt(0)
+            if item.widget():
+                self.attempt_group.removeButton(item.widget())
+                item.widget().deleteLater()
+        name = point_name(row)
+        point = self.capture_state['points'].get(name, {})
+        attempts = point.get('attempts', [])
+        viewed = point.get('viewed')
+        if not attempts:
+            button = QPushButton('Capture 1 (original)' if 'response' in row else 'No capture')
+            button.setEnabled(False)
+            self.attempt_bar.addWidget(button)
+        for attempt in attempts:
+            quality = attempt_quality(attempt)
+            color = {'pass': '#15803d', 'fail': '#b91c1c', 'incomplete': '#a16207'}[quality]
+            label = f"Capture {attempt['number']}" + (' ✓ chosen' if point.get('chosen') == attempt['number'] and not point.get('excluded') else '')
+            button = QPushButton(label)
+            button.setCheckable(True)
+            button.setChecked(viewed == attempt['number'])
+            button.setToolTip({'pass': 'Passed automatic checks', 'fail': 'Automatic checks flagged this capture', 'incomplete': 'Analysis incomplete or capture unavailable'}[quality])
+            button.setStyleSheet(f'QPushButton {{color:{color}; padding:6px;}} QPushButton:checked {{border:2px solid #2563eb; background:#dbeafe;}}')
+            self.attempt_group.addButton(button)
+            button.clicked.connect(lambda checked=False, n=attempt['number'], key=name: self.view_capture(key, n))
+            self.attempt_bar.addWidget(button)
+        self.attempt_bar.addStretch(1)
+        viewed_attempt = next((a for a in attempts if a['number'] == viewed), None)
+        self.choose_button.setEnabled(bool(viewed_attempt and viewed_attempt['complete']) and not self.busy)
+
+    def view_capture(self, name, number):
+        self.capture_state['points'][name]['viewed'] = number
+        save_state(self.folder, self.capture_state)
+        self.inspect()
+
+    def choose_capture(self):
+        if not self._can_change() or not self.selected():
+            return
+        name = point_name(self.selected()[0])
+        point = self.capture_state['points'][name]
+        point.update(chosen=point['viewed'], excluded=False, needs_decision=True)
+        self._save_choices()
+        self._refresh_choice_row(name)
+
+    def _refresh_choice_row(self, name):
+        self.populate()
+        for number in range(self.table.rowCount()):
+            if self.table.item(number, 1).text() == name:
+                self.table.selectRow(number)
+                break
+
     def exclude(self):
-        self._rename([row for row in self.rows if row['marked'] and row['status'] != 'excluded'])
+        self._stage_exclusions(True)
+
+    def _exclude_or_restore(self):
+        if self.filter.currentText() == 'Excluded':
+            self.restore()
+        else:
+            self.exclude()
 
     def restore(self):
-        self._rename([row for row in self.rows if row['marked'] and row['status'] == 'excluded'], True)
+        self._stage_exclusions(False)
 
-    def _rename(self, rows, restore=False):
+    def _stage_exclusions(self, excluded):
+        rows = [row for row in self.rows if row['marked'] and
+                self.capture_state['points'].get(point_name(row), {}).get('excluded', row['status'] == 'excluded') != excluded]
         if not rows or not self._can_change():
             return
-        action = 'Restore' if restore else 'Exclude'
-        if QMessageBox.question(self, f'{action} {len(rows)} recordings?',
-                                ('Remove' if restore else 'Append') + ' .blacklisted for these recordings?\n\n' +
-                                '\n'.join(row['filename'] for row in rows),
-                                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
-                                QMessageBox.StandardButton.Cancel) != QMessageBox.StandardButton.Yes:
+        try:
+            for row in rows:
+                point = ensure_point(self.folder, self.capture_state, row)
+                point.update(excluded=excluded, needs_decision=True)
+            self._save_choices()
+            self.populate()
+            self.status.setText('Capture list updated. Accept capture list to apply these choices.')
+        except (OSError, ValueError) as error:
+            QMessageBox.warning(self, 'Could not update capture list', str(error))
+
+    def accept_list(self):
+        if not self._can_change():
+            return
+        warnings = []
+        for name, point in self.capture_state['points'].items():
+            if point['excluded']:
+                continue
+            attempt = next((a for a in point['attempts'] if a['number'] == point.get('chosen')), None)
+            if attempt is None or not attempt['complete']:
+                QMessageBox.warning(self, 'Capture required', f'Choose a complete capture or exclude {name}.')
+                return
+            if attempt_quality(attempt) != 'pass':
+                warnings.append(name)
+        # Include untouched flagged original captures in the approval warning.
+        warnings.extend(point_name(r) for r in self.rows if point_name(r) not in self.capture_state['points']
+                        and r['status'] not in ('pass', 'excluded'))
+        if warnings and QMessageBox.question(self, 'Accept flagged captures?',
+                f'{len(warnings)} accepted captures did not pass all automatic checks. Are you sure you want to use them?',
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Cancel) != QMessageBox.StandardButton.Yes:
             return
         try:
-            rename_reviewed(self.folder, rows, restore)
-            try:
-                write_review_report(self.folder, self.rows, {
-                    row['filename']: 'Restored' if restore else 'Excluded' for row in rows})
-            except (OSError, ValueError) as error:
-                QMessageBox.warning(self, 'Report update failed', f'Files were renamed, but the report could not be updated: {error}')
+            accept_capture_list(self.folder)
+            self.capture_state = load_state(self.folder)
+            actions = {}
+            for row in self.rows:
+                name = point_name(row)
+                point = self.capture_state['points'].get(name, {})
+                if point or row['status'] != 'pass':
+                    actions[name] = ('Excluded' if point.get('excluded', row['status'] == 'excluded')
+                                     else f"Approved capture {point.get('active', 1)}")
+            write_review_report(self.folder, self.rows, actions)
             self.scan()
         except (OSError, ValueError) as error:
-            QMessageBox.warning(self, 'Rename failed', str(error))
+            QMessageBox.warning(self, 'Approval failed', str(error))
+
+    def recapture(self):
+        rows = [row for row in self.rows if row['marked']]
+        if not rows or not self._can_change():
+            return
+        try:
+            generation = self.generation
+            self.backend.start_recapture(self.folder, rows,
+                lambda event: self.events.put((generation, 'capture', event)), detector_callback=self.detector_callback)
+            self._set_busy(True)
+            self.pause_button.setEnabled(True)
+            self.stop_button.setEnabled(True)
+            self.pause_button.setText('Pause')
+            self.pause_button.show()
+            self.stop_button.show()
+            self.choose_button.setEnabled(False)
+            self.status.setText('Re-capturing selected coordinates…')
+            self._return_filename = point_name(rows[0])
+            self.recapture_started.emit(rows)
+        except (OSError, ValueError, RuntimeError) as error:
+            self.capture_state = load_state(self.folder)
+            QMessageBox.warning(self, 'Re-capture could not start', str(error))
+
+    def pause_recapture(self):
+        if self.backend.is_measurement_set_paused():
+            self.backend.resume_measurement_set()
+            self.pause_button.setText('Pause')
+        else:
+            self.backend.pause_measurement_set()
+            self.pause_button.setText('Resume')
 
     def cleanup(self):
         if not self._can_change():
@@ -469,9 +684,10 @@ class MeasurementReviewPane(QWidget):
             'Scroll over a plot to zoom around the pointer. Hover an axis to zoom only that axis. '
             'Drag with the middle mouse button to pan. Reset axes at the top right restores that plot.\n\n'
             'Use Select checkboxes for actions. Shift-click filenames to highlight a range, then '
-            'toggle one checkbox to select or deselect that range. The header checkbox applies '
-            'to the displayed list. A text report is saved automatically after analysis and '
-            'updated after exclusions/restorations.\n\n'
+            'toggle one checkbox to select or deselect that range. Ctrl+A highlights all displayed rows. '
+            'A text report is saved automatically after analysis and '
+            'updated after approvals and exclusions. Choose an attempt above the plots, then use '
+            'Choose this capture. Accept capture list publishes the chosen attempts and exclusions.\n\n'
             'Spatial: 40–320 Hz complex response predicted from 12 neighbours (13 unique valid positions required). '
             'A finding means the prediction differs beyond the detector threshold; it does not establish the cause.\n\n'
             'Pre-sweep: skip max(20 ms, 20% of pre-marker silence); stop 20 ms before the marker. '

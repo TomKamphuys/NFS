@@ -72,6 +72,7 @@ class ControlPane(QWidget):
         self.sine_running = False
         self.home_ok = False
         self.grid_readout_points: list[dict[str, float]] = []
+        self._recapture_readout_points = None
         self._jog_buttons: list[QPushButton] = []
         self._control_buttons: list[QPushButton] = []
         self._jog_in_progress = False
@@ -717,14 +718,23 @@ class ControlPane(QWidget):
         self.backend.set_project_dir(saved_dir)
 
     def _load_grid_readout_points(self) -> None:
+        if self._recapture_readout_points is not None:
+            self.grid_readout_points = self._recapture_readout_points
+            return
         if self.grid_readout_points:
             return
         self._reload_grid_readout_points()
 
     def refresh_grid_readout(self, current_index: int = 0) -> None:
+        self._recapture_readout_points = None
         self.grid_readout_points = []
         self._reload_grid_readout_points()
         self._update_grid_readout(current_index)
+
+    def set_recapture_points(self, points) -> None:
+        self._recapture_readout_points = [dict(r=p['r'], p=p['phi'], z=p['z']) for p in points]
+        self.grid_readout_points = self._recapture_readout_points
+        self._update_grid_readout(0)
 
     def _reload_grid_readout_points(self) -> None:
         path = project.get_project_dir() / str(project.get_grid_filename())
@@ -842,6 +852,10 @@ class ControlPane(QWidget):
         self.measurement_start.setIconSize(QSize(18, 18))
 
     def _apply_progress_event(self, event: dict) -> None:
+        if event.get('recapture') and event.get('points') is not None:
+            self.set_recapture_points(event['points'])
+        elif event.get('status') == 'started' and self._recapture_readout_points is not None:
+            self.refresh_grid_readout()
         if event.get('status') in ('finished', 'failed', 'error') and self._detector_dialog is not None:
             self._detector_dialog.dismiss()
         current = int(event.get("current") or 0)

@@ -213,6 +213,7 @@ class NearFieldScanner:
         overwrite: bool = False,
         progress_callback: Optional[Callable[[dict[str, Any]], None]] = None,
         detector_callback=None,
+        *, recapture_jobs=None, motion_manager=None,
     ) -> None:
         """
         Take a full set of measurements.
@@ -226,6 +227,8 @@ class NearFieldScanner:
         :param progress_callback: Optional callback invoked when progress updates occur.
         :return: None
         """
+        if recapture_jobs is not None and (not recapture_jobs or motion_manager is None):
+            raise ValueError('Re-capture requires a nonempty queue and its motion manager')
         self._measurement_pause_requested.clear()
         self._measurement_stop_requested.clear()
         self._measurement_running = True
@@ -237,10 +240,12 @@ class NearFieldScanner:
         stopped_early = False
         failure_exc: Exception | None = None
 
+        manager = motion_manager if motion_manager is not None else self._measurement_motion_manager
+        recapturing = recapture_jobs is not None
         # 1. Setup this measurement set's output directory
         session_name = self._safe_measurement_set_name(measurement_set_name)
         measurement_dir = self._measurement_set_dir()
-        if measurement_dir.exists() and overwrite:
+        if measurement_dir.exists() and overwrite and not recapturing:
             shutil.rmtree(measurement_dir)
         measurement_dir.mkdir(parents=True, exist_ok=True)
 
@@ -260,15 +265,18 @@ class NearFieldScanner:
         log_version_info(log_env=False)
 
         # 4. Update audio paths and position log path
-        if hasattr(self._audio, 'set_session_directory'):
-            self._audio.set_session_directory(measurement_dir)
-
         try:
+            if hasattr(self._audio, 'set_session_directory'):
+                self._audio.set_session_directory(measurement_dir if not recapturing else
+                    measurement_dir / recapture_jobs[0]['folder'])
             if hasattr(self._audio, 'set_detector_observer'):
                 self._audio.set_detector_observer(detector_callback)
-            self._clear_position_log()
+            if not recapturing:
+                self._clear_position_log()
 
-            total = self._measurement_motion_manager.total_points()
+            total = manager.total_points()
+            if recapturing and total != len(recapture_jobs):
+                raise ValueError('Re-capture motion queue does not match the selected points')
             started_at = time.monotonic()
             self._emit_measurement_progress(
                 progress_callback,
@@ -291,14 +299,14 @@ class NearFieldScanner:
             if stopped_early or not self._wait_while_measurement_paused():
                 stopped_early = True
                 return
-            self._measurement_motion_manager.move_to_safe_starting_radius()
-            while not stopped_early and not self._measurement_motion_manager.ready():
+            manager.move_to_safe_starting_radius()
+            while not stopped_early and not manager.ready():
                 if not self._wait_while_measurement_paused():
                     logger.info("Measurement set stopped before next point.")
                     stopped_early = True
                     break
 
-                self._measurement_motion_manager.next()
+                manager.next()
 
                 if self._measurement_stop_requested.is_set():
                     logger.info("Measurement set stopped after current move.")
@@ -310,7 +318,17 @@ class NearFieldScanner:
                 logger.info(f"Measuring point {current} of {total}... {progress:.1f}% complete")
 
                 position = self._scanner.get_position()
-                self._append_position_to_file(position)
+                if recapturing:
+                    from .review_attempts import coordinates
+                    import numpy as np
+                    job = recapture_jobs[current-1]
+                    expected, _ = coordinates(job['filename'])
+                    actual = np.array([position.r()*np.cos(np.radians(position.t())),
+                                       position.r()*np.sin(np.radians(position.t())), position.z()])/1000
+                    if np.linalg.norm(actual-expected) > .0005:
+                        raise ValueError('Scanner did not reach the requested re-capture coordinate')
+                else:
+                    self._append_position_to_file(position)
                 self._update_audio_position_callback(position)
 
                 pos_dict = {"r": position.r(), "phi": position.t(), "z": position.z()}
@@ -329,7 +347,20 @@ class NearFieldScanner:
                 )
 
                 try:
-                    result = self._audio.measure_ir(position, session_name)
+                    if recapturing:
+                        from .review_attempts import safe_path, complete_attempt
+                        from .review_capture import full_ir_path
+                        output = safe_path(measurement_dir, job['folder'])
+                        self._audio.set_capture_output_directory(output)
+                        try:
+                            result = self._audio.capture_ir(output/job['filename'],
+                                full_ir_path(output, job), include_debug_artifacts=False)
+                        except Exception as error:
+                            complete_attempt(measurement_dir, job, error=str(error))
+                            raise
+                        complete_attempt(measurement_dir, job, dict(result, measured_position=pos_dict))
+                    else:
+                        result = self._audio.measure_ir(position, session_name)
                 except DetectorPreparationCancelled:
                     stopped_early = True
                     break
@@ -341,6 +372,10 @@ class NearFieldScanner:
                     eta_seconds = seconds_per_point * max(0, total - current)
 
                 # Check if the measurement failed (e.g., dropout retries exhausted)
+                if result.get("error") and not recapturing:
+                    from .review_attempts import register_missing
+                    filename = self._audio.naming_convention.build_ir_path(position, measurement_dir, session_name).name
+                    register_missing(measurement_dir, filename, (position.r(), position.t(), position.z()), result['error'])
                 if result.get("error"):
                     failure_action = ('stopping scan' if result.get('stop_scan') is True
                                       else 'skipping to next point')
@@ -379,8 +414,10 @@ class NearFieldScanner:
                         retries=retries,
                     )
 
-            self._measurement_motion_manager.reset()
-            self._measurement_motion_manager.move_to_park_position()
+            if recapturing and not stopped_early and current != len(recapture_jobs):
+                raise ValueError('Re-capture motion queue ended before all selected points were reached')
+            manager.reset()
+            manager.move_to_park_position()
 
         except Exception as exc:
             failure_exc = exc
@@ -420,6 +457,8 @@ class NearFieldScanner:
             self._measurement_running = False
             self._measurement_pause_requested.clear()
             self._measurement_stop_requested.clear()
+            if recapturing:
+                self._audio.set_capture_output_directory(measurement_dir)
             # 5. Cleanup: Restore paths and remove session log sink
             if failure_exc is not None:
                 logger.error(f"Measurement set {session_name} failed: {failure_exc}")

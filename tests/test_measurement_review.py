@@ -193,6 +193,8 @@ def test_native_pane_scans_and_follows_session(qtbot, tmp_path, monkeypatch, rev
     from harmonic_drive_qt.qt_compat import QMessageBox
     monkeypatch.setattr(QMessageBox, 'question', lambda *args: QMessageBox.StandardButton.Yes)
     pane.exclude()
+    assert (folder/'r100p0_ph0p0_z0p0_ir.wav').exists()
+    pane.accept_list()
     qtbot.waitUntil(lambda: not pane.busy, timeout=10000)
     assert (folder/'r100p0_ph0p0_z0p0_ir.wav.blacklisted').exists()
     assert json.loads(report.read_text(encoding='utf-8'))['files'][0]['Status'] == 'Excluded'
@@ -200,9 +202,10 @@ def test_native_pane_scans_and_follows_session(qtbot, tmp_path, monkeypatch, rev
     pane.filter.setCurrentText('Excluded')
     pane._check_all_visible(True)
     pane.restore()
+    pane.accept_list()
     qtbot.waitUntil(lambda: not pane.busy, timeout=10000)
     assert (folder/'r100p0_ph0p0_z0p0_ir.wav').exists()
-    assert json.loads(report.read_text(encoding='utf-8'))['files'][0]['Status'] == 'Restored'
+    assert json.loads(report.read_text(encoding='utf-8'))['files'][0]['Status'] == 'Approved capture 1'
     monkeypatch.setattr(project, 'get_project_dir', lambda: tmp_path/'other')
     pane.refresh_context()
     assert pane.rows == []

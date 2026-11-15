@@ -43,3 +43,24 @@ class MeasurementPoints(Protocol):
         :rtype: int
         """
         pass
+
+
+class SelectedMeasurementPoints:
+    """A finite re-capture queue that never edits or advances the configured grid."""
+    def __init__(self, positions):
+        self.positions = tuple(positions)
+        self.index = 0
+
+    def next(self):
+        point = self.positions[self.index]
+        self.index += 1
+        return point
+
+    def ready(self):
+        return self.index >= len(self.positions)
+
+    def reset(self):
+        self.index = 0
+
+    def total_points(self):
+        return len(self.positions)

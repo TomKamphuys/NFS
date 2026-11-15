@@ -28,7 +28,16 @@ class DetectorDialog(QDialog):
         self.title.setWordWrap(True)
         self.title.setStyleSheet('font-size: 18px; font-weight: 700;')
         heading.addWidget(self.icon)
-        heading.addWidget(self.title, 1)
+        heading.addWidget(self.title)
+        self.reference_dots = []
+        for _ in range(3):
+            dot = QLabel('●')
+            dot.setFixedSize(14, 24)
+            dot.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            dot.hide()
+            heading.addWidget(dot)
+            self.reference_dots.append(dot)
+        heading.addStretch(1)
         layout.addLayout(heading)
         self.message = QLabel()
         self.message.setWordWrap(True)
@@ -68,6 +77,15 @@ class DetectorDialog(QDialog):
         self.details.setVisible(bool(event.details))
         good = event.kind in ('preparation_ready', 'point_accepted')
         bad = event.kind in ('preparation_failed', 'attempt_rejected', 'point_failed')
+        reference_progress = event.detector == 'loopback_reference' and event.kind in (
+            'preparing', 'preparation_progress', 'checking', 'preparation_ready')
+        self.icon.setVisible(not reference_progress)
+        for index, dot in enumerate(self.reference_dots):
+            dot.setVisible(reference_progress)
+            captured = index < event.completed
+            color = '#15803d' if captured else '#2563eb'
+            dot.setStyleSheet(f'font-size: 12px; color: {color};')
+            dot.setAccessibleName(f'Reference sample {index+1}: ' + ('captured' if captured else 'waiting'))
         self.icon.setAccessibleName('Accepted' if good else 'Rejected' if bad else 'In progress')
         if good or bad:
             symbol = QStyle.StandardPixmap.SP_DialogApplyButton if good else QStyle.StandardPixmap.SP_DialogCancelButton

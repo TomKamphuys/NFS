@@ -566,7 +566,8 @@ def test_audio_factory_accepts_comma_decimal_config_values(tmp_path):
     audio = AudioFactory.create(str(config_path))
 
     assert audio.hw["wasapi_exclusive"] is False
-    assert audio.cap["debug_saves"] is False
+    # Retention is mandatory for Measurement Review, including legacy configs.
+    assert audio.cap["debug_saves"] is True
     assert audio.alignment_engine.align_to_first_marker is True
     assert audio.cap["sweep_dur_s"] == 0.5
     assert audio.cap["sweep_level_dbfs"] == -10.5

@@ -253,9 +253,9 @@ def test_shift_highlight_and_checkbox_toggle_range_and_header(qtbot, tmp_path, m
     pane.resize(1650, 950)
     pane.show()
     qtbot.waitExposed(pane)
-    assert pane.table.columnCount() == 4
-    assert [pane.table.horizontalHeaderItem(i).text() for i in range(4)] == [
-        'Select', 'Filename', 'Issue description', 'LF band (Hz)']
+    assert pane.table.columnCount() == 5
+    assert [pane.table.horizontalHeaderItem(i).text() for i in range(5)] == [
+        'Select', 'Filename', 'Issue description', 'LF band (Hz)', 'Chosen capture']
     assert pane.list_panel.x() < pane.plot_panel.x()
     from PySide6.QtWidgets import QHeaderView
     assert all(pane.table.horizontalHeader().sectionResizeMode(i) == QHeaderView.ResizeMode.Fixed
@@ -279,17 +279,13 @@ def test_shift_highlight_and_checkbox_toggle_range_and_header(qtbot, tmp_path, m
     assert [i.row() for i in pane.table.selectionModel().selectedRows()] == [1, 2, 3]
     assert pane.exclude_button.text() == 'Exclude (3)'
     assert pane.recapture_button.text() == 'Re-capture (3)'
-    assert not pane.recapture_button.isEnabled()
+    assert pane.recapture_button.isEnabled()
     qtbot.mouseClick(pane.table.viewport(), Qt.MouseButton.LeftButton, pos=cell(1, 0))
     assert not any(row['marked'] for row in pane.rows)
     qtbot.mouseClick(pane.select_header.viewport(), Qt.MouseButton.LeftButton,
                      pos=QPoint(12, pane.select_header.height()//2))
-    assert all(row['marked'] for row in pane.rows)
-    assert pane.select_header.check_state == Qt.CheckState.Checked
-    qtbot.mouseClick(pane.select_header.viewport(), Qt.MouseButton.LeftButton,
-                     pos=QPoint(12, pane.select_header.height()//2))
     assert not any(row['marked'] for row in pane.rows)
-    # The header only changes the filtered list, preserving hidden selections.
+    # Bulk selection helpers preserve hidden selections.
     pane.rows[0]['status'] = 'pass'
     pane.rows[0]['marked'] = True
     pane.populate()
@@ -298,3 +294,27 @@ def test_shift_highlight_and_checkbox_toggle_range_and_header(qtbot, tmp_path, m
     assert pane.rows[0]['marked']
     assert not any(row['marked'] for row in pane.rows[1:])
     pane.shutdown()
+
+
+def test_readonly_review_cells_keep_selection_without_editors(qtbot):
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QAbstractItemView, QLineEdit, QTableWidgetItem
+    from harmonic_drive_qt.review_selection import ReviewTable
+    table = ReviewTable(2, 3)
+    qtbot.addWidget(table)
+    table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+    table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+    table.setEditTriggers(QAbstractItemView.EditTrigger.AllEditTriggers)
+    for row in range(2):
+        for column in range(3):
+            table.setItem(row, column, QTableWidgetItem(f'File {row} field {column}'))
+    table.show()
+    for column in (1, 2):
+        item = table.item(0, column)
+        qtbot.mouseDClick(table.viewport(), Qt.MouseButton.LeftButton, pos=table.visualItemRect(item).center())
+        qtbot.keyClick(table, Qt.Key.Key_F2)
+        qtbot.keyClicks(table, 'cannot edit')
+        assert not table.findChildren(QLineEdit)
+        assert item.text() == f'File 0 field {column}'
+        assert table.selectionModel().selectedRows()[0].row() == 0
+    assert table.viewport().cursor().shape() == Qt.CursorShape.ArrowCursor

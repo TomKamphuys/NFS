@@ -2,14 +2,16 @@
 
 Open **Measurement Review** in the Views menu. This native PySide pane occupies
 the workspace beneath the session header and follows the current session's
-`measurement_set` directory. Scan after acquisition finishes. Analysis runs in the
+`measurement_set` directory. A completed measurement set opens the pane and scans
+automatically, after acquisition has fully stopped. Stopped or failed full scans
+do not open it automatically. Analysis runs in the
 background and rejects results if the files change while
 being read. New measurements mark existing results stale.
 
 The table initially shows findings and incomplete checks. Switch to **All
 recordings** to inspect normal measurements or **Excluded** to restore previous
 exclusions. The recording list sits on the left, with Select,
-Filename, Issue description and LF band columns. Per-file status labels and LF
+Filename, Issue description, LF band and Chosen capture columns. Per-file status labels and LF
 scores are omitted. Columns are fixed to their content widths, without wrapping
 or stretching. The list initially takes only the width needed for those columns;
 extra window width goes to the plots. There is no divider; the list remains
@@ -83,14 +85,15 @@ The full IR is not displayed in Measurement Review.
 Nothing is automatically selected or excluded. Use the **Select** checkboxes to
 choose recordings for actions. Shift-click filenames to highlight a range; clicking
 one of that range's checkboxes checks or unchecks the whole highlighted range.
-Space also toggles a highlighted range. The checkbox in the Select header checks
-or unchecks every row in the currently displayed list. Checked files outside the
+Space also toggles a highlighted range; Ctrl+A highlights all displayed rows.
+The Select header is a plain label. Checked files outside the
 current filter remain selected, and the action counts include them.
 
-Confirm **Exclude (n)** to append `.blacklisted`. **Restore selected** removes
-the suffix and refuses to overwrite replacement captures. Renaming checks the
-reviewed file identity and destination collisions, with rollback on batch failure.
-The pane rescans after exclusions/restoration because neighbours have changed.
+**Exclude (n)** stages an exclusion and greys the row. In the Excluded list, the
+same button becomes **Restore (n)** and stages restoration. **Accept capture list** applies the proposals: excluded canonical
+IRs receive `.blacklisted`, restored recordings lose the suffix. The pane then
+rescans because neighbours have changed. Until acceptance, existing canonical
+recordings remain active.
 
 Each successful analysis automatically writes **one** `measurement_review.json`
 in the measurement directory. Its readable findings section lists suspected or
@@ -111,10 +114,47 @@ capture files. Missing, damaged or unsupported results show a rescan notice
 rather than preventing the project from opening. Checkbox selections are reset
 on reload.
 
-**Re-capture (n)** shows the checkbox selection count but is disabled until
-remeasurement is connected. It performs no capture or report-status change.
-Rebuild downstream HALS imports/reconstruction after excluding measurements;
-renaming does not remove data already imported.
+## Re-capture and approval
+
+Check recordings and press **Re-capture (n)** to measure those coordinates again.
+The queue uses the normal motion manager and configured keep-out geometry, audio
+owner thread, reference preparation and capture retries. It leaves the configured
+grid and position log intact. Starting re-capture switches to Machine Control and
+Live Capture. The coordinate readout shows the temporary re-capture queue, and its
+progress counts only those selected positions. **Pause/Resume** and **Stop** remain
+available in Machine Control (and in Review if opened during acquisition).
+Successful attempts survive stopped/failed batches, and review scans again when
+the batch ends. The app returns to Review, focuses the first re-captured filename
+and displays its new attempt. Points whose original acquisition failed are listed as missing
+and can also be re-captured or excluded.
+
+The original capture is archived before the first re-capture. New captures go to
+separate attempt folders under `review_attempts`, retaining their own raw capture,
+full IR, settings and reference. Repeating adds capture 3, 4, etc. A row represents
+one measurement position throughout.
+
+Buttons above the plots select the attempt being inspected. Green means all
+automatic checks passed, red means a check flagged it, and amber means checks or
+capture data are incomplete. Viewing an attempt does not choose it. Press
+**Choose this capture** to set the proposed winner; the Chosen capture column
+shows the proposal. Viewing and choosing are both saved in `measurement_review.json`.
+Rows with multiple complete captures show a blue circular badge with a white
+number in that same column. The number is the count of captures available to choose from.
+All attempts use the same active neighbour cohort, excluding every attempt at
+their own position. Alternatives never become extra spatial neighbours.
+
+**Accept capture list** publishes the proposed winners and exclusions. It warns
+if any retained capture failed a check or has incomplete analysis. Incomplete
+recordings without an IR cannot be chosen. Canonical files change only here;
+all archived alternatives remain available. Publication uses staged file
+replacement and a recovery journal inside the same JSON. Interrupted publication
+rolls back when the dataset is reopened. Original sweep level, duration, repeat
+count, channels, sample rate and protection settings must match when metadata is
+available; pre/post silence and retry settings can be adjusted.
+
+The JSON retains capture decisions and a dated action history alongside findings
+and analysis. Rebuild downstream HALS imports/reconstruction after accepting a
+replacement or exclusion; existing imports are not changed automatically.
 
 ## Analysis data retention
 
@@ -127,7 +167,8 @@ ambiguous legacy associations are reported as unavailable.
 
 After review, **Delete analysis data** estimates the space released and asks for
 confirmation. It removes WAV/NPZ/JSON analysis artifacts under the selected
-measurement set's `debug`, `Distortion` and `failed` directories. It preserves
+measurement set's `debug`, `Distortion` and `failed` directories, including those
+inside capture attempts. It preserves every attempt's
 linear IRs, `.blacklisted` linear IRs, project files and the automatic text report,
 and updates that report first. It rejects linked/external paths
 and changed deletion plans. Acquisition or analysis must finish before deletion.

@@ -270,6 +270,8 @@ def _find_latest_ir_file() -> Path | None:
                 path for path in directory.glob("*_ir.wav")
                 if "dist" not in path.name.lower()
             )
+    attempts = root/'measurement_set'/'review_attempts'
+    files.extend(attempts.glob('*/*/*_ir.wav'))
     return max(files, key=lambda path: path.stat().st_mtime) if files else None
 
 
@@ -287,6 +289,8 @@ def _find_latest_capture_file() -> Path | None:
             files.extend(
                 path for path in directory.glob("*_capture.wav")
             )
+    attempts = root/'measurement_set'/'review_attempts'
+    files.extend(attempts.glob('*/*/debug/*_capture.wav'))
     return max(files, key=lambda path: path.stat().st_mtime) if files else None
 
 
@@ -593,6 +597,7 @@ class LiveCapturePane(QWidget):
         self.grid_df: pd.DataFrame | None = None
         # Each entry: {"r": ..., "phi": ..., "z": ..., "status": "ok" | "retried" | "failed"}
         self._completed_positions: list[dict[str, Any]] = []
+        self._active_recapture_position = None
         self.fr_smoothing_fraction = 24
         self.viewer_backend = self._read_viewer_backend()
         self._pyvista_error: str | None = None
@@ -1058,8 +1063,13 @@ class LiveCapturePane(QWidget):
         """Handle real-time measurement progress events from ControlPane."""
         status = event.get("status", "")
         if status == "started":
-            self._completed_positions.clear()
+            self._active_recapture_position = (event['points'][0] if event.get('recapture') and event.get('points') else None)
+            if not event.get('recapture'):
+                self._completed_positions.clear()
             self.refresh_progress_viewer(0)
+            self.refresh_positions()
+        elif status == 'point_started' and event.get('recapture'):
+            self._active_recapture_position = event.get('position')
             self.refresh_positions()
         elif status == "point_complete":
             pos = event.get("position")
@@ -1067,6 +1077,9 @@ class LiveCapturePane(QWidget):
                 retries = event.get("retries", 0)
                 pos_entry = dict(pos)
                 pos_entry["status"] = "retried" if int(retries) > 0 else "ok"
+                if event.get('recapture'):
+                    self._completed_positions[:] = [p for p in self._completed_positions
+                        if any(abs(p.get(k, 0)-pos.get(k, 0)) > .01 for k in ('r', 'phi', 'z'))]
                 self._completed_positions.append(pos_entry)
             self.refresh_positions()
         elif status == "point_failed":
@@ -1074,6 +1087,9 @@ class LiveCapturePane(QWidget):
             if pos is not None:
                 pos_entry = dict(pos)
                 pos_entry["status"] = "failed"
+                if event.get('recapture'):
+                    self._completed_positions[:] = [p for p in self._completed_positions
+                        if any(abs(p.get(k, 0)-pos.get(k, 0)) > .01 for k in ('r', 'phi', 'z'))]
                 self._completed_positions.append(pos_entry)
             self.refresh_positions()
         elif status in ("finished", "failed"):
@@ -1084,6 +1100,7 @@ class LiveCapturePane(QWidget):
         self.grid_points = _load_grid_points()
         self.grid_df = _load_grid_dataframe()
         self._completed_positions.clear()
+        self._active_recapture_position = None
         self.refresh_progress_viewer(0)
         self.refresh_positions()
         self.refresh_ir_plots()
@@ -1160,6 +1177,15 @@ class LiveCapturePane(QWidget):
                     self.progress_engine.load_data(pd.DataFrame(rows), settings)
             if self.progress_engine.N > 0:
                 index = max(0, min(int(self.progress_engine.N) - 1, measured_count - 1))
+                target = getattr(self, '_active_recapture_position', None)
+                if target is not None and self.grid_df is not None and len(self.grid_df):
+                    # A re-capture queue's index is unrelated to the full grid's
+                    # index. Highlight the coordinate actually being measured.
+                    radius = self.grid_df['r_xy_mm'].to_numpy(dtype=float)
+                    phi = np.radians(self.grid_df['phi_deg'].to_numpy(dtype=float)-target['phi'])
+                    distance2 = (radius*np.cos(phi)-target['r'])**2 + (radius*np.sin(phi))**2
+                    distance2 += (self.grid_df['z_mm'].to_numpy(dtype=float)-target['z'])**2
+                    index = int(np.argmin(distance2))
                 self.progress_engine.curr_idx = index
                 self.progress_engine.exact_idx = float(index)
                 self.progress_engine.update_plot()

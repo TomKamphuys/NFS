@@ -34,10 +34,27 @@ def _json_value(value):
 
 def _save_review_report(folder, entries, analysis=None):
     folder = Path(folder)
-    document = dict(report='HALS Measurement Review',
+    path = folder / REVIEW_REPORT_NAME
+    try:
+        existing = json.loads(path.read_text(encoding='utf-8')) if path.exists() else {}
+    except (ValueError, OSError):
+        existing = {}
+    document = dict(existing if isinstance(existing, dict) else {})
+    document.update(report='HALS Measurement Review',
                     updated_utc=datetime.now(timezone.utc).isoformat(timespec='seconds'),
                     measurement_directory=str(folder),
                     files=[entries[name] for name in sorted(entries)], analysis=analysis)
+    return save_review_document(folder, document)
+
+
+def read_review_document(folder):
+    path = Path(folder) / REVIEW_REPORT_NAME
+    return json.loads(path.read_text(encoding='utf-8')) if path.exists() else dict(report='HALS Measurement Review', files=[], analysis=None)
+
+
+def save_review_document(folder, document):
+    folder = Path(folder)
+    folder.mkdir(parents=True, exist_ok=True)
     contents = json.dumps(document, default=_json_value, allow_nan=False, indent=2) + '\n'
     temporary = folder / f'.measurement_review.{uuid.uuid4().hex}.tmp'
     try:
@@ -72,7 +89,7 @@ def write_review_report(folder, rows, actions=None, *, identity=None):
             if entry['Status'] in ('Pending review', 'Excluded'):
                 entry['Status'] = 'Cleared by rescan'
         else:
-            action = old['Status'] if old and old['Status'] in ('Restored', 'Re-captured') else 'Pending review'
+            action = old['Status'] if old and (old['Status'] in ('Restored', 'Re-captured') or old['Status'].startswith('Approved capture ')) else 'Pending review'
             entry = dict(Filename=name, Status=action,
                          Finding={'repeat': 'Suspect', 'review': 'Review'}.get(status, status.replace('_', ' ').title()),
                          Reason=row.get('reason') or row.get('coverage', ''))
@@ -119,7 +136,7 @@ def load_review_results(folder):
         if row['status'] not in ('repeat', 'review', 'pass', 'technical', 'incomplete',
                                  'insufficient_neighbours', 'excluded'):
             raise ValueError('Invalid saved measurement finding')
-        if 'response' in row:
+        if 'response' in row and not isinstance(row['response'], np.ndarray):
             response = row['response']
             real, imag = np.asarray(response['real'], dtype=float), np.asarray(response['imag'], dtype=float)
             if real.shape != (37,) or imag.shape != (37,) or not np.isfinite(real).all() or not np.isfinite(imag).all():
@@ -136,6 +153,17 @@ def load_review_results(folder):
         row['marked'] = False
     identity = tuple(tuple(item) for item in analysis['identity'])
     return dict(rows=rows, identity=identity)
+
+
+def decode_review_row(row):
+    """Restore numerical arrays for an individual archived attempt."""
+    row = dict(row)
+    if 'response' in row and isinstance(row['response'], dict):
+        row['response'] = np.asarray(row['response']['real'])+1j*np.asarray(row['response']['imag'])
+    if 'xyz' in row:
+        row['xyz'] = np.asarray(row['xyz'], dtype=float)
+    row.setdefault('marked', False)
+    return row
 
 
 def export_report(path, rows):
@@ -158,8 +186,11 @@ def analysis_deletion_plan(folder):
     """Only known generated artifacts inside the selected measurement set."""
     folder = Path(folder).resolve(strict=True)
     plan = []
-    for directory in ('debug', 'Distortion', 'failed'):
-        root = folder / directory
+    roots = [folder/name for name in ('debug', 'Distortion', 'failed')]
+    attempts = folder/'review_attempts'
+    if attempts.exists():
+        roots.extend(path for path in attempts.rglob('*') if path.is_dir() and path.name in ('debug', 'Distortion', 'failed'))
+    for root in roots:
         if not root.exists():
             continue
         if root.is_symlink() or root.is_junction() or not root.resolve().is_relative_to(folder):
@@ -170,7 +201,7 @@ def analysis_deletion_plan(folder):
             if path.is_file() and path.suffix.lower() in ('.wav', '.npz', '.json'):
                 stat = path.stat()
                 plan.append((str(path.relative_to(folder)), stat.st_size, stat.st_mtime_ns, stat.st_ino))
-    return tuple(sorted(plan))
+    return tuple(sorted(set(plan)))
 
 
 def delete_analysis_data(folder, reviewed_plan):

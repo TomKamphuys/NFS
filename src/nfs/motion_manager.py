@@ -1043,7 +1043,7 @@ class MotionManagerFactory:
     """
 
     @staticmethod
-    def create(config_file: str, section: str, scanner: Scanner) -> IMotionManager:
+    def create(config_file: str, section: str, scanner: Scanner, *, points=None) -> IMotionManager:
         """
         Create a motion manager based on the configuration.
 
@@ -1095,7 +1095,7 @@ class MotionManagerFactory:
                 f"Ignoring obsolete safe_radius in {config_file}; "
                 "explicit current keep-out settings are still required.")
         try:
-            measurement_points = factory.create(item)
+            measurement_points = factory.create(item) if points is None else points
         except (TypeError, ValueError, KeyError) as exc:
             raise SafetyConfigurationError(
                 f"Invalid measurement-point configuration in "
@@ -1133,8 +1133,8 @@ class MotionManagerFactory:
                 )
             return val
 
-        unsafe_point_policy = normalize_unsafe_point_policy(
-            config_parser.get(section, 'unsafe_point_policy', fallback=None))
+        unsafe_point_policy = (UNSAFE_POINT_ABORT if points is not None else normalize_unsafe_point_policy(
+            config_parser.get(section, 'unsafe_point_policy', fallback=None)))
 
         def _read_cylindrical_no_fly_zone() -> CylindricalNoFlyZone:
             if config_parser.has_section('dut_volume'):
@@ -1165,7 +1165,7 @@ class MotionManagerFactory:
                 raise SafetyConfigurationError(
                     f"Invalid [{section}] no_fly_radius: {exc}." + recovery) from exc
 
-        if config_parser.getboolean(section, 'optimize_point_order', fallback=False):
+        if points is None and config_parser.getboolean(section, 'optimize_point_order', fallback=False):
             from .point_ordering import OptimizedMeasurementPoints
             zone = (_read_spherical_no_fly_zone()
                     if motion_manager_type == 'SphericalMeasurementMotionManager'

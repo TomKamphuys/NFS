@@ -75,6 +75,13 @@ from .audio_capture import (_set_realtime_priority,
 
 
 class IAudio(ABC):
+    def set_capture_output_directory(self, path: Path) -> None:
+        """Redirect a capture bundle without resetting the batch's detector reference."""
+        self.rec_dir = Path(path)
+        self.dist_dir = self.rec_dir / 'Distortion'
+        self.debug_dir = self.rec_dir / 'debug'
+        self._ensure_directories()
+
     def begin_measurement_set(self, should_continue=None) -> None:
         """Prepare any detector state before the first measurement point."""
 
@@ -208,10 +215,7 @@ class Audio(IAudio):
         """
         self.end_measurement_set()
         self._reference_session_id = uuid.uuid4().hex
-        self.rec_dir = Path(session_path)
-        self.dist_dir = self.rec_dir / "Distortion"
-        self.debug_dir = self.rec_dir / "debug"
-        self._ensure_directories()
+        self.set_capture_output_directory(session_path)
         logger.debug(f"Audio session directory updated to: {session_path}")
 
     def begin_measurement_set(self, should_continue=None) -> None:

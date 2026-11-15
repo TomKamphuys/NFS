@@ -1,39 +1,66 @@
 """Checkbox selection independent of the table's extended row highlighting."""
 from PySide6.QtCore import QRect, Qt, Signal
-from PySide6.QtWidgets import QHeaderView, QStyle, QStyleOptionButton, QTableWidget
+from PySide6.QtGui import QColor, QPainter
+from PySide6.QtWidgets import (QStyle, QStyleOptionViewItem,
+                               QStyledItemDelegate, QTableWidget, QStyleFactory)
+
+CAPTURE_COUNT_ROLE = int(Qt.ItemDataRole.UserRole)+1
 
 
-class SelectHeader(QHeaderView):
-    toggle_all = Signal(bool)
-
+class ReadOnlyCellDelegate(QStyledItemDelegate):
     def __init__(self, parent=None):
-        super().__init__(Qt.Orientation.Horizontal, parent)
-        self.check_state = Qt.CheckState.Unchecked
-        self.has_rows = False
+        super().__init__(parent)
+        # Windows 11 draws an accent bar inside every selected cell. It looks
+        # like a text caret; use Qt's plain item rendering for this read-only list.
+        self._cell_style = QStyleFactory.create('Fusion')
+        self._cell_style.setParent(self)
 
-    def paintSection(self, painter, rect, logical_index):  # noqa: N802
-        super().paintSection(painter, rect, logical_index)
-        if logical_index == 0:
-            option = QStyleOptionButton()
-            option.rect = QRect(rect.left()+5, rect.center().y()-7, 15, 15)
-            option.state = QStyle.StateFlag.State_Enabled if self.isEnabled() and self.has_rows else QStyle.StateFlag.State_None
-            option.state |= {Qt.CheckState.Checked: QStyle.StateFlag.State_On,
-                             Qt.CheckState.PartiallyChecked: QStyle.StateFlag.State_NoChange,
-                             Qt.CheckState.Unchecked: QStyle.StateFlag.State_Off}[self.check_state]
-            self.style().drawControl(QStyle.ControlElement.CE_CheckBox, option, painter, self)
+    def paint(self, painter, option, index):
+        option = QStyleOptionViewItem(option)
+        self.initStyleOption(option, index)
+        option.state &= ~QStyle.StateFlag.State_HasFocus
+        self._cell_style.drawControl(QStyle.ControlElement.CE_ItemViewItem, option, painter, option.widget)
+        count = index.data(CAPTURE_COUNT_ROLE)
+        if count and count > 1:
+            diameter = round(.85*max(18, option.fontMetrics.height()+4))
+            badge = QRect(option.rect.right()-diameter-5, option.rect.center().y()-diameter//2,
+                          diameter, diameter)
+            painter.save()
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor('#2563eb'))
+            painter.drawEllipse(badge)
+            painter.setPen(QColor('white'))
+            font = option.font
+            font.setBold(True)
+            if font.pointSizeF() > 0:
+                font.setPointSizeF(font.pointSizeF()*.85)
+            elif font.pixelSize() > 0:
+                font.setPixelSize(max(1, round(font.pixelSize()*.85)))
+            painter.setFont(font)
+            painter.drawText(badge, Qt.AlignmentFlag.AlignCenter, str(count))
+            painter.restore()
 
-    def mousePressEvent(self, event):  # noqa: N802
-        if (event.button() == Qt.MouseButton.LeftButton and self.logicalIndexAt(event.position().toPoint()) == 0
-                and event.position().x() < self.sectionViewportPosition(0)+self.sectionSize(0)-4):
-            if self.has_rows:
-                self.toggle_all.emit(self.check_state != Qt.CheckState.Checked)
-            event.accept()
-            return
-        super().mousePressEvent(event)
+    def sizeHint(self, option, index):  # noqa: N802
+        size = super().sizeHint(option, index)
+        count = index.data(CAPTURE_COUNT_ROLE)
+        if count and count > 1:
+            diameter = round(.85*max(18, option.fontMetrics.height()+4))
+            size.setWidth(size.width()+diameter+10)
+            size.setHeight(max(size.height(), diameter+4))
+        return size
+
+    def createEditor(self, parent, option, index):  # noqa: N802
+        return None
 
 
 class ReviewTable(QTableWidget):
     toggle_rows = Signal(object, bool)
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.setItemDelegate(ReadOnlyCellDelegate(self))
+        self.viewport().setCursor(Qt.CursorShape.ArrowCursor)
 
     def _toggle(self, row):
         item = self.item(row, 0)

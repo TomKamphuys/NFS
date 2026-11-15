@@ -123,7 +123,7 @@ def microphone_metrics(folder, row):
     metrics['mic_sweep_dbfs'] = db(level)
     metrics['sweep_regions_s'] = [[a/fs, b/fs] for a, b in sweeps]
     # Match baseline groups by the acquisition timing and sweep settings, not archive ID.
-    row['noise_group'] = json.dumps([fs, layout, metadata.get('sweep')], sort_keys=True)
+    row['noise_group'] = json.dumps([fs, {k: v for k, v in layout.items() if k not in ('stream_latency_s', 'actual_sample_rate')}, metadata.get('sweep')], sort_keys=True)
     for key, window in windows.items():
         if window is None:
             row['coverage_notes'].append(f'Insufficient {"pre-sweep" if key == "pre" else "post-sweep"} silence')
@@ -193,6 +193,10 @@ def augment_rows(folder, rows, progress, cancelled, *, pool=None):
         active[i].update(result)
         progress('Checking microphone evidence', i+1, len(active))
     compare_noise(active)
+    finalize_rows(active)
+
+
+def finalize_rows(active):
     for row in active:
         row['coverage'] = '; '.join(row['coverage_notes']) or 'Linear IR + microphone capture + noise baselines'
         issues = row['issues']

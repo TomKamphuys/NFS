@@ -185,6 +185,10 @@ class MainWindow(QMainWindow):
         self.right_stack.addWidget(self.grid_pane)
 
         self.review_pane = MeasurementReviewPane(self.backend)
+        self.review_pane.detector_callback = lambda event: self.control_pane.detector_event.emit(event)
+        self.review_pane.capture_progress = lambda event: self.control_pane.progress_event.emit(event)
+        self.review_pane.recapture_started.connect(self._show_recapture)
+        self.review_pane.recapture_finished.connect(self.show_review)
         self.workspace.addWidget(self.review_pane)
         self.control_pane.measurement_saved.connect(self.review_pane.mark_stale)
         splitter.addWidget(left_region)
@@ -330,6 +334,14 @@ class MainWindow(QMainWindow):
         self.live_capture.set_active(False)
         self._mark_active(self.review_button)
 
+    def _show_recapture(self, rows) -> None:
+        from nfs.measurement_review import coordinates
+        points = [dict(zip(('r', 'phi', 'z'), coordinates(row['filename'].removesuffix('.blacklisted'))[1]))
+                  for row in rows]
+        self.control_pane.set_recapture_points(points)
+        self.show_machine()
+        self.show_live_capture()
+
     def show_motion_preview(self) -> None:
         from .config_support import validate_dut_volume
         from .motion_preview import MotionPreviewWindow
@@ -403,6 +415,23 @@ class MainWindow(QMainWindow):
         if hasattr(self, 'review_pane'):
             self.control_pane.measurement_saved.connect(self.review_pane.mark_stale)
         self.control_pane.progress_event.connect(self.live_capture.on_progress_event)
+        self.control_pane.progress_event.connect(self._review_completed_set)
+
+    def _review_completed_set(self, event):
+        if (event.get('recapture') or event.get('status') != 'finished' or event.get('stopped_early')
+                or not event.get('total') or event.get('current', 0) < event['total']):
+            return
+        folder = project.get_project_dir()
+        def open_when_idle():
+            if project.get_project_dir() != folder:
+                return
+            thread = getattr(self.backend, '_measurement_thread', None)
+            if self.backend.is_measurement_set_running() or (thread and thread.is_alive()):
+                QTimer.singleShot(100, open_when_idle)
+                return
+            self.show_review()
+            self.review_pane.scan()
+        QTimer.singleShot(0, open_when_idle)
 
     def _rebuild_control_pane(self) -> None:
         was_current = self.left_stack.currentWidget() is self.control_pane
