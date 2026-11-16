@@ -24,3 +24,6 @@ Type: filesandordirs; Name: "{#CleanupHomeRoot}\.hals-near-field-scanner"
 ; Legacy builds used the system temp directory for the working project.
 Type: filesandordirs; Name: "{#CleanupTempRoot}\HALS_working_project"
 Type: filesandordirs; Name: "{#CleanupTmpRoot}\HALS_working_project"
+; Also cover normal Windows temp when uninstall is launched by a process
+; that inherited the frozen app's private TEMP environment.
+Type: filesandordirs; Name: "{#CleanupLocalRoot}\Temp\HALS_working_project"

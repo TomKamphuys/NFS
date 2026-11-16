@@ -12,6 +12,7 @@ $owned = @(
     "$root\home\.hals-near-field-scanner",
     "$root\temp\HALS_working_project",
     "$root\tmp\HALS_working_project"
+    "$root\local\Temp\HALS_working_project"
 )
 $preserved = @(
     "$root\home\Documents\HALS_Projects\Saved project\recording.wav",

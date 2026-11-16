@@ -63,6 +63,11 @@ The finished installer is written to `dist/installer/`.
   fallback directories, and the legacy `HALS_working_project` temp directory.
   Saved measurement projects and recordings are preserved, as are shared
   library settings and other HALS products such as HALS Studio.
+  Qt's file dialogs use the shared
+  `HKCU\Software\QtProject\OrganizationDefaults\FileDialog` registry key;
+  this is not exclusive to HALS and cannot safely be deleted by uninstall.
+  Shared caches/settings from older builds also cannot be attributed to this
+  app, so they are preserved rather than erasing other applications' data.
 * Cleanup applies to the account running the uninstaller. If other Windows
   accounts used a machine-wide installation, their private data is not deleted
   by another account's uninstall. Windows-managed execution history, security
