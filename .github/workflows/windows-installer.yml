@@ -82,6 +82,10 @@ jobs:
       - name: Build executable with PyInstaller
         run: uv run --locked --no-sync pyinstaller packaging/hals.spec --noconfirm --clean
 
+      - name: Verify frozen GUI and scanner imports
+        shell: pwsh
+        run: ./packaging/verify_frozen_startup.ps1
+
       - name: Verify frozen executable against stale metadata
         shell: pwsh
         run: |
@@ -118,6 +122,10 @@ jobs:
 
       - name: Install Inno Setup
         run: choco install innosetup --no-progress --yes
+
+      - name: Verify uninstall cleanup and project preservation
+        shell: pwsh
+        run: ./packaging/verify_uninstall.ps1
 
       - name: Build installer with Inno Setup
         run: iscc /DMyAppVersion=${{ steps.version.outputs.version }} packaging\installer.iss

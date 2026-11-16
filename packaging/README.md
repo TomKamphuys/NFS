@@ -45,6 +45,7 @@ uv pip install pyinstaller
 uv run pyinstaller packaging/hals.spec --noconfirm --clean
 
 # 2. Build the installer (version is optional)
+./packaging/verify_frozen_startup.ps1
 iscc /DMyAppVersion=0.2.1 packaging\installer.iss
 ```
 
@@ -57,3 +58,17 @@ The finished installer is written to `dist/installer/`.
   there on first run, so the read-only installation folder is never modified.
 * Plugins are discovered through the packaged distribution metadata; the spec
   file copies that metadata and lists the plugin modules as hidden imports.
+* Frozen dependency caches and temporary files are contained beneath the app's
+  per-user data directory. Uninstall deletes that directory, the roaming/home
+  fallback directories, and the legacy `HALS_working_project` temp directory.
+  Saved measurement projects and recordings are preserved, as are shared
+  library settings and other HALS products such as HALS Studio.
+* Cleanup applies to the account running the uninstaller. If other Windows
+  accounts used a machine-wide installation, their private data is not deleted
+  by another account's uninstall. Windows-managed execution history, security
+  logs, and restore points are outside the application's uninstall scope.
+* Run `powershell -NoProfile -ExecutionPolicy Bypass -File
+  packaging/verify_uninstall.ps1 -Compiler path\to\ISCC.exe` to test the real
+  cleanup rules using a tiny installer with isolated folders and registration.
+  The test checks that saved projects and unrelated files survive. CI runs it
+  before compiling the production installer.

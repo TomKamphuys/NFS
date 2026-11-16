@@ -75,6 +75,10 @@ datas += collect_data_files("rft_calc")
 # plugin modules are declared explicitly and the distribution metadata (which
 # lists the entry points) is copied into the bundle.
 hiddenimports = [
+    # Package-level scanner exports use __getattr__ and import_module, so
+    # PyInstaller cannot discover their implementation modules statically.
+    "nfs.nfs",
+    "nfs.scanner",
     "nfs.audio",
     "nfs.motion_manager",
     "nfs.plugins.cylindrical_measurement_points",
@@ -179,7 +183,10 @@ a = Analysis(
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=[str(_version_hook_path)],
+    runtime_hooks=[
+        str(_version_hook_path),
+        str(_RUNTIME_HOOKS_DIR / "nfs_runtime_paths.py"),
+    ],
     excludes=["tkinter", "nicegui", "pywebview"],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
