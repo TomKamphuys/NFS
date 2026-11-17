@@ -4,7 +4,8 @@ import json
 import soundfile as sf
 import configparser
 from scipy import signal
-from nfs.audio import AudioFactory, SINE_RMS_FROM_PEAK, _LINEAR_IR_ORIGIN_SAMPLE as IR_ORIGIN
+from nfs.audio import SINE_RMS_FROM_PEAK, _LINEAR_IR_ORIGIN_SAMPLE as IR_ORIGIN
+from nfs.audio_factory import AudioFactory
 from nfs.datatypes import CylindricalPosition
 
 

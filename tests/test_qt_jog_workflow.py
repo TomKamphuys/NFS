@@ -15,7 +15,7 @@ from PySide6.QtWidgets import QMessageBox
 from harmonic_drive_qt import project
 from harmonic_drive_qt.backend import BackendManager, Worker
 from harmonic_drive_qt.main_window import MainWindow
-from nfs.audio import MockInterfaceAudio
+from nfs.audio_mock import MockInterfaceAudio
 from nfs.grbl_controller import GrblControllerFactory, GrblControllerMockSimulatedDRO
 
 

@@ -10,7 +10,8 @@ from .logging_config import setup_logging, log_version_info
 from loguru import logger
 
 from . import loader
-from .audio import AudioFactory, IAudio
+from .audio import IAudio
+from .audio_factory import AudioFactory
 from .datatypes import CylindricalPosition
 from .motion_manager import MotionManagerFactory, IMotionManager
 from .scanner import Scanner

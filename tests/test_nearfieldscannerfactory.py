@@ -30,7 +30,7 @@ def test_create_near_field_scanner(mock_scanner, mock_config_file):
     # and if we mock open() globally it fails or returns empty.
     
     with patch("nfs.loader.load_plugins") as mock_load_plugins, \
-         patch("nfs.audio.AudioFactory.create") as mock_audio_factory, \
+         patch("nfs.audio_factory.AudioFactory.create") as mock_audio_factory, \
          patch("nfs.motion_manager.MotionManagerFactory.create") as mock_motion_manager_factory, \
          patch("nfs.nfs.NearFieldScanner") as mock_near_field_scanner:
         

@@ -18,9 +18,7 @@ from typing import Any, Callable, Optional
 from loguru import logger
 
 from nfs import NearFieldScannerFactory, ScannerFactory
-from nfs.audio import (
-    AudioFactory,
-)
+from nfs.audio_factory import AudioFactory
 from nfs.audio_process import get_audio_process, shutdown_audio_process
 from nfs.logging_config import setup_logging
 

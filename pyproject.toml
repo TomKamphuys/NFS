@@ -50,7 +50,7 @@ spherical_arcs_random = "nfs.plugins.spherical_measurement_points_arcs_random:re
 file = "nfs.plugins.file_measurement_points:register"
 
 [project.entry-points."nfs.audio"]
-mock_interface = "nfs.audio:MockInterfaceAudio"
+mock_interface = "nfs.audio_mock:MockInterfaceAudio"
 
 [project.entry-points."nfs.motion_managers"]
 cylindrical = "nfs.motion_manager:CylindricalMeasurementMotionManager"

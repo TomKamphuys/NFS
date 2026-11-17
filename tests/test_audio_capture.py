@@ -19,7 +19,8 @@ import nfs.audio as audio
 from nfs.capture_detection import (CaptureContext, CaptureDetector, CaptureIssue, stream_health,
                                    loopback_gaps, microphone_gaps, psr_quality, thd_quality)
 from nfs.audio import AlignmentEngine, MarkerGenerator, SweepGenerator, DeconvolutionEngine, HarmonicInjector, DSPUtils
-from nfs.audio import AudioFactory, SINE_RMS_FROM_PEAK
+from nfs.audio import SINE_RMS_FROM_PEAK
+from nfs.audio_factory import AudioFactory
 from nfs.datatypes import CylindricalPosition
 from nfs.nfs import NearFieldScanner
 

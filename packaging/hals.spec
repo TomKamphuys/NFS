@@ -80,6 +80,8 @@ hiddenimports = [
     "nfs.nfs",
     "nfs.scanner",
     "nfs.audio",
+    "nfs.audio_mock",
+    "nfs.audio_factory",
     "nfs.motion_manager",
     "nfs.plugins.cylindrical_measurement_points",
     "nfs.plugins.spherical_measurement_points",

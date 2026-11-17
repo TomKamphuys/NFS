@@ -13,7 +13,7 @@ from harmonic_drive_qt import project
 from harmonic_drive_qt.qt_compat import QApplication, QLabel, QMessageBox, QGroupBox, QSizePolicy, QLocale, QDoubleSpinBox, QAbstractSpinBox
 from harmonic_drive_qt.styles import app_stylesheet
 from harmonic_drive_qt.styles import toggle_style
-from nfs.audio import AudioFactory
+from nfs.audio_factory import AudioFactory
 from nfs.capture_detection import DEFAULT_DETECTORS
 
 

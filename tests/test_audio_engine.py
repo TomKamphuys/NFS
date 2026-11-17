@@ -14,11 +14,12 @@ import nfs.audio as audio_module
 from nfs.audio import (
     MarkerGenerator, SweepGenerator, HarmonicInjector,
     ProtectionFilter, DeconvolutionEngine, AlignmentEngine,
-    DSPVerificationTool, AudioFactory, find_device_id_by_name, get_devices_and_channels,
+    DSPVerificationTool, find_device_id_by_name, get_devices_and_channels,
     get_supported_sample_rates, resolve_device_id_by_saved_identity,
     SINE_RMS_FROM_PEAK,
     _AudioMeterWorker,
 )
+from nfs.audio_factory import AudioFactory
 from nfs.utils.dsp import DSPUtils
 from nfs.datatypes import CylindricalPosition
 

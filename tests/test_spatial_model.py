@@ -297,7 +297,8 @@ class TestMockInterfaceAudioIntegration:
 
     def test_mock_audio_without_position_callback(self):
         """Mock audio without position callback should produce flat response."""
-        from nfs.audio import MockInterfaceAudio, AudioFactory
+        from nfs.audio_factory import AudioFactory
+        from nfs.audio_mock import MockInterfaceAudio
         from nfs.utils.spatial import SphericalHarmonicSpeakerModel
 
         # Create a minimal config for mock_interface mode
@@ -348,7 +349,7 @@ class TestMockInterfaceAudioIntegration:
 
     def test_mock_audio_with_spatial_model(self):
         """Mock audio with spatial model should produce different IRs for different positions."""
-        from nfs.audio import MockInterfaceAudio
+        from nfs.audio_mock import MockInterfaceAudio
         from nfs.utils.spatial import SphericalHarmonicSpeakerModel
         from nfs.audio import (
             SweepGenerator,
@@ -421,7 +422,7 @@ class TestMockInterfaceAudioIntegration:
 
     def test_set_position_callback(self):
         """set_position_callback should update the callback."""
-        from nfs.audio import MockInterfaceAudio
+        from nfs.audio_mock import MockInterfaceAudio
         from nfs.audio import (
             SweepGenerator,
             MarkerGenerator,
@@ -472,7 +473,7 @@ class TestMockInterfaceAudioIntegration:
 
     def test_backward_compatibility_no_speaker_model(self):
         """Mock audio without speaker_model should behave as before."""
-        from nfs.audio import MockInterfaceAudio
+        from nfs.audio_mock import MockInterfaceAudio
         from nfs.audio import (
             SweepGenerator,
             MarkerGenerator,

@@ -4,7 +4,8 @@ import numpy as np
 import pytest
 import soundfile as sf
 
-from nfs.audio import AudioFactory, MockInterfaceAudio
+from nfs.audio_factory import AudioFactory
+from nfs.audio_mock import MockInterfaceAudio
 from nfs.datatypes import CylindricalPosition
 from nfs.nfs import NearFieldScanner
 from nfs.utils.spatial import DiscretePistonSpeakerModel, SphericalHarmonicSpeakerModel

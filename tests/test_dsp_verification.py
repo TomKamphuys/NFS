@@ -82,7 +82,7 @@ def test_verification_warnings():
 
 
 def test_integration_with_mock_audio(tmp_path):
-    from nfs.audio import AudioFactory
+    from nfs.audio_factory import AudioFactory
     import configparser
     from nfs.datatypes import CylindricalPosition
 
