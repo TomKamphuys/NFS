@@ -10,7 +10,7 @@ In Audio Setup, enable **Check golden loopback reference**. Keep the interface c
 
 ## 1 Let the loopback reference complete
 
-Before the first measurement point, HALS records three loopback sweeps and checks that they agree. It combines them into a fixed **golden reference** for the rest of the run. If they disagree, preparation stops so you can investigate the audio system.
+Before the first measurement point, HALS records three loopback sweeps and checks that they are within tollerence. It combines them into a fixed **golden reference** for the rest of the run. If they are outside tollerence, preparation stops so you can investigate the audio system.
 
 <img src="assets/golden_reference_ready.png" alt="Golden reference ready" style="border: 1px solid #d9d9d9; max-width: 100%; height: auto; box-sizing: border-box;" />
 
@@ -29,7 +29,6 @@ When a retry succeeds, the successful capture is used; the earlier rejection alo
 ![alt text](assets/live-re-capture-popup.png)
 
 If failures continue, stop and investigate the audio connection, driver and interface before proceeding. The loopback check detects a mismatch; it does not identify the faulty component.
-
 
 ## Microphone Error Checking After Full Set Capture
 
@@ -109,6 +108,8 @@ Machine Control and Live Capture open, and the scanner visits only the selected 
 
 Click the capture buttons above the plots (top left) to inspect each attempt. You can re-capture a point again and build up a choice of alternatives.
 
+The blue outline around a capture button identifies the one you are viewing; the **chosen** label identifies the one selected for use.
+
 Press **Choose this capture** (top right) for the attempt you want to use. This must be done for each re-captured point in the file list. 
 
 Viewing a capture does not choose it. The list's **Issue description** relates to the chosen capture, which may differ from the one you are viewing.
@@ -137,7 +138,7 @@ When satisfied with your choices, press **Accept capture list**. Choosing a capt
 
 *The chosen captures are listed for each point. The middle point still has an LF prediction flag.*
 
-The **blue badge with a number** in the list shows how many complete captures are available for that point. The blue outline around a capture button identifies the one you are viewing; the **chosen** label identifies the one selected for use.
+The **blue badge with a number** in the list shows how many complete captures are available for that point.
 
 Acceptance copies the chosen replacements into the main **measurement_set** directory and applies exclusions. Original and alternative captures remain under **review_attempts** for future reference. HALS warns before accepting captures with failed or incomplete checks.
 
@@ -147,11 +148,11 @@ The check uses a **null test**: it aligns the captured loopback with the golden 
 
 The main detection threshold is approximately **-40 dB**, or a residual of **1%** relative to the reference. To illustrate:
 
-- **Gain mismatch:** a level increase of **~0.086 dB**, with everything else identical, produces approximately a -40 dB residual.
-- **Timing mismatch:** for equal-level 1 kHz sine waves, a timing error of **~1.6 microseconds remaining after alignment** produces approximately a -40 dB residual. Fixed driver latency is removed by marker alignment, so it does not count as this error.
+- **Gain mismatch:** a level increase of **~0.1 dB**, with everything else identical, produces approximately a -40 dB residual.
+- **Timing mismatch:** for equal-level 1 kHz sine waves, a timing error of **~1.6 microseconds** produces approximately a -40 dB residual. Fixed driver latency is removed by marker alignment, so it does not count as error.
 
 <img src="assets/interface_residual_comparison.png" alt="Interface residual comparison and detection threshold" style="border: 1px solid #d9d9d9; max-width: 100%; height: auto; box-sizing: border-box;" />
 
-*Measured interface residuals against the dashed detection threshold. Lower curves mean closer repeatability. The Behringer curve excludes 19 flagged recordings.*
+*Measured interface residuals against the dashed detection threshold. Lower curves mean closer repeatability.*
 
-The threshold rises at high frequencies because small timing variations, including clock jitter, cause larger waveform differences there. This allowance helps accommodate normal interface variation while retaining a sensitive check for capture faults.
+The threshold rises at high frequencies because circuit noise and small timing variations, including clock jitter, cause larger waveform differences there. This allowance helps accommodate normal interface variation while retaining a sensitive check for capture faults.
