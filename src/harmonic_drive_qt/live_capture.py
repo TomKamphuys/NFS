@@ -163,6 +163,20 @@ def _grid_z_center() -> float:
 
 def _find_grid_file() -> Path | None:
     root = _project_dir()
+
+    # Check for a user-supplied CSV filename in config (FileMeasurementPoints)
+    try:
+        parser = configparser.ConfigParser(inline_comment_prefixes=("#", ";"))
+        parser.read("config.ini")
+        if parser.has_section("motion_manager") and parser.has_option("motion_manager", "filename"):
+            filename = parser.get("motion_manager", "filename").strip()
+            if filename:
+                user_path = Path(filename)
+                if user_path.exists():
+                    return user_path
+    except Exception:
+        pass
+
     try:
         from . import project
 

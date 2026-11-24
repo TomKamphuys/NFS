@@ -743,6 +743,19 @@ class ControlPane(QWidget):
             if isinstance(grid_vars, dict) and grid_vars.get("output_filename"):
                 path = project.get_project_dir() / str(grid_vars["output_filename"])
         if not path.exists():
+            # Check for a user-supplied CSV filename in config (FileMeasurementPoints)
+            try:
+                parser = configparser.ConfigParser(inline_comment_prefixes=("#", ";"))
+                parser.read(self.backend.config_file)
+                if parser.has_section("motion_manager") and parser.has_option("motion_manager", "filename"):
+                    filename = parser.get("motion_manager", "filename").strip()
+                    if filename:
+                        user_path = Path(filename)
+                        if user_path.exists():
+                            path = user_path
+            except Exception:
+                pass
+        if not path.exists():
             self.grid_readout_points = []
             return
         try:
