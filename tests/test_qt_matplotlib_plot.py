@@ -181,7 +181,8 @@ def test_measurement_elevation_is_relative_to_grid_midpoint(tmp_path, monkeypatc
     assert elevation == pytest.approx([0, 45])
 
 
-def test_frequency_response_uses_file_nyquist_limit(tmp_path, monkeypatch):
+@pytest.mark.parametrize(("preview_offset", "nyquist"), [(-1, 24000), (1, 16000)])
+def test_frequency_response_uses_latest_sweep(tmp_path, monkeypatch, preview_offset, nyquist):
     ir_file = tmp_path / "capture_ir.wav"
     ir_file.touch()
     ir = np.zeros(2048)
@@ -189,7 +190,10 @@ def test_frequency_response_uses_file_nyquist_limit(tmp_path, monkeypatch):
     monkeypatch.setattr(live_capture, "_load_latest_ir", lambda: (ir_file, ir, 48000))
 
     pane = SimpleNamespace(
-        backend=SimpleNamespace(get_preview_ir=lambda: None),
+        backend=SimpleNamespace(get_preview_ir=lambda: {
+            "preview_created_at": ir_file.stat().st_mtime + preview_offset,
+            "ir_linear": ir, "fs": 32000,
+        }),
         fr_smoothing_fraction=0,
         imp_section=Mock(),
         freq_section=Mock(),
@@ -199,5 +203,30 @@ def test_frequency_response_uses_file_nyquist_limit(tmp_path, monkeypatch):
     live_capture.LiveCapturePane.refresh_ir_plots(pane)
 
     _args, kwargs = pane.frequency.set_data.call_args
-    assert kwargs["x_range"] == (20.0, 24000.0)
-    assert max(_args[0]) <= 24000.0
+    assert kwargs["x_range"] == (20.0, nyquist)
+    assert max(_args[0]) <= nyquist
+
+
+def test_live_positions_show_both_poles(monkeypatch):
+    monkeypatch.setattr(live_capture, "_grid_z_center", lambda: 100)
+    pane = SimpleNamespace(
+        grid_df=live_capture.pd.DataFrame({"r_xy_mm": [0, 0], "phi_deg": [0, 0], "z_mm": [110, 90]}),
+        _completed_positions=[{"r": 0, "phi": 0, "z": 110}, {"r": 0, "phi": 0, "z": 90}],
+        refresh_progress_viewer=Mock(), positions=Mock(),
+    )
+    live_capture.LiveCapturePane.refresh_positions(pane)
+    _, planned, _, completed = pane.positions.set_data_with_progress.call_args.args
+    assert planned == completed == [90, -90]
+
+
+def test_pyvista_fallback_reloads_current_grid(monkeypatch):
+    engine = Mock()
+    monkeypatch.setattr(live_capture, "CoordViewerEngine", lambda: engine)
+    settings = {"cyl_radius_mm": "200"}
+    monkeypatch.setattr(live_capture, "_get_viewer_settings", lambda: settings)
+    pane = Mock(viewer_backend="pyvista", progress_widget=None)
+    assert live_capture.LiveCapturePane._fallback_to_matplotlib_progress_viewer(
+        pane, RuntimeError("renderer unavailable"), "refresh"
+    )
+    engine.load_data.assert_called_once_with(pane.grid_df, settings)
+    engine.update_plot.assert_called_once()

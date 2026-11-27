@@ -2263,6 +2263,22 @@ class Audio(IAudio):
             "active_duration_s": self.sweep_gen.active_duration_s,
         }
 
+    def _verify_capture(self, result: dict, ir_full: np.ndarray, ir_linear: np.ndarray) -> dict:
+        metrics = self.verifier.calculate_metrics(
+            ir_full, ir_linear, result.get("psr", 0.0), result.get("psr_reference"),
+            linear_start_sample=result['capture_metadata']['sweep_samples'] - (_LINEAR_IR_ORIGIN_SAMPLE + 1),
+        )
+        logger.info(
+            f"DSP Metrics: SNR={metrics['snr_db']:.1f}dB, THD={metrics['thd_pct']:.2f}%, "
+            f"marker clarity={metrics['psr_db']:.1f}dB / "
+            f"{metrics.get('psr_reference_db', 0.0):.1f}dB reference "
+            f"({metrics.get('alignment_score_10', 0.0):.1f}/10)")
+
+        warnings = self.verifier.verify(metrics)
+        for w in warnings:
+            logger.warning(f"VERIFICATION FAILURE: {w}")
+        return metrics
+
     def capture_ir(self, ir_path: Path, dist_path: Path, save: bool = True,
                    include_debug_artifacts: bool = True) -> dict[str, Any]:
         """
@@ -2310,20 +2326,7 @@ class Audio(IAudio):
                 filename, subtype='FLOAT',
             )
 
-        # 4. DSP Verification
-        metrics = self.verifier.calculate_metrics(
-            ir_full, ir_linear, result.get("psr", 0.0), result.get("psr_reference"),
-            linear_start_sample=result['capture_metadata']['sweep_samples'] - (_LINEAR_IR_ORIGIN_SAMPLE + 1),
-        )
-        logger.info(
-            f"DSP Metrics: SNR={metrics['snr_db']:.1f}dB, THD={metrics['thd_pct']:.2f}%, "
-            f"marker clarity={metrics['psr_db']:.1f}dB / "
-            f"{metrics.get('psr_reference_db', 0.0):.1f}dB reference "
-            f"({metrics.get('alignment_score_10', 0.0):.1f}/10)")
-
-        warnings = self.verifier.verify(metrics)
-        for w in warnings:
-            logger.warning(f"VERIFICATION FAILURE: {w}")
+        metrics = self._verify_capture(result, ir_full, ir_linear)
 
         if save:
             self._save_wav_with_metadata(ir_path, ir_linear, ir_path.name, subtype='FLOAT')
@@ -2361,15 +2364,7 @@ class Audio(IAudio):
         # 2. Process IR (Deconvolution)
         ir_full, ir_linear = self._process_capture(result)
 
-        # 3. DSP Verification
-        metrics = self.verifier.calculate_metrics(ir_full, ir_linear, result.get("psr", 0.0))
-        logger.info(
-            f"DSP Metrics: SNR={metrics['snr_db']:.1f}dB, THD={metrics['thd_pct']:.2f}%, "
-            f"marker clarity={metrics['psr_db']:.1f}dB")
-
-        warnings = self.verifier.verify(metrics)
-        for w in warnings:
-            logger.warning(f"VERIFICATION FAILURE: {w}")
+        metrics = self._verify_capture(result, ir_full, ir_linear)
         return {
             "fs": self.hw.fs,
             "ir_linear": ir_linear,

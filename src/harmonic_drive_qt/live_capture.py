@@ -1051,7 +1051,7 @@ class LiveCapturePane(QWidget):
                 phi = float(row["phi_deg"])
                 z = float(row["z_mm"])
                 grid_azimuth.append(phi)
-                grid_elevation.append(math.degrees(math.atan2(z - z_center, r)) if r > 0 else 0.0)
+                grid_elevation.append(math.degrees(math.atan2(z - z_center, r)))
 
         # Build completed point azimuth/elevation arrays (colored by elevation)
         comp_azimuth = []
@@ -1061,7 +1061,7 @@ class LiveCapturePane(QWidget):
             phi = pos["phi"]
             z = pos["z"]
             comp_azimuth.append(phi)
-            comp_elevation.append(math.degrees(math.atan2(z - z_center, r)) if r > 0 else 0.0)
+            comp_elevation.append(math.degrees(math.atan2(z - z_center, r)))
 
         self.positions.set_data_with_progress(
             grid_azimuth, grid_elevation,
@@ -1123,7 +1123,7 @@ class LiveCapturePane(QWidget):
         self._show_pyvista_fallback_message()
         try:
             if self.grid_df is not None:
-                self.progress_engine.load_data(self.grid_df, settings)
+                self.progress_engine.load_data(self.grid_df, _get_viewer_settings())
                 self.progress_engine.update_plot()
             if self.progress_canvas is not None:
                 self.progress_canvas.draw_idle()
@@ -1145,20 +1145,19 @@ class LiveCapturePane(QWidget):
     def refresh_ir_plots(self) -> None:
         latest_file, ir, fs = _load_latest_ir()
         title_name = latest_file.name if latest_file is not None else None
-        # Fall back to the test-sweep preview only when no IR files exist on disk.
-        # Do not use the preview merely because it is newer; a preview run before
-        # measurements would otherwise always replace the actual captured IR.
-        if ir is None:
-            preview = self.backend.get_preview_ir()
-            if isinstance(preview, dict):
-                preview_ir = preview.get("ir_linear")
-                if preview_ir is None:
-                    preview_ir = preview.get("ir_full")
-                preview_fs = preview.get("fs")
-                if preview_ir is not None and preview_fs is not None:
-                    ir = np.asarray(preview_ir, dtype=float)
-                    fs = int(preview_fs)
-                    title_name = "Test Sweep Preview"
+        preview = self.backend.get_preview_ir()
+        if isinstance(preview, dict) and (
+            ir is None or latest_file is None
+            or preview.get("preview_created_at", 0.0) >= latest_file.stat().st_mtime
+        ):
+            preview_ir = preview.get("ir_linear")
+            if preview_ir is None:
+                preview_ir = preview.get("ir_full")
+            preview_fs = preview.get("fs")
+            if preview_ir is not None and preview_fs is not None:
+                ir = np.asarray(preview_ir, dtype=float)
+                fs = int(preview_fs)
+                title_name = "Test Sweep Preview"
         if ir is None or fs is None:
             self.imp_section.set_detail("Waiting for impulse response...")
             self.freq_section.set_detail("Waiting for frequency response...")

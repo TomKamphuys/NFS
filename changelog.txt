@@ -1,4 +1,17 @@
 --------
+27/11/26
+--------
+Live Capture and sweep verification fixes
+
+Live Capture now displays the newest test sweep or saved impulse response.
+Preview and saved sweeps use the same linear-response boundary for distortion estimates
+and the same reference marker for alignment scoring.
+
+The Matplotlib viewer now reloads the current grid when PyVista fails.
+The position plot now shows planned and completed points on the scan axis at
++90 degrees above the grid center and -90 degrees below it.
+
+--------
 10/11/26
 --------
 v0.4.4

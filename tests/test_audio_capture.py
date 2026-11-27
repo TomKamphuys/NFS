@@ -135,6 +135,8 @@ def test_debug_archive_reconstructs_exact_ir(monkeypatch, tmp_path):
     monkeypatch.setattr(e, "_run_sweep", lambda: result)
     e.set_session_directory(tmp_path)
     exported = e.measure_ir(audio.CylindricalPosition(100, 0, 0))
+    assert "alignment_score_10" in exported["metrics"]
+    assert e.preview_ir()["metrics"] == exported["metrics"]
     base = exported["name"].removesuffix("_ir.wav")
     debug = tmp_path / "debug"
     stored, fs = sf.read(debug / f"{base}_capture.wav", dtype="float32")

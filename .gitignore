@@ -23,6 +23,7 @@ packaging/runtime_hooks/nfs_version_hook_generated.py
 /.test_tmp*/
 /.rft_*/
 /.pytest_tmp*/
+/.pytest-*/
 /pytest-of-*/
 /tmp/
 /reports/
@@ -31,6 +32,7 @@ htmlcov/
 
 # Logs
 *.log
+/scanner.*.log.zip
 
 # Project-generated data
 /RawRecordings/*
