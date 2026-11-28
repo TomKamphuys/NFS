@@ -60,3 +60,16 @@ def test_detector_errors_propagate_instead_of_accepting_capture():
 def test_metrics_stage_requires_metrics():
     with pytest.raises(ValueError, match='require calculated metrics'):
         find_issue(DEFAULT_DETECTORS, 'metrics', CaptureContext({}, 48000, {}))
+
+@pytest.mark.parametrize("event", [
+    {"status": "input overflow"},
+    {"status": "OutputUnderflow"},
+    *[{flag: True} for flag in ("input_overflow", "output_overflow", "input_underflow", "output_underflow")],
+])
+def test_stream_fault_precedes_optional_checks_even_when_disabled(event):
+    context = CaptureContext({"capture_metadata": {"stream_status": [dict(event, sample=45)]}},
+                             48000, {"retry_check_stream_health": False},
+                             disabled_detectors=frozenset({"stream_health"}))
+    issue = find_issue((), "raw", context)
+    assert issue.detector == "stream_health"
+    assert "sample 45" in issue.reason

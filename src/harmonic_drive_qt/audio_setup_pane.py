@@ -328,16 +328,16 @@ class AudioSetupPane(QWidget):
         self.wasapi.setChecked(_parse_bool(_value(parser, "audio", "wasapi_exclusive", "False")))
         self.wasapi.setStyleSheet(toggle_style())
         adv_grid.addWidget(self.wasapi, 0, 0)
-        self._collapse_group_children(
-            advanced_audio,
-            [self.wasapi],
-        )
+
         layout.addWidget(advanced_audio)
 
         layout.addWidget(self._build_sine_group(parser))
         layout.addWidget(self._build_spl_group())
         self.update_sweep_voltage_label()
         layout.addWidget(self._build_sweep_group(parser))
+        reference_group = self.detector_groups["Experimental reference detector"]
+        adv_grid.addWidget(reference_group, 1, 0)
+        self._collapse_group_children(advanced_audio, [self.wasapi, reference_group])
         layout.addStretch(1)
 
         self._connect_auto_apply_controls()
@@ -762,6 +762,8 @@ class AudioSetupPane(QWidget):
                 thresholds.addWidget(self.retry_thd)
                 thresholds.addStretch(1)
                 frame_layout.addLayout(thresholds)
+                adv.addWidget(frame, (len(fields) + 2) // 3, 0, 1, 6)
+                advanced_children.append(frame)
             else:
                 description = QLabel("At the start of each measurement set, capture three single-sweep "
                                      "sequences, verify agreement, and combine "
@@ -769,8 +771,6 @@ class AudioSetupPane(QWidget):
                                      "do not use this detector.")
                 description.setWordWrap(True)
                 frame_layout.addWidget(description)
-            adv.addWidget(frame, (len(fields) + 2) // 3 + len(self.detector_groups), 0, 1, 6)
-            advanced_children.append(frame)
             self.detector_groups[group_name] = frame
         layout.addWidget(advanced)
         action_row = QHBoxLayout()

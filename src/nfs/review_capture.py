@@ -15,10 +15,35 @@ REPORT_COLUMNS = ['filename', 'status', 'category', 'primary_issue', 'score',
                   'spatial_score', 'band_low_hz', 'band_high_hz', 'coverage', 'reason', 'evidence']
 
 
+def read_review_wav(path, *, mmap=False):
+    """Normalize decoder failures at the per-file boundary."""
+    try:
+        with Path(path).open('rb') as stream:
+            header = stream.read(12)
+            if len(header) != 12 or header[:4] not in (b'RIFF', b'RIFX', b'RF64') or header[8:] != b'WAVE':
+                raise ValueError('missing or invalid WAVE header')
+            if header[:4] != b'RF64':
+                endian = 'big' if header[:4] == b'RIFX' else 'little'
+                size = int.from_bytes(header[4:8], endian)
+                if size < 4 or size + 8 > Path(path).stat().st_size:
+                    raise ValueError('invalid RIFF length or truncated recording')
+        with warnings.catch_warnings():
+            warnings.filterwarnings('error', category=wavfile.WavFileWarning, message='.*(EOF|end of file|incomplete).*')
+            try:
+                fs, raw = wavfile.read(path, mmap=mmap)
+            except ValueError as error:
+                if not mmap or 'mmap' not in str(error):
+                    raise
+                fs, raw = wavfile.read(path)
+        if fs <= 0 or raw.size == 0:
+            raise ValueError('invalid sample rate or empty audio data')
+        return fs, raw
+    except Exception as error:
+        raise ValueError(f'{Path(path).name}: {error}') from error
+
+
 def read_audio(path):
-    with warnings.catch_warnings():
-        warnings.simplefilter('ignore', wavfile.WavFileWarning)
-        fs, raw = wavfile.read(path)
+    fs, raw = read_review_wav(path)
     data = np.asarray(raw, dtype=float)
     if raw.dtype == np.uint8:
         data = (data - 128) / 128
@@ -88,9 +113,16 @@ def load_capture_reference(folder, row):
 
 
 def microphone_metrics(folder, row):
-    fs, raw = read_audio(capture_path(folder, row))
+    try:
+        fs, raw = read_audio(capture_path(folder, row))
+    except ValueError as error:
+        row['issues'].append(dict(category='File/metadata', code='invalid_capture', severity='repeat',
+                                  message=f'Re-capture required. {error}'))
+        return
     if raw.ndim != 2 or raw.shape[1] != 2:
-        raise ValueError('Expected electrical loopback and microphone channels')
+        row['issues'].append(dict(category='File/metadata', code='invalid_capture', severity='repeat',
+                                  message='Re-capture required. Expected electrical loopback and microphone channels.'))
+        return
     mic = raw[:, 1]
     issues = []
     if not np.any(mic) or np.ptp(mic) == 0:
@@ -167,11 +199,20 @@ def compare_noise(rows):
 def _capture_evidence(task):
     folder, row = task
     row.update(issues=[], metrics={}, coverage_notes=[], spatial_score=row['score'], spatial_status=row['status'])
-    if row['status'] == 'repeat':
+    if row.get('primary_issue') == 'invalid_ir':
+        row['issues'].append(dict(category='File/metadata', code='invalid_ir', severity='repeat', message=row['reason']))
+    elif row['status'] == 'repeat':
         row['issues'].append(dict(category='Acoustic/spatial', code='spatial_discrepancy', severity='repeat',
                                   message='LF response differs from its 12 nearest neighbours; cause unconfirmed.'))
     elif row['status'] == 'technical':
         row['issues'].append(dict(category='File/metadata', code='invalid_ir', severity='technical', message=row['reason']))
+    distortion = full_ir_path(folder, row)
+    if distortion.is_file():
+        try:
+            read_review_wav(distortion, mmap=True)
+        except ValueError as error:
+            row['issues'].append(dict(category='File/metadata', code='invalid_full_ir', severity='repeat',
+                                      message=f'Re-capture required. {error}'))
     if capture_path(folder, row).exists():
         try:
             microphone_metrics(folder, row)

@@ -16,7 +16,7 @@ APP_SECTION = "app"
 CALIBRATION_SECTION = "calibration"
 DEFAULT_PROJECT_NAME = "HALS_Project"
 TEMP_PROJECT_DIR = Path(tempfile.gettempdir()) / "HALS_working_project"
-GLOBAL_SWEEP_CONFIG_KEYS = {"sweep_level_dbfs"}
+GLOBAL_SWEEP_CONFIG_KEYS = {"sweep_level_dbfs", "retry_check_loopback_reference", "retry_check_stream_health"}
 DEFAULT_CONFIG_FILENAME = "config_default.ini"
 NESTED_CALIBRATION_KEYS = {
     "output_voltage_calibration",
@@ -158,6 +158,8 @@ def set_project_dir(path: str | Path, config_file: str = "config.ini") -> Dict[s
         )
         _project_data = {"project_name": default_name}
 
+    if isinstance(_project_data.get("sweep_settings"), dict):
+        _project_data["sweep_settings"] = _project_sweep_settings(_project_data["sweep_settings"])
     if not loaded_existing:
         sync_defaults_from_config(config_file, save=False)
     else:
@@ -310,7 +312,7 @@ def apply_to_config(config_file: str) -> bool:
         if not parser.has_section(section):
             parser.add_section(section)
         for key, value in settings.items():
-            if section == "audio" and key == "mode":
+            if section == "sweep" and key in GLOBAL_SWEEP_CONFIG_KEYS:
                 continue
             parser.set(section, key, str(value))
             changed = True

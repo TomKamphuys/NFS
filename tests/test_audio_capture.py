@@ -112,7 +112,7 @@ def make_engine(first=False, injected=False):
         debug_saves=True,
         naming_convention="dimitri",
         max_capture_retries=3,
-        retry_check_stream_health=True,
+        retry_check_stream_health=False,
         retry_check_loopback_silence=True,
         retry_check_mic_silence=True,
         retry_psr_threshold=3.0,
@@ -1082,7 +1082,7 @@ def test_retry_loop_exhausts_retries_and_returns_failure(monkeypatch):
     assert exported['ir_linear'] is None
     assert 'error' in exported
     assert 'after 3 attempts' in exported['error'].lower()
-    assert 'underflow/overflow' in exported['error'].lower()
+    assert 'inputunderflow at sample 100' in exported['error'].lower()
 
 
 def test_capture_logs_sweep_exception_and_propagates(tmp_path, monkeypatch):

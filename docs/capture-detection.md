@@ -114,16 +114,17 @@ automatic discovery or separate process: plugins are ordinary Python callables.
 
 ## GUI and configuration
 
-The built-in registry supplies the detector checkboxes in Advanced sweep
-settings, config persistence schema, and audio factory enable-key loading.
+The built-in registry supplies the detector checkboxes in the audio setup pane, config persistence schema, and audio factory enable-key loading.
 Checkbox changes save and reload the backend immediately. PSR/THD threshold and
 attempt-limit edits apply when editing finishes.
 
-Existing `retry_check_stream_health`, `retry_check_loopback_silence`, and
+Driver underflow and overflow checks run on every sweep, including previews and golden reference captures. Legacy `retry_check_stream_health` settings are ignored.
+
+Existing `retry_check_loopback_silence` and
 `retry_check_mic_silence` keys are retained. `retry_check_psr` and
 `retry_check_thd` independently enable the metric gates. Missing switches for
 these existing detectors default to enabled, preserving behaviour for existing configs.
-They are grouped in the GUI under **Tom's detectors**. The existing thresholds
+They are grouped in the GUI under **Tom's detectors** in project-level Advanced sweep settings. The existing thresholds
 remain `retry_psr_threshold` (3.0) and `retry_thd_threshold` (10%). Despite its
 name, `max_capture_retries` still specifies total attempts, as before.
 
@@ -134,7 +135,7 @@ changes can now be made independently.
 
 ## Experimental golden loopback reference
 
-Enable **Check golden loopback reference** in its separate framed GUI group, or
+Enable **Check golden loopback reference** in system-level Advanced audio settings, or
 set `[sweep] retry_check_loopback_reference = True`. It defaults to **False** and
 applies only to measurement sets. Other detectors remain independently selectable;
 enabling this detector does not turn off Tom's detectors.

@@ -4,14 +4,13 @@ No SHE, processed NPZ, driver locations, project origins, or fitted measurement
 weights are read. Scanning is read-only; the review app can explicitly rename
 confirmed exclusions and restore them without changing their contents.
 """
-import re,warnings
+import re
 from .review_pool import ReviewProcessPool
 from pathlib import Path
 import numpy as np
-from scipy.io import wavfile
 from scipy.signal import resample_poly,find_peaks
 from scipy.spatial import cKDTree
-from .review_capture import augment_rows, REPORT_COLUMNS
+from .review_capture import augment_rows, read_review_wav, REPORT_COLUMNS
 
 FREQUENCIES=40*2**(np.arange(37)/12)
 BANDS=((40,80),(80,160),(160,321))
@@ -32,12 +31,7 @@ def coordinates(name):
 
 def features(path):
     """Read at most the first 0.35s and preserve physical inter-position phase."""
-    with warnings.catch_warnings():
-        warnings.simplefilter('ignore',wavfile.WavFileWarning)
-        try:fs,raw=wavfile.read(path,mmap=True)
-        except ValueError as error:
-            if 'mmap' not in str(error):raise
-            fs,raw=wavfile.read(path,mmap=False)
+    fs, raw = read_review_wav(path, mmap=True)
     if raw.ndim!=1:raise ValueError('Expected mono IR')
     signal=np.asarray(raw[:int(.35*fs)],dtype=float)
     if raw.dtype == np.uint8:
@@ -112,8 +106,13 @@ def _read_ir(path):
     try:
         row['identity'] = file_identity(path)
         xyz, cylindrical = coordinates(path.name)
-        response, metadata = features(path)
-        row.update(xyz=xyz, cylindrical=cylindrical, response=response, **metadata)
+        row.update(xyz=xyz, cylindrical=cylindrical)
+        try:
+            response, metadata = features(path)
+        except (ValueError, OSError, EOFError) as error:
+            row.update(status='repeat', reason=f'Re-capture required. {error}', primary_issue='invalid_ir')
+            return row
+        row.update(response=response, **metadata)
     except (ValueError, OSError, EOFError) as error:
         row['reason'] = str(error)
     return row

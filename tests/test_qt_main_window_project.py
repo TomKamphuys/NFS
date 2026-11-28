@@ -248,3 +248,26 @@ def test_qt_save_button_updates_existing_json_with_flushed_hpf_settings(tmp_path
     assert '"protect_hpf_hz": "700"' in content
     assert '"protect_hpf_order": "3"' in content
     assert '"protect_hpf_hz": "None"' not in content
+
+def test_project_activation_applies_timing_before_backend_reload(tmp_path):
+    import configparser
+    import json
+    config = tmp_path / "config.ini"
+    config.write_text("[sweep]\nretry_check_stream_health = True\n", encoding="utf8")
+    folder = tmp_path / "session"
+    folder.mkdir()
+    (folder / "session_project.json").write_text(json.dumps({"sweep_settings": {
+        "pre_sil_ms": "700", "post_sil_ms": "900", "retry_check_stream_health": "False"
+    }}))
+    window = _window_shell(config)
+    window._rebuild_audio_pane = Mock()
+    def check_config():
+        parser = configparser.ConfigParser()
+        parser.read(config)
+        assert parser.getint("sweep", "pre_sil_ms") == 700
+        assert parser.getint("sweep", "post_sil_ms") == 900
+        assert parser.getboolean("sweep", "retry_check_stream_health")
+    window.backend.reload_nfs.side_effect = check_config
+    window.activate_project_context(folder, False)
+    window.backend.reload_nfs.assert_called_once()
+    assert "retry_check_stream_health" not in project.get_project_data()["sweep_settings"]

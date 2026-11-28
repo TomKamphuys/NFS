@@ -417,3 +417,24 @@ def test_shutdown_releases_a_worker_waiting_for_detector_decision():
         shutdown.join(2)
         if manager._audio_thread.is_alive():
             manager.shutdown()
+
+def test_reload_without_scanner_discards_stale_audio_on_owner(monkeypatch):
+    import threading
+    from unittest.mock import Mock
+    manager = BackendManager("config.ini")
+    manager.audio = object()
+    manager.sine_audio = object()
+    factory = Mock()
+    def stop():
+        assert threading.current_thread() is manager._audio_thread
+        assert manager.audio is not None
+        assert manager.sine_audio is not None
+    monkeypatch.setattr(manager, "stop_sine", stop)
+    monkeypatch.setattr(qt_backend.NearFieldScannerFactory, "create", factory)
+    try:
+        manager.reload_nfs()
+        assert manager.audio is None
+        assert manager.sine_audio is None
+        factory.assert_not_called()
+    finally:
+        manager.shutdown()

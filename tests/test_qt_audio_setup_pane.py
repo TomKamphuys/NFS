@@ -46,7 +46,9 @@ def test_detector_gui_auto_applies_and_reloads_saved_selection(tmp_path, monkeyp
     try:
         backend.load.reset_mock()
         assert pane.detector_groups["Tom's detectors"].title() == "Tom's detectors"
-        assert 'Experimental reference detector' in pane.detector_groups
+        assert pane.detector_groups["Tom's detectors"].parentWidget().title() == "Advanced sweep settings"
+        assert pane.detector_groups["Experimental reference detector"].parentWidget().title() == "Advanced audio settings"
+        assert "retry_check_stream_health" not in pane.detector_controls
         for detector in DEFAULT_DETECTORS:
             control = pane.detector_controls[detector.enabled_key]
             assert control.isChecked() == detector.default_enabled

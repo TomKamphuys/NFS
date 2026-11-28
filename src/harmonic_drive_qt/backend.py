@@ -221,9 +221,12 @@ class BackendManager:
             raise RuntimeError("Cannot replace the audio backend during a measurement set")
         if threading.current_thread() is not self._audio_thread:
             return self._run_audio(self.reload_nfs)
+        self.stop_sine()
+        self.audio = None
+        self.sine_audio = None
         if self.scanner is None:
             return
-        self.stop_sine()
+        self.nfs = None
         try:
             self.nfs = NearFieldScannerFactory.create(self.scanner, self.config_file)
             if self.project_dir is not None and hasattr(self.nfs, "set_project_directory"):
@@ -235,8 +238,6 @@ class BackendManager:
 
         if self.project_dir is not None:
             self.set_project_dir(self.project_dir)
-        self.audio = None
-        self.sine_audio = None
 
     def set_project_dir(self, path: str | Path) -> None:
         resolved = Path(path).expanduser().resolve()

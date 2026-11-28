@@ -160,6 +160,9 @@ class MeasurementReviewPane(QWidget):
         self.choose_button.clicked.connect(self.choose_capture)
         attempt_row.addWidget(self.choose_button, 0, Qt.AlignmentFlag.AlignVCenter)
         self.choose_button.setEnabled(False)
+        self.capture_issue = QLabel()
+        self.capture_issue.setWordWrap(True)
+        plot_layout.addWidget(self.capture_issue)
         self.figure = Figure(figsize=(7, 10), layout='constrained')
         self.canvas = FigureCanvasQTAgg(self.figure)
         self.canvas.setProperty('hoverWheelZoom', True)
@@ -235,6 +238,7 @@ class MeasurementReviewPane(QWidget):
             self.saved_notice.hide()
             self.populate()
             self.plot_interaction.clear()
+            self.capture_issue.clear()
             self.figure.clear()
             self.canvas.draw_idle()
             self.status.setText('Session changed. Scan to review this measurement set.')
@@ -427,6 +431,7 @@ class MeasurementReviewPane(QWidget):
         if not self.table.rowCount():
             self._show_attempts(dict(filename='No capture'))
             self.plot_interaction.clear()
+            self.capture_issue.clear()
             self.figure.clear()
             self.canvas.draw_idle()
 
@@ -477,6 +482,10 @@ class MeasurementReviewPane(QWidget):
         if attempt:
             row = attempt_row(point_name(row), attempt)
             plot_folder = self.folder/attempt['folder']
+        status = row.get('status', 'incomplete')
+        summary = row.get('reason') or ('No issues found.' if status == 'pass' else
+                                        row.get('coverage') or status.replace('_', ' ').capitalize())
+        self.capture_issue.setText(f"Capture {attempt['number'] if attempt else 1}: {summary}")
         details = f"{row['filename']} — {row.get('reason', '')}  Coverage: {row.get('coverage', 'Excluded')}."
         for key, label in (('pre', 'Pre-sweep'), ('tail', 'Late')):
             metrics = row.get('metrics', {})
@@ -521,7 +530,7 @@ class MeasurementReviewPane(QWidget):
         attempts = point.get('attempts', [])
         viewed = point.get('viewed')
         if not attempts:
-            button = QPushButton('Capture 1 (original)' if 'response' in row else 'No capture')
+            button = QPushButton('Capture 1 (original)' if row.get('identity') or 'response' in row else 'No capture')
             button.setEnabled(False)
             self.attempt_bar.addWidget(button)
         for attempt in attempts:

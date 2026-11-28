@@ -1,22 +1,16 @@
-"""Capture assessment only: no hardware, DSP processing, retries or file writes."""
+"""Driver fault detection shared by live acquisition and reference validation."""
 
-from loguru import logger
+ERROR_FLAGS = ('input_underflow', 'input_overflow', 'output_underflow', 'output_overflow')
 
-from .base import CaptureContext, CaptureIssue
 
-def stream_health(context: CaptureContext) -> CaptureIssue | None:
-    """Inspect stream_status for underflow/overflow flags indicating dropout.
-
-    Returns an issue if the capture is unhealthy (needs retry), None if clean.
-    """
-    result = context.capture
-    stream_status = result['capture_metadata'].get('stream_status', [])
-    for entry in stream_status:
-        status_str = entry.get('status', '')
-        if 'Underflow' in status_str or 'Overflow' in status_str:
-            logger.warning(
-                f"Audio stream reported {status_str} at sample {entry.get('sample', 'unknown')}; "
-                f"stream entry={entry}")
-            return CaptureIssue('stream_health', 'stream health rejection (underflow/overflow)')
+def stream_fault(events):
+    """Describe the first faulty callback, including older text-only recordings."""
+    for event in events:
+        flags = [flag for flag in ERROR_FLAGS if event.get(flag)]
+        status = str(event.get('status', ''))
+        if flags or 'underflow' in status.casefold() or 'overflow' in status.casefold():
+            description = ', '.join(flags) if flags else status
+            sample = event.get('sample')
+            location = f' at sample {sample}' if sample is not None else ''
+            return f'stream health rejection: {description}{location}'
     return None
-

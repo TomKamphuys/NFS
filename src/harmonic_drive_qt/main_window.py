@@ -542,6 +542,7 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
         self.backend.set_project_dir(path)
+        self.backend.reload_nfs()
         self.project_path.setText(str(project.get_project_dir()))
         self.project_name.blockSignals(True)
         self.project_name.setText(project.get_project_name())
@@ -561,15 +562,19 @@ class MainWindow(QMainWindow):
         path = Path(path_text).expanduser()
         try:
             resolved_path = path.resolve()
-            if resolved_path != project.get_project_dir().resolve():
+            switched_project = resolved_path != project.get_project_dir().resolve()
+            if switched_project:
                 project.set_project_dir(resolved_path, self.config_file)
             project.set_project_name(self.project_name.text())
             project.apply_to_config(self.config_file)
             project.ensure_output_dirs()
             project.save_project()
-        except Exception:
-            pass
+        except Exception as error:
+            QMessageBox.warning(self, "Project setup", str(error))
+            return
         self.backend.set_project_dir(path)
+        if switched_project:
+            self.backend.reload_nfs()
         self.project_path.setText(str(project.get_project_dir()))
         self.project_name.setText(project.get_project_name())
         self.control_pane.refresh_grid_readout()

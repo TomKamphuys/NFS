@@ -371,3 +371,24 @@ def test_closing_pane_cancels_current_scan(qtbot, tmp_path, monkeypatch, review_
     assert pane.cancel.is_set()
     assert pane.cancel is not original_cancel
     pane.shutdown()
+
+@pytest.mark.parametrize("damage", ["zero_header", "truncated", "raw_header"])
+def test_scan_lists_damaged_wav_and_continues(tmp_path, damage):
+    fs = 48000
+    signal = np.sin(np.arange(fs // 4) * .1).astype(np.float32)
+    first = tmp_path / "r100_ph0_z0_ir.wav"
+    second = tmp_path / "r100_ph1_z0_ir.wav"
+    for path in (first, second):
+        wavfile.write(path, fs, signal)
+    damaged = first
+    if damage == "raw_header":
+        (tmp_path / "debug").mkdir()
+        damaged = tmp_path / "debug" / "r100_ph0_z0_capture.wav"
+        wavfile.write(damaged, fs, np.column_stack((signal, signal)))
+    payload = damaged.read_bytes()
+    damaged.write_bytes(payload[:-100] if damage == "truncated" else bytes(44) + payload[44:])
+    rows = {row["filename"]: row for row in scan_directory(tmp_path)}
+    assert rows[first.name]["status"] == "repeat"
+    assert damaged.name in rows[first.name]["reason"]
+    assert rows[first.name]["cylindrical"] == (100, 0, 0)
+    assert "response" in rows[second.name]

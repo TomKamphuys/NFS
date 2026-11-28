@@ -1,21 +1,17 @@
 """Swappable capture detectors, independent of audio capture and DSP processing."""
 
 from .base import (CaptureContext, CaptureDetector, CaptureIssue, DetectorSession,
-                   DetectorPreparationCancelled, find_issue, prepare_detectors, archive_detector_state)
+                   DetectorPreparationCancelled, stream_health, find_issue, prepare_detectors, archive_detector_state)
 from .events import DetectorDecision, DetectorEvent
 from .loopback_gaps import loopback_gaps
 from .microphone_gaps import microphone_gaps
 from .quality import psr_quality, thd_quality
-from .stream_health import stream_health
 from .loopback_reference import (loopback_reference, prepare_loopback_reference,
                                  archive_loopback_reference)
 
 # Order preserves the existing first-rejection behaviour. The GUI and config
 # loader use this same registry so every built-in detector has an enable switch.
 DEFAULT_DETECTORS = (
-    CaptureDetector("stream_health", "raw", stream_health, "retry_check_stream_health",
-                    "Check stream health",
-                    "Reject captures when the driver reports buffer underflow or overflow."),
     CaptureDetector("loopback_gaps", "raw", loopback_gaps, "retry_check_loopback_silence",
                     "Check loopback silence",
                     "Reject captures with silence gaps in the electrical loopback."),

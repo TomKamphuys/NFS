@@ -21,10 +21,10 @@ from loguru import logger
 
 from .base import CaptureContext, CaptureIssue, DetectorSession
 from .events import DetectorEvent
+from .stream_health import ERROR_FLAGS, stream_fault
 
 VERSION = 5
-ERROR_FLAGS = ('input_underflow', 'input_overflow',
-               'output_underflow', 'output_overflow')
+
 
 
 @dataclass
@@ -109,8 +109,9 @@ def validate_capture(capture: Capture, layout: Layout) -> None:
         raise ValueError('Incomplete recording or incompatible capture length')
     if not np.isfinite(capture.loopback).all():
         raise ValueError('Non-finite loopback samples')
-    if any(event.get(flag, False) for event in capture.driver_events for flag in ERROR_FLAGS):
-        raise ValueError('Driver underflow/overflow')
+    fault = stream_fault(capture.driver_events)
+    if fault:
+        raise ValueError(fault)
 
 
 def locate_marker(x: np.ndarray, marker: np.ndarray, start: int,
@@ -405,14 +406,7 @@ def capture_input(result: dict, fs: int) -> tuple[Capture, Layout, np.ndarray]:
     if (not layout.marker_starts or marker.shape != (layout.marker_samples,)
             or not np.isfinite(marker).all() or rms(marker) < 1e-10):
         raise ValueError('Invalid reference marker or repeat layout')
-    events = []
-    for event in timing.get('stream_status', []):
-        flags = {key: bool(event.get(key, False)) for key in ERROR_FLAGS}
-        # Older recordings and synthetic backends may supply only status text.
-        text = str(event.get('status', '')).lower()
-        if 'underflow' in text or 'overflow' in text:
-            flags['input_underflow'] = True
-        events.append(flags)
+    events = timing.get('stream_status', [])
     return (Capture(np.asarray(result['raw_recordings'][0], dtype=np.float64), events),
             layout, marker)
 

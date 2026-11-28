@@ -1,4 +1,28 @@
 --------
+28/11/26
+--------
+
+Measurement review now validates WAV headers and reports empty, truncated or
+unreadable linear IRs, raw captures and full distortion IRs as needing re-capture.
+The scan continues through damaged files and retains their measurement
+coordinates for re-capture.
+
+Added the selected capture's issue, pass result or incomplete-analysis reason
+directly below the capture buttons and above the review plots.
+
+Project loading now refreshes the audio backend after restoring sweep settings,
+so the first measurement uses the saved driver settle time and post-sweep silence.
+
+Made driver stream-health checks unconditional for test sweeps, previews, single
+measurements and measurement sets. Golden loopback reference validation shares
+the same driver-fault check. Removed the stream-health toggle and ignore legacy
+settings that disabled it. Fixed detection of lowercase driver status text and
+added the fault flag and sample position to rejection messages when available.
+
+Golden loopback is saved as a persistent system preference under Advanced audio
+settings. 
+
+--------
 13/11/26
 --------
 v0.4.5

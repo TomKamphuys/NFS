@@ -10,6 +10,8 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 import numpy as np
+from loguru import logger
+from .stream_health import stream_fault
 from .events import DetectorDecision, DetectorEvent
 
 Stage = Literal["raw", "metrics"]
@@ -105,9 +107,21 @@ def archive_detector_state(detectors: Sequence[CaptureDetector],
     return arrays
 
 
+def stream_health(context: CaptureContext) -> CaptureIssue | None:
+    fault = stream_fault(context.capture.get('capture_metadata', {}).get('stream_status', ()))
+    if fault:
+        logger.warning(fault)
+        return CaptureIssue('stream_health', fault)
+    return None
+
+
 def find_issue(detectors: Sequence[CaptureDetector], stage: Stage,
                context: CaptureContext) -> CaptureIssue | None:
     """Return the first rejection from enabled detectors at this stage."""
+    if stage == "raw":
+        issue = stream_health(context)
+        if issue:
+            return issue
     if stage == "metrics" and context.metrics is None:
         raise ValueError("Metric detectors require calculated metrics")
     for detector in detectors:
